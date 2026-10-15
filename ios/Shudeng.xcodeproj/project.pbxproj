@@ -10,6 +10,78 @@
 	<string>46</string>
 	<key>objects</key>
 	<dict>
+		<key>A17000000000000000000006</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>ShudengUITests/AISettingsUITests.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>A17000000000000000000007</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>A17000000000000000000006</string>
+		</dict>
+		<key>A17000000000000000000004</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>AIServiceTests.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>A17000000000000000000005</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>A17000000000000000000004</string>
+		</dict>
+		<key>A17000000000000000000002</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>AISettingsController.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>A17000000000000000000003</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>A17000000000000000000002</string>
+		</dict>
+		<key>A17000000000000000000000</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>AIService.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>A17000000000000000000001</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>A17000000000000000000000</string>
+		</dict>
 		<key>0000000000000000000001F8</key>
 		<dict>
 			<key>isa</key>
@@ -211,6 +283,7 @@
 			<string>2147483647</string>
 			<key>files</key>
 			<array>
+				<string>A17000000000000000000007</string>
 				<string>000000000000000000000900</string>
 			</array>
 			<key>isa</key>
@@ -656,6 +729,7 @@
 			<string>2147483647</string>
 			<key>files</key>
 			<array>
+				<string>A17000000000000000000005</string>
 				<string>8DA87EC64F9B436498C342F7</string>
 			</array>
 			<key>isa</key>
@@ -953,6 +1027,7 @@
 		<dict>
 			<key>children</key>
 			<array>
+				<string>A17000000000000000000006</string>
 				<string>AF77A094CB8BCAA3AB668D19</string>
 				<string>1C66CF9EEC71533D60F2FFE1</string>
 				<string>000000000000000000000321</string>
@@ -983,6 +1058,8 @@
 			<string>2147483647</string>
 			<key>files</key>
 			<array>
+				<string>A17000000000000000000003</string>
+				<string>A17000000000000000000001</string>
 				<string>2CFBA6EF4529AF2B90C53EB3</string>
 				<string>0000000000000000000001F5</string>
 				<string>0000000000000000000001F7</string>
@@ -1033,6 +1110,8 @@
 		<dict>
 			<key>children</key>
 			<array>
+				<string>A17000000000000000000002</string>
+				<string>A17000000000000000000000</string>
 				<string>A7317CF3611042FFC7352C26</string>
 				<string>0000000000000000000001F4</string>
 				<string>0000000000000000000001F6</string>
@@ -1199,6 +1278,7 @@
 		<dict>
 			<key>children</key>
 			<array>
+				<string>A17000000000000000000004</string>
 				<string>CC3FD7228EB298E48206E3CC</string>
 				<string>000000000000000000000700</string>
 			</array>

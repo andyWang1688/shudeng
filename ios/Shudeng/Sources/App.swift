@@ -16,7 +16,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             let notes = UINavigationController(rootViewController: NotesController(library: library))
             notes.tabBarItem = UITabBarItem(title: "笔记", image: UIImage(systemName: "square.and.pencil"), tag: 1)
             let chats = placeholder(title: "对话", message: "还没有对话", symbol: "bubble.left.and.bubble.right", tag: 2)
-            let about = AboutController()
+            let about = AboutController(root: root)
             about.tabBarItem = UITabBarItem(title: "我的", image: UIImage(systemName: "person.crop.circle"), tag: 3)
             tabs.viewControllers = [shelf, notes, chats, UINavigationController(rootViewController: about)]
             window.rootViewController = tabs
@@ -51,6 +51,10 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 }
 
 final class AboutController: UIViewController {
+    private let root: URL
+    init(root: URL) { self.root = root; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    @objc private func aiSettings() { navigationController?.pushViewController(AISettingsController(root: root), animated: true) }
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "我的"
@@ -59,8 +63,14 @@ final class AboutController: UIViewController {
         button.setTitle("第三方许可", for: .normal)
         button.addTarget(self, action: #selector(licenses), for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
+        let ai = UIButton(type: .system)
+        ai.setTitle("AI 服务", for: .normal)
+        ai.addTarget(self, action: #selector(aiSettings), for: .touchUpInside)
+        ai.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(ai)
+        NSLayoutConstraint.activate([ai.centerXAnchor.constraint(equalTo: view.centerXAnchor), ai.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 24)])
         view.addSubview(button)
-        NSLayoutConstraint.activate([button.centerXAnchor.constraint(equalTo: view.centerXAnchor), button.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 32)])
+        NSLayoutConstraint.activate([button.centerXAnchor.constraint(equalTo: view.centerXAnchor), button.topAnchor.constraint(equalTo: ai.bottomAnchor, constant: 24)])
     }
     @objc private func licenses() {
         let controller = UIViewController()
