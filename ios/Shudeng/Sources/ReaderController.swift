@@ -30,6 +30,8 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private var changingBounds = false
     private var openingTarget: Locator?
     private var highlightedIDs: [UUID] = []
+    var questionOrigin: Locator? { didSet { returnToQuestion.isHidden = questionOrigin == nil } }
+    private let returnToQuestion = UIButton(type: .system)
 
     init(book: Book, publication: Publication, library: LibraryStore, target: Locator? = nil) throws {
         self.book = book
@@ -50,6 +52,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private static func configuration(_ settings: ReadingSettings) -> EPUBNavigatorViewController.Configuration {
         .init(preferences: preferences(settings), editingActions: [
             EditingAction(title: "高亮", action: #selector(highlightSelection)),
+            EditingAction(title: "提问", action: #selector(askSelection)),
             EditingAction(title: "写笔记", action: #selector(noteSelection))
         ] + EditingAction.defaultActions)
     }
@@ -98,7 +101,11 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         retry.titleLabel?.adjustsFontForContentSizeCategory = true
         retry.addTarget(self, action: #selector(retrySave), for: .touchUpInside)
         setRetryVisible(false)
-        let footer = UIStackView(arrangedSubviews: [status, retry])
+        returnToQuestion.setTitle("回提问处", for: .normal)
+        returnToQuestion.addTarget(self, action: #selector(backToQuestion), for: .touchUpInside)
+        returnToQuestion.isHidden = questionOrigin == nil
+        returnToQuestion.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        let footer = UIStackView(arrangedSubviews: [status, returnToQuestion, retry])
         footer.axis = .vertical
         footer.spacing = 4
         content.accessibilityIdentifier = "reading-content"
@@ -573,7 +580,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     @objc private func highlightSelection() { captureSelection(writeNote: false) }
     @objc private func noteSelection() { captureSelection(writeNote: true) }
-    private func captureSelection(writeNote: Bool) {
+    @objc private func askSelection() { captureSelection(writeNote: false, question: true) }
+    @objc private func backToQuestion() { if let questionOrigin { navigate(to: questionOrigin) } }
+    private func captureSelection(writeNote: Bool, question: Bool = false) {
         guard !loading, !curlBusy, !navigating, let selection = navigator.currentSelection else { return }
         Task {
             do {
@@ -585,6 +594,31 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 locator.locations.cssSelector = selector
                 locator.locations.otherLocations["domRange"] = try JSONValue(jsonString: String(data: JSONSerialization.data(withJSONObject: range), encoding: .utf8)!, warnings: nil)
                 locator.text = Locator.Text(after: anchor["after"] as? String, before: anchor["before"] as? String, highlight: highlight)
+                if question {
+                    guard !library.questions.loadFailed else { throw LibraryError.save }
+                    guard case let .success(material as [String: Any]) = await navigator.evaluateJavaScript(Self.questionNeighbors),
+                          let selected = material["selected"] as? [[String: Any]], !selected.isEmpty,
+                          let rows = material["neighbors"] as? [[String: Any]] else { throw LibraryError.invalidLocation }
+                    func evidence(_ row: [String: Any]) throws -> QuestionEvidence {
+                        var nearby = locator
+                        nearby.locations.cssSelector = row["selector"] as? String
+                        nearby.locations.otherLocations["domRange"] = try JSONValue(jsonString: String(data: JSONSerialization.data(withJSONObject: row["domRange"]!), encoding: .utf8)!, warnings: nil)
+                        nearby.text = .init(after: row["after"] as? String, before: row["before"] as? String, highlight: row["quote"] as? String)
+                        return QuestionEvidence(locator: nearby, context: row["quote"] as? String)
+                    }
+                    let parts = try selected.map(evidence)
+                    var record = ReadingQuestion(book: book, selection: parts[0], neighbors: try rows.map(evidence))
+                    record.selectionParts = parts
+                    library.questions.save(record)
+                    navigator.clearSelection()
+                    let controller = QuestionController(library: library, id: record.id) { [weak self] target, origin in
+                        self?.questionOrigin = origin; self?.navigate(to: target)
+                    }
+                    let sheet = UINavigationController(rootViewController: controller)
+                    sheet.sheetPresentationController?.detents = [.large()]
+                    present(sheet, animated: true)
+                    return
+                }
                 let candidates = notes + (library.books.first { $0.id == book.id }?.noteDrafts ?? [])
                 let existing = candidates.first { note in
                     guard let saved = try? note.location() else { return false }
@@ -640,6 +674,66 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
       const after = document.createRange(); after.selectNodeContents(root); after.setStart(range.endContainer, range.endOffset);
       return { selector: selector(root), highlight: range.toString(), before: before.toString(), after: after.toString(),
         domRange: { start: point(range.startContainer, range.startOffset), end: point(range.endContainer, range.endOffset) } };
+    })()
+    """
+
+    static let questionNeighbors = """
+    (() => {
+      const selection = getSelection(); if (!selection.rangeCount || selection.isCollapsed) return null;
+      const selected = selection.getRangeAt(0);
+      if (!document.body.contains(selected.commonAncestorContainer)) return null;
+      function selector(el) {
+        const path = [];
+        for (; el; el = el.parentElement) {
+          let i = 1; for (let p = el.previousElementSibling; p; p = p.previousElementSibling) if (p.localName === el.localName) i++;
+          path.unshift(el.localName + ':nth-of-type(' + i + ')');
+        }
+        return path.join(' > ');
+      }
+      function point(node, offset) {
+        if (node.nodeType === Node.TEXT_NODE) return {cssSelector: selector(node.parentElement), textNodeIndex: Array.from(node.parentElement.childNodes).indexOf(node), charOffset: offset};
+        return {cssSelector: selector(node), textNodeIndex: offset};
+      }
+      function capture(range) {
+        const root = range.commonAncestorContainer.nodeType === 1 ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+        const before = document.createRange(); before.selectNodeContents(root); before.setEnd(range.startContainer, range.startOffset);
+        const after = document.createRange(); after.selectNodeContents(root); after.setStart(range.endContainer, range.endOffset);
+        return {selector: selector(root), before: before.toString(), after: after.toString(), quote: range.toString(),
+          domRange: {start: point(range.startContainer, range.startOffset), end: point(range.endContainer, range.endOffset)}};
+      }
+      const runs = []; let nodes = [];
+      function flush() {
+        if (nodes.length) {
+          const r = document.createRange(); r.setStart(nodes[0], 0); r.setEnd(nodes[nodes.length - 1], nodes[nodes.length - 1].length);
+          if (r.toString().trim()) runs.push(r);
+          nodes = [];
+        }
+      }
+      function visit(node) {
+        if (node.nodeType === Node.TEXT_NODE) { if (node.length) nodes.push(node); return; }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        const style = getComputedStyle(node);
+        if (node.hidden || node.getAttribute('aria-hidden') === 'true' || ['SCRIPT','STYLE','NOSCRIPT','TEMPLATE'].includes(node.tagName) || style.display === 'none' || ['hidden','collapse'].includes(style.visibility)) { flush(); return; }
+        const block = !['inline','contents'].includes(style.display);
+        if (block) flush();
+        Array.from(node.childNodes).forEach(visit);
+        if (block) flush();
+      }
+      visit(document.body); flush();
+      const parts = [], indices = [];
+      runs.forEach((run, index) => {
+        const r = run.cloneRange();
+        if (r.compareBoundaryPoints(Range.START_TO_START, selected) < 0) r.setStart(selected.startContainer, selected.startOffset);
+        if (r.compareBoundaryPoints(Range.END_TO_END, selected) > 0) r.setEnd(selected.endContainer, selected.endOffset);
+        // Setting an endpoint beyond the other collapses a disjoint range.
+        if (!r.collapsed && r.toString().trim()) {
+          parts.push(capture(r)); indices.push(index);
+        }
+      });
+      if (!parts.length) return null;
+      const nearby = new Set();
+      indices.forEach(i => { if (i > 0) nearby.add(i - 1); nearby.add(i); if (i + 1 < runs.length) nearby.add(i + 1); });
+      return {selected: parts, neighbors: Array.from(nearby).sort((a,b) => a-b).map(i => capture(runs[i]))};
     })()
     """
 

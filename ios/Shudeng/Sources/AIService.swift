@@ -16,13 +16,14 @@ struct AIConfiguration: Codable, Identifiable, Equatable {
 }
 
 enum AIError: Error, LocalizedError, Equatable {
-    case missing, address, authentication, incompatible, network, limited, storage, secret
+    case missing, address, authentication, incompatible, capacity, network, limited, storage, secret
     var errorDescription: String? {
         switch self {
         case .missing: return "请填写名称、地址、模型和密钥。"
         case .address: return "地址无效：请使用 HTTPS API 根地址或完整文字端点；本机测试可使用 HTTP。"
         case .authentication: return "鉴权失败，请检查密钥和服务权限。"
         case .incompatible: return "地址、模型或响应格式不兼容；仅支持非流式文字接口。"
+        case .capacity: return "服务上下文容量不足或回答被截断，尚未完成；请缩短问题或选文后重试。"
         case .network: return "网络或服务暂时不可用，请稍后重试。"
         case .limited: return "服务限流或额度不足，请检查服务后重试。"
         case .storage: return "配置尚未保存，原配置未变；请重试。"
@@ -173,12 +174,15 @@ final class AIConnection: NSObject, URLSessionTaskDelegate {
         return url
     }
     func check(_ configuration: AIConfiguration, key: String) async throws {
+        _ = try await text(configuration, key: key, prompt: "Reply OK.", maxTokens: 16, timeout: 20)
+    }
+    func text(_ configuration: AIConfiguration, key: String, prompt: String, maxTokens: Int, timeout: TimeInterval) async throws -> String {
         guard !configuration.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AIError.missing }
         guard key.rangeOfCharacter(from: .newlines) == nil else { throw AIError.authentication }
         let url = try Self.endpoint(for: configuration)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 20
+        request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if configuration.format == .openAI { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
         else {
@@ -186,7 +190,7 @@ final class AIConnection: NSObject, URLSessionTaskDelegate {
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": configuration.model, "messages": [["role": "user", "content": "Reply OK."]], "max_tokens": 16, "stream": false
+            "model": configuration.model, "messages": [["role": "user", "content": prompt]], "max_tokens": maxTokens, "stream": false
         ])
         let settings = URLSessionConfiguration.ephemeral
         settings.urlCache = nil
@@ -198,8 +202,15 @@ final class AIConnection: NSObject, URLSessionTaskDelegate {
             guard let http = response as? HTTPURLResponse else { throw AIError.network }
             switch http.statusCode {
             case 200: break
+            case 400:
+                let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                let detail = body?["error"] as? [String: Any]
+                if detail?["code"] as? String == "context_length_exceeded" ||
+                    (detail?["message"] as? String)?.lowercased().contains("prompt is too long") == true { throw AIError.capacity }
+                throw AIError.incompatible
             case 401, 403: throw AIError.authentication
             case 429: throw AIError.limited
+            case 413: throw AIError.capacity
             case 500...599: throw AIError.network
             default: throw AIError.incompatible
             }
@@ -207,12 +218,16 @@ final class AIConnection: NSObject, URLSessionTaskDelegate {
             let text: String?
             if configuration.format == .openAI {
                 let first = (json["choices"] as? [[String: Any]])?.first
+                if first?["finish_reason"] as? String == "length" { throw AIError.capacity }
                 text = (first?["message"] as? [String: Any])?["content"] as? String
             } else {
+                if json["stop_reason"] as? String == "max_tokens" { throw AIError.capacity }
                 text = (json["content"] as? [[String: Any]])?.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
             }
             guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AIError.incompatible }
-        } catch let error as AIError { throw error }
+            return text
+        } catch is CancellationError { throw CancellationError() }
+        catch let error as AIError { throw error }
         catch { throw AIError.network } // Never display response bodies, URLs or headers.
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,

@@ -16,7 +16,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             shelf.tabBarItem = UITabBarItem(title: "书架", image: UIImage(systemName: "books.vertical"), tag: 0)
             let notes = UINavigationController(rootViewController: NotesController(library: library))
             notes.tabBarItem = UITabBarItem(title: "笔记", image: UIImage(systemName: "square.and.pencil"), tag: 1)
-            let chats = placeholder(title: "对话", message: "还没有对话", symbol: "bubble.left.and.bubble.right", tag: 2)
+            let chats = UINavigationController(rootViewController: QuestionHistoryController(library: library))
+            chats.tabBarItem = UITabBarItem(title: "对话", image: UIImage(systemName: "bubble.left.and.bubble.right"), tag: 2)
             let about = AboutController(root: root)
             about.tabBarItem = UITabBarItem(title: "我的", image: UIImage(systemName: "person.crop.circle"), tag: 3)
             tabs.viewControllers = [shelf, notes, chats, UINavigationController(rootViewController: about)]
@@ -33,21 +34,6 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         }
         window.makeKeyAndVisible()
         return true
-    }
-    private func placeholder(title: String, message: String, symbol: String, tag: Int) -> UIViewController {
-        let controller = UIViewController()
-        controller.title = title
-        controller.view.backgroundColor = .systemBackground
-        let label = UILabel()
-        label.text = message
-        label.textColor = .secondaryLabel
-        label.font = .preferredFont(forTextStyle: .body)
-        label.translatesAutoresizingMaskIntoConstraints = false
-        controller.view.addSubview(label)
-        NSLayoutConstraint.activate([label.centerXAnchor.constraint(equalTo: controller.view.centerXAnchor), label.centerYAnchor.constraint(equalTo: controller.view.centerYAnchor)])
-        let navigation = UINavigationController(rootViewController: controller)
-        navigation.tabBarItem = UITabBarItem(title: title, image: UIImage(systemName: symbol), tag: tag)
-        return navigation
     }
 }
 

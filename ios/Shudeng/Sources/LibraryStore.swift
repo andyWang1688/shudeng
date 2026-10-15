@@ -86,6 +86,7 @@ final class LibraryStore {
     private(set) var books: [Book] = []
     let root: URL
     lazy var preparation = BookPreparation(root: root)
+    lazy var questions = QuestionStore(root: root)
     private let fileManager = FileManager.default
     private let http = DefaultHTTPClient()
     private lazy var retriever = AssetRetriever(httpClient: http)

@@ -1414,3 +1414,234 @@ extension ReadingUITests {
         print("I8_LONG_RESUMED")
     }
 }
+
+extension ReadingUITests {
+    private func questionService(_ app: XCUIApplication, format: String, model: String = "test-model") {
+        app.tabBars.buttons["我的"].tap()
+        if !app.tables["ai-services"].exists { app.buttons["AI 服务"].tap() }
+        app.buttons["添加"].tap()
+        let name = "I9-" + format + "-" + model + "-" + UUID().uuidString.prefix(6)
+        app.textFields["ai-name"].tap(); app.textFields["ai-name"].typeText(name)
+        if format == "Anthropic" { app.cells["ai-format"].tap(); app.buttons["Anthropic"].tap() }
+        app.textFields["ai-address"].tap(); app.textFields["ai-address"].typeText("http://127.0.0.1:18769/v1")
+        app.textFields["ai-model"].tap(); app.textFields["ai-model"].typeText(model)
+        app.secureTextFields["ai-key"].tap(); app.secureTextFields["ai-key"].typeText("not-a-real-credential")
+        app.navigationBars.buttons["保存"].tap()
+        app.tables["ai-services"].cells.containing(NSPredicate(format: "label CONTAINS %@", name)).firstMatch.tap()
+        app.tables.firstMatch.swipeUp()
+        app.cells["ai-select"].tap(); app.alerts.buttons["使用已保存配置"].tap()
+        app.tabBars.buttons["书架"].tap()
+    }
+    private func questionSelection(_ app: XCUIApplication) {
+        app.tables["library"].cells[searchBookID].tap()
+        if app.alerts["翻页准备失败"].waitForExistence(timeout: 3) { app.alerts.buttons["使用分页"].tap() }
+        waitForBody(app)
+        settings(app, mode: "滚动", dark: false, font: 100)
+        searchBook(app, query: "S1-SECOND", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
+        let marker = app.webViews.staticTexts["S1-SECOND"].firstMatch
+        XCTAssertTrue(marker.waitForExistence(timeout: 5))
+        marker.press(forDuration: 1.3)
+        noteMenu("提问", in: app)
+        XCTAssertTrue(app.textViews["question-input"].waitForExistence(timeout: 5))
+        evidence("issue9-real-selection-panel", app)
+    }
+    private func sendSelectedQuestion(_ app: XCUIApplication, text: String) {
+        let input = app.textViews["question-input"]
+        input.tap(); input.typeText(text)
+        app.buttons["question-send"].tap()
+        XCTAssertTrue(app.alerts["发送书内原文"].waitForExistence(timeout: 5))
+        evidence("issue9-disclosure-before-send", app)
+        app.alerts.buttons["发送并查找书内依据"].tap()
+    }
+    private func questionSaved(_ app: XCUIApplication) {
+        let label = app.staticTexts["question-status"]
+        let ready = NSPredicate { _, _ in label.label == "回答已保存" }
+        expectation(for: ready, evaluatedWith: app); waitForExpectations(timeout: 15)
+    }
+    func testQuestionAnthropicSelectionReferencesRestartAndDraft() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launch()
+        for format in ["Anthropic"] {
+            questionService(app, format: format)
+            questionSelection(app)
+            sendSelectedQuestion(app, text: "Why sentence? I9 " + format)
+            questionSaved(app)
+            XCTAssertTrue(app.staticTexts["question-answer"].label.contains("依据原文"))
+            XCTAssertTrue(app.staticTexts["question-scope"].label.contains("未通过本次原文核验"))
+            app.scrollViews["question-scroll"].swipeUp()
+            let reference = app.buttons["question-reference-0"]
+            XCTAssertTrue(reference.waitForExistence(timeout: 5)); reference.tap()
+            XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'S1-SECOND'")).firstMatch.exists)
+            evidence("issue9-" + format + "-verified-reference-snapshot", app)
+            app.buttons["跳转原文"].tap(); waitForBody(app)
+            searchMarkerVisible(app, "S1-SECOND")
+            evidence("issue9-" + format + "-exact-second-occurrence", app)
+            app.buttons["回提问处"].tap(); waitForBody(app)
+            searchMarkerVisible(app, "S1-SECOND")
+            app.buttons["书架"].tap()
+        }
+        questionSelection(app)
+        let input = app.textViews["question-input"]
+        input.tap(); input.typeText("I9 recoverable draft")
+        app.buttons["关闭"].tap(); app.buttons["书架"].tap()
+        app.terminate(); app.launch(); app.tabBars.buttons["对话"].tap()
+        let history = app.tables["question-history"]
+        XCTAssertTrue(history.cells.containing(NSPredicate(format: "label CONTAINS 'I9 Anthropic'")).firstMatch.exists)
+        history.cells.containing(NSPredicate(format: "label CONTAINS 'I9 recoverable draft'")).firstMatch.tap()
+        XCTAssertEqual(app.textViews["question-input"].value as? String, "I9 recoverable draft")
+        evidence("issue9-restarted-draft", app)
+        app.buttons["关闭"].tap()
+        history.cells.containing(NSPredicate(format: "label CONTAINS 'I9 Anthropic'")).firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["question-answer"].label.contains("依据原文"))
+        questionSaved(app); evidence("issue9-offline-history-saved-answer", app)
+    }
+    func testQuestionClosePanelCancelNetworkAndNoEvidence() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launch()
+        questionService(app, format: "OpenAI", model: "slow")
+        questionSelection(app); sendSelectedQuestion(app, text: "Why sentence? I9 close-panel")
+        app.buttons["关闭"].tap(); XCTAssertTrue(app.webViews.firstMatch.exists)
+        Thread.sleep(forTimeInterval: 9)
+        app.buttons["书架"].tap(); app.tabBars.buttons["对话"].tap()
+        app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'I9 close-panel'")).firstMatch.tap()
+        questionSaved(app); evidence("issue9-closed-panel-kept-generating", app); app.buttons["关闭"].tap()
+        app.tabBars.buttons["书架"].tap(); questionSelection(app)
+        sendSelectedQuestion(app, text: "Why sentence? I9 cancel")
+        XCTAssertTrue(app.buttons["取消生成"].waitForExistence(timeout: 5)); app.buttons["取消生成"].tap()
+        XCTAssertTrue(app.staticTexts["question-status"].label.contains("主动取消"))
+        evidence("issue9-cancel-incomplete", app); app.buttons["关闭"].tap(); app.buttons["书架"].tap()
+        questionService(app, format: "OpenAI", model: "network-failure")
+        questionSelection(app); sendSelectedQuestion(app, text: "Why sentence? I9 network")
+        let status = app.staticTexts["question-status"]
+        expectation(for: NSPredicate { _, _ in status.label.contains("网络或服务") }, evaluatedWith: app); waitForExpectations(timeout: 10)
+        XCTAssertTrue(app.textViews["question-input"].value as? String == "Why sentence? I9 network")
+        evidence("issue9-network-retained-question", app); app.buttons["关闭"].tap(); app.buttons["书架"].tap()
+        questionService(app, format: "Anthropic", model: "no-evidence")
+        questionSelection(app); sendSelectedQuestion(app, text: "I9 no evidence unknown answer")
+        questionSaved(app)
+        XCTAssertTrue(app.staticTexts["question-scope"].label.contains("未提供可核查"))
+        XCTAssertFalse(app.buttons["question-reference-0"].exists)
+        evidence("issue9-no-evidence-no-valid-links", app)
+    }
+}
+
+extension ReadingUITests {
+    func testQuestionRealAnswerWriteFailureAndSameOperationRetry() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launch()
+        questionService(app, format: "OpenAI", model: "slow")
+        let questionText = "Why sentence? I9 write-failure " + UUID().uuidString
+        questionSelection(app); sendSelectedQuestion(app, text: questionText)
+        print("I9_INJECT_ANSWER_WRITE_FAULT")
+        let status = app.staticTexts["question-status"]
+        expectation(for: NSPredicate { _, _ in status.label.contains("保存失败") }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        XCTAssertFalse(status.label.contains("回答已保存"))
+        XCTAssertTrue(app.staticTexts["question-answer"].label.contains("依据原文"))
+        evidence("issue9-real-answer-write-failure-not-complete", app)
+        print("I9_RESTORE_ANSWER_WRITE_FAULT")
+        Thread.sleep(forTimeInterval: 4)
+        app.buttons["重试保存"].tap(); questionSaved(app)
+        evidence("issue9-same-operation-save-retry", app)
+        app.terminate(); app.launch(); app.tabBars.buttons["对话"].tap()
+        let rows = app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", questionText))
+        XCTAssertEqual(rows.count, 1); rows.firstMatch.tap(); questionSaved(app)
+        XCTAssertTrue(app.staticTexts["question-answer"].label.contains("依据原文"))
+        evidence("issue9-write-retry-restart-one-record", app)
+    }
+    func testQuestionVisibleInlineNeighborsActualHTTPAndSecondReference() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launch()
+        questionService(app, format: "OpenAI")
+        app.tables["library"].cells[searchBookID].tap(); waitForBody(app)
+        settings(app, mode: "滚动", dark: false, font: 100)
+        searchBook(app, query: "后续可见", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
+        let text = app.webViews.staticTexts["后续可见"].firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 5)); text.press(forDuration: 1.3)
+        noteMenu("提问", in: app)
+        sendSelectedQuestion(app, text: "Why sentence? I9 visible-inline")
+        questionSaved(app)
+        app.scrollViews["question-scroll"].swipeUp(); app.buttons["question-reference-1"].tap()
+        evidence("issue9-visible-run-reference-after-nested-hidden", app)
+        app.buttons["跳转原文"].tap(); waitForBody(app)
+        XCTAssertTrue(app.webViews.staticTexts["后续可见"].firstMatch.exists)
+        evidence("issue9-visible-run-precise-navigation", app)
+    }
+}
+
+extension ReadingUITests {
+    func testQuestionIncompletePreparationWaitThenExplicitLocalChoice() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launch()
+        questionService(app, format: "OpenAI")
+        app.tables["library"].cells[searchBookID].tap(); waitForBody(app)
+        settings(app, mode: "滚动", dark: false, font: 100)
+        searchBook(app, query: "S1-SECOND", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
+        searchBook(app, query: "S1-SECOND", count: 1)
+        print("I9_INJECT_PREPARATION_FAULT")
+        Thread.sleep(forTimeInterval: 3)
+        app.buttons["重新准备"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS '资料准备失败'")).firstMatch.waitForExistence(timeout: 10))
+        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap()
+        app.webViews.staticTexts["S1-SECOND"].firstMatch.press(forDuration: 1.3); noteMenu("提问", in: app)
+        app.textViews["question-input"].tap(); app.textViews["question-input"].typeText("I9 explicit-local sentence")
+        app.buttons["question-send"].tap()
+        XCTAssertTrue(app.alerts["资料尚未准备完整"].waitForExistence(timeout: 5))
+        evidence("issue9-preparation-wait-or-local-choice", app)
+        app.alerts.buttons["等待资料准备"].tap()
+        XCTAssertEqual(app.staticTexts["question-status"].label, "问题草稿")
+        app.buttons["question-send"].tap(); app.alerts.buttons["仅用选文和邻文解释"].tap()
+        questionSaved(app)
+        XCTAssertTrue(app.staticTexts["question-scope"].label.contains("主动选择局部"))
+        evidence("issue9-explicit-local-saved-scope", app)
+        print("I9_RESTORE_PREPARATION_FAULT")
+        Thread.sleep(forTimeInterval: 3)
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tables["library"].cells[searchBookID].waitForExistence(timeout: 5))
+        let cell = app.tables["library"].cells[searchBookID]
+        expectation(for: NSPredicate { _, _ in (cell.value as? String ?? "").contains("书内资料可用") }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+    }
+}
+
+extension ReadingUITests {
+    func testQuestionDifferentOriginSecondRepeatedSentenceAndReturn() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launch()
+        questionService(app, format: "OpenAI", model: "jump-second")
+        app.tables["library"].cells[searchBookID].tap(); waitForBody(app)
+        settings(app, mode: "滚动", dark: false, font: 100)
+        searchBook(app, query: "后续可见", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
+        app.webViews.staticTexts["后续可见"].firstMatch.press(forDuration: 1.3); noteMenu("提问", in: app)
+        sendSelectedQuestion(app, text: "Why sentence? I9 distinct-origin-second-repeat")
+        questionSaved(app)
+        app.scrollViews["question-scroll"].swipeUp(); app.buttons["question-reference-0"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'S1-SECOND'")).firstMatch.exists)
+        evidence("issue9-second-sentence-snapshot-from-different-origin", app)
+        app.buttons["跳转原文"].tap(); waitForBody(app)
+        searchMarkerVisible(app, "S1-SECOND")
+        evidence("issue9-repeated-sentence-second-destination", app)
+        app.buttons["回提问处"].tap(); waitForBody(app)
+        searchMarkerVisible(app, "后续可见")
+        evidence("issue9-return-to-distinct-origin-after-hidden", app)
+    }
+    func testQuestionSmallScreenLargeTextDraftAndSavedHistory() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launch()
+        questionService(app, format: "Anthropic")
+        questionSelection(app)
+        app.textViews["question-input"].tap(); app.textViews["question-input"].typeText("I9 small draft")
+        evidence("issue9-small-large-text-keyboard-draft", app)
+        app.buttons["关闭"].tap(); app.buttons["书架"].tap(); app.terminate(); app.launch()
+        app.tabBars.buttons["对话"].tap()
+        app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'I9 small draft'")).firstMatch.tap()
+        XCTAssertEqual(app.textViews["question-input"].value as? String, "I9 small draft")
+        app.buttons["question-send"].tap(); app.alerts.buttons["发送并查找书内依据"].tap(); questionSaved(app)
+        app.scrollViews["question-scroll"].swipeUp(); XCTAssertTrue(app.buttons["question-reference-0"].isHittable)
+        evidence("issue9-small-large-text-saved-answer", app)
+    }
+}
