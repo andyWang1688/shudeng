@@ -69,6 +69,13 @@ extension LibraryTests {
         XCTAssertEqual(try LibraryStore(root: root).books.first?.bookmarks?.map(\.id), [other.id])
     }
 
+    func testLegacySettingsWithoutCurlDecodeUnchanged() throws {
+        let legacy = Data(#"{"scroll":true,"fontSize":125,"dark":true}"#.utf8)
+        let settings = try JSONDecoder().decode(ReadingSettings.self, from: legacy)
+        XCTAssertEqual(settings, ReadingSettings(scroll: true, fontSize: 125, dark: true))
+        XCTAssertNotEqual(settings.pageCurl, true)
+    }
+
     func testSettingsAndLocationCommitTogetherAndRecoverAfterWriteFailure() async throws {
         let library = try LibraryStore(root: root)
         let book = try await library.importBook(from: fixture()).book
@@ -76,7 +83,7 @@ extension LibraryTests {
         let first = Locator(href: AnyURL(string: "OEBPS/ch1.xhtml")!, mediaType: .xhtml, locations: .init(progression: 0.2))
         let next = Locator(href: AnyURL(string: "OEBPS/ch2.xhtml")!, mediaType: .xhtml, locations: .init(progression: 0.4))
         try library.saveReadingState(first, settings: ReadingSettings(), for: book.id)
-        let changed = ReadingSettings(scroll: true, fontSize: 150, dark: true)
+        let changed = ReadingSettings(scroll: false, fontSize: 150, dark: true, pageCurl: true)
         let catalog = root.appendingPathComponent("library.json")
         let committed = root.appendingPathComponent("committed.json")
         try FileManager.default.moveItem(at: catalog, to: committed)

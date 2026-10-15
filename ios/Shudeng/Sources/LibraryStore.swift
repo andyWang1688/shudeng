@@ -7,6 +7,8 @@ struct ReadingSettings: Codable, Equatable {
     var scroll = false
     var fontSize = 100
     var dark = false
+    // Optional for catalogs written before curl mode existed.
+    var pageCurl: Bool? = nil
 }
 
 struct Book: Codable, Identifiable {

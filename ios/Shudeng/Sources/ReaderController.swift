@@ -23,6 +23,11 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private var loadFailed = false
     private var navigating = false
     private var navigationFailed = false
+    private var curl: ReaderCurlController?
+    private var curlBusy = false
+    private var curlSize = CGSize.zero
+    private var leaving = false
+    private var changingBounds = false
 
     init(book: Book, publication: Publication, library: LibraryStore) throws {
         self.book = book
@@ -37,7 +42,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     private static func preferences(_ settings: ReadingSettings) -> EPUBPreferences {
         EPUBPreferences(fontSize: Double(settings.fontSize) / 100, publisherStyles: false,
-                        scroll: settings.scroll, theme: settings.dark ? .dark : .light)
+                        scroll: settings.scroll && settings.pageCurl != true, theme: settings.dark ? .dark : .light)
     }
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -76,13 +81,14 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         status.adjustsFontForContentSizeCategory = true
         status.textColor = .secondaryLabel
         status.numberOfLines = 0
+        status.heightAnchor.constraint(greaterThanOrEqualToConstant: status.font.lineHeight * 2).isActive = true
         status.accessibilityIdentifier = "reading-save-status"
         status.text = "正在打开…"
         retry.setTitle("重试保存", for: .normal)
         retry.titleLabel?.font = .preferredFont(forTextStyle: .body)
         retry.titleLabel?.adjustsFontForContentSizeCategory = true
         retry.addTarget(self, action: #selector(retrySave), for: .touchUpInside)
-        retry.isHidden = true
+        setRetryVisible(false)
         let footer = UIStackView(arrangedSubviews: [status, retry])
         footer.axis = .vertical
         footer.spacing = 4
@@ -130,8 +136,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         sheet.sheetPresentationController?.detents = [.large()]
         present(sheet, animated: true)
     }
-    private func changeSettings(_ changed: ReadingSettings) {
-        guard changed != settings, !loading else { return }
+    private func changeSettings(_ changed: ReadingSettings, force: Bool = false) {
+        guard (changed != settings || force), !loading, !curlBusy else { return }
+        stopCurl()
         loading = true
         configure.isEnabled = false
         browse.isEnabled = false
@@ -141,7 +148,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         Task {
             do {
                 var location = navigator.currentLocation ?? pendingLocation
-                if changed.scroll != settings.scroll || changed.fontSize != settings.fontSize,
+                if force || changed.scroll != settings.scroll || changed.pageCurl != settings.pageCurl || changed.fontSize != settings.fontSize,
                    case let .success(anchor as [String: String]) = await navigator.evaluateJavaScript(Self.visibleTextAnchor) {
                     location?.locations.cssSelector = anchor["selector"]
                     location?.text = Locator.Text(after: anchor["after"], before: anchor["before"], highlight: anchor["highlight"])
@@ -153,7 +160,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                     config: .init(preferences: Self.preferences(changed)))
                 loading = true
                 configure.isEnabled = false
-                retry.isHidden = true
+                setRetryVisible(false)
                 status.text = "正在应用阅读设置…"
                 status.textColor = .secondaryLabel
                 navigator.delegate = nil
@@ -162,6 +169,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 navigator.removeFromParent()
                 navigator = next
                 settings = changed
+                setRetryVisible(saveFailed)
                 navigator.delegate = self
                 applyTheme()
                 attachNavigator()
@@ -228,7 +236,16 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         toggleToolbar()
     }
     func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
-        guard navigator === self.navigator, !loadFailed, !navigating, !navigationFailed else { return }
+        guard !leaving, !changingBounds, navigator === self.navigator, !loadFailed, !navigating, !navigationFailed else { return }
+        if let curl {
+            if curl.locationChanged(locator) { return }
+            stopCurl()
+        }
+        if settings.pageCurl == true {
+            pendingLocation = locator
+            startCurl()
+            return
+        }
         loading = false
         content.isUserInteractionEnabled = true
         configure.isEnabled = true
@@ -237,26 +254,35 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         // Never replace a native pagination location with a paragraph start.
         persistPending()
     }
+    private func setRetryVisible(_ visible: Bool) {
+        // Keep a stable footer in curl mode. Collapsing the retry row on every
+        // rebuild would alternately resize the viewport and invalidate itself.
+        retry.isHidden = !visible && settings.pageCurl != true
+        retry.alpha = visible ? 1 : 0
+        retry.accessibilityElementsHidden = !visible
+        retry.isUserInteractionEnabled = visible
+    }
     private func persistPending() {
-        guard !loading, !navigating, !navigationFailed, let pendingLocation else { return }
+        guard !leaving, !changingBounds, !loading, !curlBusy, !navigating, !navigationFailed, let pendingLocation else { return }
         do {
             try library.saveReadingState(pendingLocation, settings: settings, for: book.id)
             saveFailed = false
             status.text = "阅读位置已保存"
             status.textColor = .secondaryLabel
-            retry.isHidden = true
+            setRetryVisible(false)
         } catch {
             saveFailed = true
             status.text = "位置与设置保存失败，重启将恢复上次已保存状态"
             status.textColor = .systemRed
-            retry.isHidden = false
+            setRetryVisible(true)
         }
     }
     @objc private func retrySave() {
         if loadFailed {
+            stopCurl()
             loadFailed = false
             loading = true
-            retry.isHidden = true
+            setRetryVisible(false)
             status.text = "正在重新打开…"
             navigator.delegate = nil
             navigator.willMove(toParent: nil)
@@ -276,15 +302,23 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         guard !saveFailed, !loading else {
             let alert = UIAlertController(title: "位置与设置尚未保存", message: "返回书架后，未保存的变更可能丢失。", preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "留在阅读页", style: .cancel))
-            alert.addAction(UIAlertAction(title: "仍然返回", style: .destructive) { [weak self] _ in self?.dismiss(animated: true) })
+            alert.addAction(UIAlertAction(title: "仍然返回", style: .destructive) { [weak self] _ in self?.finishReading() })
             present(alert, animated: true)
             return
         }
+        finishReading()
+    }
+    private func finishReading() {
+        leaving = true
+        navigator.delegate = nil
+        stopCurl()
         dismiss(animated: true)
     }
     func navigator(_ navigator: Navigator, presentError error: NavigatorError) { showError() }
     func navigator(_ navigator: Navigator, didFailToLoadResourceAt href: RelativeURL, withError error: ReadError) { showError() }
     private func showError() {
+        guard !leaving else { return }
+        stopCurl()
         status.text = "原文加载失败，未保存此次变更"
         status.textColor = .systemRed
         loadFailed = true
@@ -292,7 +326,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         content.isUserInteractionEnabled = false
         configure.isEnabled = false
         browse.isEnabled = false
-        retry.isHidden = false
+        setRetryVisible(true)
         saveFailed = true
         guard presentedViewController == nil else { return }
         let alert = UIAlertController(title: "原文加载失败", message: "无法读取此处内容，请返回书架后重新打开。", preferredStyle: .alert)
@@ -321,11 +355,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
 
     private func navigate(to target: Locator) {
         guard !loading, !navigating else { return }
+        stopCurl()
         navigating = true
         navigationFailed = false
         content.isUserInteractionEnabled = false
         for button in [browse, configure, close] { button.isEnabled = false }
-        retry.isHidden = true
+        setRetryVisible(false)
         status.text = "正在定位原文…"
         Task {
             // Do not allow Readium's fallback to a different resource/progression
@@ -345,6 +380,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                 }
             }
+            if arrived { try? await Task.sleep(nanoseconds: 350_000_000) }
             navigating = false
             close.isEnabled = true
             guard !loadFailed else { return }
@@ -354,7 +390,8 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             navigationFailed = !arrived
             if arrived, let actual = navigator.currentLocation {
                 pendingLocation = actual
-                persistPending()
+                if settings.pageCurl == true { startCurl() }
+                else { persistPending() }
             } else {
                 status.text = "未能到达原文，未保存此次跳转；请重新选择目录或书签"
                 status.textColor = .systemRed
@@ -362,6 +399,75 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 alert.addAction(UIAlertAction(title: "知道了", style: .default))
                 present(alert, animated: true)
             }
+        }
+    }
+
+    private func startCurl() {
+        guard !leaving, curl == nil else { return }
+        navigator.nativePaginationEnabled = false
+        curlSize = content.bounds.size
+        let controller = ReaderCurlController(reader: navigator, publication: publication, host: content, parent: self,
+            busy: { [weak self] in
+                guard let self else { return }
+                self.curlBusy = true
+                self.configure.isEnabled = false; self.browse.isEnabled = false
+                self.status.text = "正在准备翻页…"
+            }, settled: { [weak self] actual, commit in
+                guard let self else { return }
+                self.curlBusy = false; self.loading = false
+                self.content.isUserInteractionEnabled = true
+                self.configure.isEnabled = true; self.browse.isEnabled = true
+                if commit { self.pendingLocation = actual; self.persistPending() }
+                else { self.status.text = self.saveFailed ? "位置与设置保存失败" : "阅读位置已保存" }
+                self.view.setNeedsLayout()
+            }, failed: { [weak self] in self?.curlPreparationFailed() })
+        curl = controller
+        addChild(controller)
+        controller.view.frame = content.bounds
+        controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        content.addSubview(controller.view)
+        controller.didMove(toParent: self)
+        controller.start()
+    }
+    private func stopCurl() {
+        curl?.stop()
+        curl = nil; curlBusy = false
+    }
+    private func curlPreparationFailed() {
+        guard !leaving else { return }
+        stopCurl()
+        loadFailed = true; loading = true
+        content.isUserInteractionEnabled = false
+        configure.isEnabled = false; browse.isEnabled = false
+        status.text = "仿真翻页准备失败，请重试或使用分页"
+        status.textColor = .systemRed
+        setRetryVisible(true)
+        let alert = UIAlertController(title: "翻页准备失败", message: "未保存内部准备位置，可重试或恢复普通分页阅读。", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "使用分页", style: .default) { [weak self] _ in
+            self?.settings.pageCurl = false
+            self?.retrySave()
+        })
+        alert.addAction(UIAlertAction(title: "稍后重试", style: .cancel))
+        if presentedViewController == nil { present(alert, animated: true) }
+    }
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        guard settings.pageCurl == true else { return }
+        changingBounds = true
+        stopCurl()
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            guard let self, !self.leaving else { return }
+            self.changingBounds = false
+            self.loading = false
+            self.changeSettings(self.settings, force: true)
+        }
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // New bounds require new pagination and snapshots, including rotation and
+        // Dynamic Type changes to the surrounding chrome. Never reuse old images.
+        if curl != nil, !changingBounds, !loading, !navigating, !curlBusy, content.bounds.size != curlSize {
+            changeSettings(settings, force: true)
         }
     }
 
@@ -537,7 +643,7 @@ private final class BookNavigationController: UITableViewController {
 private final class ReadingSettingsController: UIViewController {
     private var settings: ReadingSettings
     private let apply: (ReadingSettings) -> Void
-    private let mode = UISegmentedControl(items: ["分页", "滚动"])
+    private let mode = UISegmentedControl(items: ["分页", "滚动", "仿真"])
     private let theme = UISegmentedControl(items: ["明亮", "深色"])
     private let size = UILabel()
     private let decrease = UIButton(type: .system)
@@ -555,7 +661,7 @@ private final class ReadingSettingsController: UIViewController {
         view.backgroundColor = .systemBackground
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: "取消", style: .plain, target: self, action: #selector(cancel))
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "完成", style: .done, target: self, action: #selector(done))
-        mode.selectedSegmentIndex = settings.scroll ? 1 : 0
+        mode.selectedSegmentIndex = settings.pageCurl == true ? 2 : settings.scroll ? 1 : 0
         theme.selectedSegmentIndex = settings.dark ? 1 : 0
         decrease.setTitle("A−", for: .normal)
         decrease.accessibilityLabel = "缩小字号"
@@ -611,7 +717,297 @@ private final class ReadingSettingsController: UIViewController {
     @objc private func cancel() { dismiss(animated: true) }
     @objc private func done() {
         settings.scroll = mode.selectedSegmentIndex == 1
+        settings.pageCurl = mode.selectedSegmentIndex == 2
         settings.dark = theme.selectedSegmentIndex == 1
         dismiss(animated: true) { [apply, settings] in apply(settings) }
+    }
+}
+
+// Application-owned adaptation of the original isolated reader probe.
+// Only settled live pages report progress; all neighbor navigation stays private.
+@MainActor
+private final class CurlPage: UIViewController {
+    let locator: Locator
+    init(locator: Locator, image: UIImage) {
+        self.locator = locator
+        super.init(nibName: nil, bundle: nil)
+        let snapshot = UIImageView(image: image)
+        snapshot.isUserInteractionEnabled = true
+        snapshot.contentMode = .scaleToFill
+        view = snapshot
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+}
+
+@MainActor
+private final class ReaderCurlController: UIViewController, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
+    private struct Page {
+        let locator: Locator
+        let image: UIImage
+        let selector: String?
+        var previous: String?
+        var following: String?
+        var previousKnown = false
+        var nextKnown = false
+    }
+    private let reader: EPUBNavigatorViewController
+    private let publication: Publication
+    private unowned let host: UIView
+    private unowned let readerParent: UIViewController
+    private let busy: () -> Void
+    private let settled: (Locator, Bool) -> Void
+    private let failed: () -> Void
+    private let pager = UIPageViewController(transitionStyle: .pageCurl, navigationOrientation: .horizontal,
+        options: [.spineLocation: UIPageViewController.SpineLocation.min.rawValue])
+    private var cache: [String: Page] = [:]
+    private var order: [String] = []
+    private var current: CurlPage?
+    private var previous: CurlPage?
+    private var following: CurlPage?
+    private var active = true
+    private(set) var working = true
+    private var waiter: ((Locator) -> Void)?
+    private var cancelWait: (() -> Void)?
+    private var task: Task<Void, Never>?
+
+    init(reader: EPUBNavigatorViewController, publication: Publication, host: UIView, parent: UIViewController,
+         busy: @escaping () -> Void, settled: @escaping (Locator, Bool) -> Void, failed: @escaping () -> Void) {
+        self.reader = reader; self.publication = publication; self.host = host; readerParent = parent
+        self.busy = busy; self.settled = settled; self.failed = failed
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        addChild(pager)
+        pager.view.frame = view.bounds
+        pager.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(pager.view)
+        pager.didMove(toParent: self)
+        pager.dataSource = self; pager.delegate = self
+        pager.isDoubleSided = false
+    }
+    func start() {
+        working = true; busy()
+        task = Task {
+            // Let the initial/external go finish reporting its native location;
+            // currentLocation can still be a pending target inside its callback.
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard active else { return }
+            await prepare()
+        }
+    }
+
+    func stop() {
+        active = false
+        cancelWait?()
+        task?.cancel()
+        pager.dataSource = nil; pager.delegate = nil
+        attach(to: readerParent, container: host)
+        reader.nativePaginationEnabled = true
+        willMove(toParent: nil); view.removeFromSuperview(); removeFromParent()
+    }
+    func locationChanged(_ locator: Locator) -> Bool {
+        if working { waiter?(locator); return true }
+        // Internal hyperlinks/accessibility navigation invalidate snapshots too.
+        return current.map { same($0.locator, locator) } ?? false
+    }
+
+    private func attach(to parent: UIViewController, container: UIView) {
+        reader.willMove(toParent: nil); reader.view.removeFromSuperview(); reader.removeFromParent()
+        parent.addChild(reader)
+        reader.view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(reader.view)
+        NSLayoutConstraint.activate([
+            reader.view.topAnchor.constraint(equalTo: container.topAnchor),
+            reader.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            reader.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            reader.view.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+        ])
+        container.layoutIfNeeded()
+        reader.didMove(toParent: parent)
+    }
+    private func key(_ locator: Locator) -> String {
+        "\(locator.href.string)|\(String(format: "%.7f", locator.locations.progression ?? 0))"
+    }
+    private func same(_ lhs: Locator, _ rhs: Locator) -> Bool {
+        lhs.href == rhs.href && abs((lhs.locations.progression ?? 0) - (rhs.locations.progression ?? 0)) < 0.0001
+    }
+    private func store(_ page: Page) {
+        let id = key(page.locator)
+        cache[id] = page
+        order.removeAll { $0 == id }; order.append(id)
+        while order.count > 8 { cache.removeValue(forKey: order.removeFirst()) }
+    }
+    private func controller(_ id: String?) -> CurlPage? {
+        guard let id, let page = cache[id] else { return nil }
+        return CurlPage(locator: page.locator, image: page.image)
+    }
+    private func capture(_ locator: Locator) async -> Page {
+        let first = await reader.firstVisibleElementLocator()
+        let image = UIGraphicsImageRenderer(bounds: reader.view.bounds).image { _ in
+            reader.view.drawHierarchy(in: reader.view.bounds, afterScreenUpdates: true)
+        }
+        return Page(locator: locator, image: image, selector: first?.locations.cssSelector)
+    }
+    private func trace(_ message: String) {
+        #if DEBUG
+        NSLog("SHUDENG_CURL %@", message)
+        #endif
+    }
+    private enum MoveError: Error { case failed }
+
+    // Success requires BOTH go completion and a matching location callback.
+    // The timer is only a failure watchdog; it never makes a page ready.
+    private func move(to expected: Locator? = nil, direction: Int = 0) async throws -> Locator? {
+        guard active, let start = reader.currentLocation else { throw MoveError.failed }
+        trace("move start=\(key(start)) target=\(expected.map(key) ?? String(direction))")
+        if let expected, same(start, expected) { return start }
+        let location: Locator? = try await withCheckedThrowingContinuation { continuation in
+            var finished = false
+            var accepted = false
+            var candidate: Locator?
+            @MainActor func finish(_ result: Result<Locator?, Error>) {
+                guard !finished else { return }
+                finished = true
+                waiter = nil; cancelWait = nil
+                trace("move result=\(result) actual=\(reader.currentLocation.map(key) ?? "nil")")
+                continuation.resume(with: result)
+            }
+            cancelWait = { finish(.failure(MoveError.failed)) }
+            waiter = { [self] locator in
+                let matches: Bool
+                if let expected { matches = same(locator, expected) }
+                else if locator.href == start.href {
+                    matches = Double(direction) * ((locator.locations.progression ?? 0) - (start.locations.progression ?? 0)) > 0.0001
+                } else {
+                    let old = publication.readingOrder.firstIndex { $0.url().removingFragment() == start.href.removingFragment() }
+                    let new = publication.readingOrder.firstIndex { $0.url().removingFragment() == locator.href.removingFragment() }
+                    matches = old != nil && new != nil && direction * (new! - old!) > 0
+                }
+                guard matches else { return }
+                candidate = locator
+                if accepted { finish(.success(locator)) }
+            }
+            Task {
+                guard active, !finished else { return }
+                let result: Bool
+                if let expected { result = await reader.go(to: expected, options: .none) }
+                else if direction > 0 { result = await reader.goForward(options: .none) }
+                else { result = await reader.goBackward(options: .none) }
+                guard !finished else { return }
+                accepted = result
+                trace("accepted=\(result)")
+
+                if !result {
+                    // A refused turn is a boundary only at the corresponding book end.
+                    let first = start.href.removingFragment() == publication.readingOrder.first?.url().removingFragment()
+                    let last = start.href.removingFragment() == publication.readingOrder.last?.url().removingFragment()
+                    let endVisible: Bool
+                    if case let .success(atEnd as Bool) = await reader.evaluateJavaScript(
+                        "Math.abs(window.scrollX) + innerWidth >= document.scrollingElement.scrollWidth - 2") {
+                        endVisible = atEnd
+                    } else { endVisible = false }
+                    let boundary = expected == nil && ((direction < 0 && first && (start.locations.progression ?? 0) < 0.0001) || (direction > 0 && last && endVisible))
+
+                    finish(boundary ? .success(nil) : .failure(MoveError.failed))
+                } else if let candidate { finish(.success(candidate)) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { finish(.failure(MoveError.failed)) }
+        }
+        // Readium 3.11 debounces scroll-end by 0.3s. Its location callback can
+        // arrive from an earlier pending update before that debounce completes.
+        // A reverse move during that window can cancel the next notification.
+        // Serialize past the upstream debounce AFTER verified arrival; this is
+        // not a rendering-success timeout. Revalidate before using the result.
+        try await Task.sleep(nanoseconds: 350_000_000)
+        guard active else { throw MoveError.failed }
+        if let location, let actual = reader.currentLocation, !same(location, actual) { throw MoveError.failed }
+        return location
+    }
+
+    private func prepare() async {
+        guard active, let original = reader.currentLocation else { return }
+        working = true; busy()
+        pager.view.isUserInteractionEnabled = false
+        do {
+            var record: Page
+            if let existing = cache[key(original)] { record = existing }
+            else { record = await capture(original) }
+            guard active else { return }
+            let page = CurlPage(locator: original, image: record.image)
+            current = page
+            pager.setViewControllers([page], direction: .forward, animated: false)
+            attach(to: readerParent, container: host)
+            host.sendSubviewToBack(reader.view)
+            following = controller(record.following); previous = controller(record.previous)
+            if !record.nextKnown || (record.following != nil && following == nil) {
+                if let location = try await move(direction: 1) {
+                    var neighbor = await capture(location)
+                    neighbor.previous = key(original); neighbor.previousKnown = true
+                    store(neighbor); record.following = key(location); following = controller(record.following)
+                    _ = try await move(to: original)
+                }
+                record.nextKnown = true
+            }
+            if !record.previousKnown || (record.previous != nil && previous == nil) {
+                if let location = try await move(direction: -1) {
+                    var neighbor = await capture(location)
+                    neighbor.following = key(original); neighbor.nextKnown = true
+                    store(neighbor); record.previous = key(location); previous = controller(record.previous)
+                    _ = try await move(to: original)
+                }
+                record.previousKnown = true
+            }
+            guard active else { return }
+            store(record)
+            attach(to: page, container: page.view)
+            let displayed = await reader.firstVisibleElementLocator()
+            guard active else { return }
+            guard let actual = reader.currentLocation, same(actual, original), displayed?.locations.cssSelector == record.selector else {
+                trace("display mismatch native=\(reader.currentLocation.map(key) ?? "nil") expected=\(key(original)) selector=\(displayed?.locations.cssSelector ?? "nil") wanted=\(record.selector ?? "nil")")
+                throw MoveError.failed
+            }
+            pager.dataSource = nil; pager.dataSource = self
+            pager.view.isUserInteractionEnabled = true
+            working = false
+            trace("ready \(key(actual))")
+            settled(actual, true)
+        } catch { if active { working = true; failed() } }
+    }
+    func pageViewController(_ pageViewController: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
+        guard !working else { return nil }
+        if viewController === current { return previous }
+        if viewController === following { return current }
+        return nil
+    }
+    func pageViewController(_ pageViewController: UIPageViewController, viewControllerAfter viewController: UIViewController) -> UIViewController? {
+        guard !working else { return nil }
+        if viewController === current { return following }
+        if viewController === previous { return current }
+        return nil
+    }
+    func pageViewController(_ pageViewController: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
+        reader.clearSelection()
+        busy()
+    }
+    func pageViewController(_ pageViewController: UIPageViewController, didFinishAnimating finished: Bool,
+                            previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
+        guard completed, let target = pager.viewControllers?.first as? CurlPage else {
+            // No navigation and no save on a cancelled drag.
+            if let current { settled(current.locator, false) }
+            return
+        }
+        working = true; pager.view.isUserInteractionEnabled = false
+        task = Task {
+            guard active else { return }
+            attach(to: readerParent, container: host)
+            host.sendSubviewToBack(reader.view)
+            do {
+                _ = try await move(to: target.locator)
+                guard active else { return }
+                await prepare()
+            } catch { if active { failed() } }
+        }
     }
 }

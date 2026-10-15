@@ -652,8 +652,19 @@ open class EPUBNavigatorViewController: InputObservableViewController,
 
     // MARK: - Navigator
 
+    /// App-owned page transitions disable native drag pagination, preserving selection.
+    /// Local Shudeng extension; not an upstream Readium API.
+    public var nativePaginationEnabled = true {
+        didSet {
+            paginationView?.isScrollEnabled = isPaginationViewScrollingEnabled
+            for case let spread as EPUBSpreadView in paginationView?.loadedViews.values.map({ $0 as UIView }) ?? [] {
+                spread.scrollView.isScrollEnabled = nativePaginationEnabled
+            }
+        }
+    }
+
     private var isPaginationViewScrollingEnabled: Bool {
-        !(config.disablePageTurnsWhileScrolling && settings.scroll)
+        nativePaginationEnabled && !(config.disablePageTurnsWhileScrolling && settings.scroll)
     }
 
     public var presentation: VisualNavigatorPresentation {
@@ -1045,6 +1056,7 @@ extension EPUBNavigatorViewController: EPUBSpreadViewDelegate {
     }
 
     func spreadViewDidLoad(_ spreadView: EPUBSpreadView) async {
+        spreadView.scrollView.isScrollEnabled = nativePaginationEnabled
         let templates = config.decorationTemplates.reduce(into: [String: JSONValue]()) { styles, item in
             styles[item.key.rawValue] = .object(item.value.jsonObject)
         }
