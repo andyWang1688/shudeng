@@ -15,6 +15,28 @@ struct Book: Codable, Identifiable {
     let author: String
     var locatorJSON: String?
     var readingSettings: ReadingSettings?
+    var bookmarks: [Bookmark]?
+}
+
+struct Bookmark: Codable, Identifiable {
+    let id: UUID
+    let locatorJSON: String
+    let title: String
+    let excerpt: String
+
+    init(locator: Locator) {
+        id = UUID()
+        locatorJSON = locator.description
+        title = locator.title ?? "书签"
+        excerpt = locator.text.highlight ?? ""
+    }
+
+    func location() throws -> Locator {
+        guard let locator = try Locator(json: JSONValue(jsonString: locatorJSON, warnings: nil), warnings: nil) else {
+            throw LibraryError.invalidLocation
+        }
+        return locator
+    }
 }
 
 struct ImportedBook {
@@ -116,6 +138,28 @@ final class LibraryStore {
         var updated = books
         updated[index].locatorJSON = locator.description
         updated[index].readingSettings = settings
+        do { try commit(updated) } catch { throw LibraryError.save }
+    }
+
+    func saveBookmark(_ bookmark: Bookmark, for id: String) throws {
+        guard let index = books.firstIndex(where: { $0.id == id }) else { throw LibraryError.missing }
+        let location = try bookmark.location()
+        let existing = books[index].bookmarks ?? []
+        // Reflow changes progression, but not the element-scoped quotation.
+        if existing.contains(where: {
+            guard $0.id != bookmark.id else { return true }
+            guard let saved = try? $0.location() else { return false }
+            return saved.href == location.href && saved.locations.cssSelector == location.locations.cssSelector && saved.text == location.text
+        }) { return }
+        var updated = books
+        updated[index].bookmarks = existing + [bookmark]
+        do { try commit(updated) } catch { throw LibraryError.save }
+    }
+
+    func removeBookmark(_ bookmarkID: UUID, for id: String) throws {
+        guard let index = books.firstIndex(where: { $0.id == id }) else { throw LibraryError.missing }
+        var updated = books
+        updated[index].bookmarks = (updated[index].bookmarks ?? []).filter { $0.id != bookmarkID }
         do { try commit(updated) } catch { throw LibraryError.save }
     }
 

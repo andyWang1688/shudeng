@@ -16,5 +16,5 @@ trap cleanup EXIT INT TERM
   cleanup
 ) &
 watcher=$!
-TEST_RUNNER_SHUDENG_STORAGE_FAULT=1 xcodebuild -project ios/Shudeng.xcodeproj -scheme Shudeng -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath /tmp/shudeng-derived -clonedSourcePackagesDirPath /tmp/shudeng-readium-spm -parallel-testing-enabled NO "-only-testing:ShudengUITests/ReadingUITests/$test_method" -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO test > "$log" 2>&1
+TEST_RUNNER_SHUDENG_STORAGE_FAULT=1 xcodebuild -project ios/Shudeng.xcodeproj -scheme Shudeng -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath /tmp/shudeng-derived -clonedSourcePackagesDirPath /tmp/shudeng-readium-spm -parallel-testing-enabled NO -collect-test-diagnostics never "-only-testing:ShudengUITests/ReadingUITests/$test_method" -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO test > "$log" 2>&1
 wait "$watcher"

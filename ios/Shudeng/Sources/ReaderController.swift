@@ -14,12 +14,15 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private let retry = UIButton(type: .system)
     private let close = UIButton(type: .system)
     private let configure = UIButton(type: .system)
+    private let browse = UIButton(type: .system)
     private let toggle = UIButton(type: .system)
     private var pendingLocation: Locator?
     private var saveFailed = false
     private var loading = true
     private var toolbarHidden = false
     private var loadFailed = false
+    private var navigating = false
+    private var navigationFailed = false
 
     init(book: Book, publication: Publication, library: LibraryStore) throws {
         self.book = book
@@ -45,16 +48,29 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         configure.accessibilityLabel = "阅读设置"
         configure.addTarget(self, action: #selector(openSettings), for: .touchUpInside)
         configure.isEnabled = false
+        browse.setImage(UIImage(systemName: "list.bullet"), for: .normal)
+        browse.accessibilityLabel = "目录与书签"
+        browse.addTarget(self, action: #selector(openNavigation), for: .touchUpInside)
+        browse.isEnabled = false
+        browse.widthAnchor.constraint(equalToConstant: 44).isActive = true
         toggle.setImage(UIImage(systemName: "eye.slash"), for: .normal)
         toggle.accessibilityLabel = "隐藏工具栏"
         toggle.addTarget(self, action: #selector(toggleToolbar), for: .touchUpInside)
-        for button in [close, configure, toggle] {
+        for button in [close, configure, browse, toggle] {
             button.titleLabel?.font = .preferredFont(forTextStyle: .body)
             button.titleLabel?.adjustsFontForContentSizeCategory = true
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         }
-        toggle.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        let header = UIStackView(arrangedSubviews: [close, UIView(), configure, toggle])
+        if traitCollection.preferredContentSizeCategory.isAccessibilityCategory {
+            configure.setTitle(nil, for: .normal)
+            configure.setImage(UIImage(systemName: "gearshape"), for: .normal)
+            configure.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        }
+        for button in [browse, configure, toggle] {
+            button.setPreferredSymbolConfiguration(.init(pointSize: 20), forImageIn: .normal)
+        }
+        toggle.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        let header = UIStackView(arrangedSubviews: [close, UIView(), browse, configure, toggle])
         header.spacing = 12
         status.font = .preferredFont(forTextStyle: .caption1)
         status.adjustsFontForContentSizeCategory = true
@@ -118,6 +134,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         guard changed != settings, !loading else { return }
         loading = true
         configure.isEnabled = false
+        browse.isEnabled = false
         content.isUserInteractionEnabled = false
         status.text = "正在应用阅读设置…"
         navigator.delegate = nil
@@ -199,8 +216,10 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         // the text. The reveal button remains accessible without a gesture.
         close.alpha = toolbarHidden ? 0 : 1
         configure.alpha = toolbarHidden ? 0 : 1
+        browse.alpha = toolbarHidden ? 0 : 1
         close.accessibilityElementsHidden = toolbarHidden
         configure.accessibilityElementsHidden = toolbarHidden
+        browse.accessibilityElementsHidden = toolbarHidden
         toggle.accessibilityLabel = toolbarHidden ? "显示工具栏" : "隐藏工具栏"
         toggle.setImage(UIImage(systemName: toolbarHidden ? "eye" : "eye.slash"), for: .normal)
     }
@@ -209,16 +228,17 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         toggleToolbar()
     }
     func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
-        guard navigator === self.navigator, !loadFailed else { return }
+        guard navigator === self.navigator, !loadFailed, !navigating, !navigationFailed else { return }
         loading = false
         content.isUserInteractionEnabled = true
         configure.isEnabled = true
+        browse.isEnabled = true
         pendingLocation = locator
         // Never replace a native pagination location with a paragraph start.
         persistPending()
     }
     private func persistPending() {
-        guard !loading, let pendingLocation else { return }
+        guard !loading, !navigating, !navigationFailed, let pendingLocation else { return }
         do {
             try library.saveReadingState(pendingLocation, settings: settings, for: book.id)
             saveFailed = false
@@ -271,11 +291,244 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         loading = true
         content.isUserInteractionEnabled = false
         configure.isEnabled = false
+        browse.isEnabled = false
         retry.isHidden = false
         saveFailed = true
         guard presentedViewController == nil else { return }
         let alert = UIAlertController(title: "原文加载失败", message: "无法读取此处内容，请返回书架后重新打开。", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "知道了", style: .default))
+        present(alert, animated: true)
+    }
+
+    @objc private func openNavigation() {
+        let controller = BookNavigationController(publication: publication, library: library, bookID: book.id,
+            capture: { [weak self] in
+                guard let self, !self.navigationFailed, !self.loading,
+                      var location = self.navigator.currentLocation,
+                      case let .success(anchor as [String: String]) = await self.navigator.evaluateJavaScript(Self.visibleTextAnchor),
+                      let selector = anchor["selector"], let highlight = anchor["highlight"], !highlight.isEmpty else {
+                    throw LibraryError.invalidLocation
+                }
+                location.locations.cssSelector = selector
+                location.text = Locator.Text(after: anchor["after"], before: anchor["before"], highlight: highlight)
+                return Bookmark(locator: location)
+            }, navigate: { [weak self] location in self?.navigate(to: location) })
+        let sheet = UINavigationController(rootViewController: controller)
+        sheet.overrideUserInterfaceStyle = overrideUserInterfaceStyle
+        sheet.sheetPresentationController?.detents = [.large()]
+        present(sheet, animated: true)
+    }
+
+    private func navigate(to target: Locator) {
+        guard !loading, !navigating else { return }
+        navigating = true
+        navigationFailed = false
+        content.isUserInteractionEnabled = false
+        for button in [browse, configure, close] { button.isEnabled = false }
+        retry.isHidden = true
+        status.text = "正在定位原文…"
+        Task {
+            // Do not allow Readium's fallback to a different resource/progression
+            // to masquerade as a valid bookmark or table-of-contents destination.
+            let resource = target.href.removingFragment()
+            let validResource = publication.readingOrder.contains { $0.url().removingFragment() == resource }
+            let accepted = validResource ? await navigator.go(to: target, options: .init(animated: false)) : false
+            var arrived = false
+            if accepted {
+                for _ in 0..<60 {
+                    if loadFailed { break }
+                    if navigator.currentLocation?.href.removingFragment() == resource,
+                       case let .success(visible as Bool) = await navigator.evaluateJavaScript(Self.targetIsVisible(target)), visible {
+                        arrived = true
+                        break
+                    }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
+            navigating = false
+            close.isEnabled = true
+            guard !loadFailed else { return }
+            browse.isEnabled = true
+            configure.isEnabled = arrived
+            content.isUserInteractionEnabled = arrived
+            navigationFailed = !arrived
+            if arrived, let actual = navigator.currentLocation {
+                pendingLocation = actual
+                persistPending()
+            } else {
+                status.text = "未能到达原文，未保存此次跳转；请重新选择目录或书签"
+                status.textColor = .systemRed
+                let alert = UIAlertController(title: "无法定位原文", message: "目标位置无效或原文未显示，未覆盖上次阅读位置。", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "知道了", style: .default))
+                present(alert, animated: true)
+            }
+        }
+    }
+
+    private static func targetIsVisible(_ locator: Locator) -> String {
+        // Verify the exact occurrence inside its original element. A matching
+        // sentence elsewhere or a successful go() alone is insufficient.
+        """
+        (() => {
+          const locator = \(locator.description), loc = locator.locations || {}, quote = locator.text || {};
+          let root;
+          try {
+            if (loc.cssSelector) root = document.querySelector(loc.cssSelector);
+            else if (loc.fragments && loc.fragments.length) root = document.getElementById(decodeURIComponent(loc.fragments[0]));
+            else root = document.body;
+          } catch (_) { return false; }
+          if (!root) return false;
+          const visible = r => r.width > 0 && r.height > 0 && r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight;
+          let offset = 0;
+          if (quote.highlight) {
+            const text = root.textContent, before = quote.before || '';
+            offset = before.length;
+            if (text.slice(0, offset) !== before || text.slice(offset, offset + quote.highlight.length) !== quote.highlight ||
+                (quote.after != null && text.slice(offset + quote.highlight.length) !== quote.after)) return false;
+          }
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+          let node;
+          while ((node = walker.nextNode())) {
+            if (offset >= node.length) { offset -= node.length; continue; }
+            if (!quote.highlight) {
+              while (offset < node.length && !node.textContent[offset].trim()) offset++;
+              if (offset === node.length) { offset = 0; continue; }
+            }
+            const range = document.createRange();
+            range.setStart(node, offset); range.setEnd(node, offset + 1);
+            return Array.from(range.getClientRects()).some(visible);
+          }
+          const image = root.matches('img,svg') ? root : root.querySelector('img,svg');
+          return !quote.highlight && !!image && visible(image.getBoundingClientRect());
+        })()
+        """
+    }
+}
+
+@MainActor
+private final class BookNavigationController: UITableViewController {
+    private let publication: Publication
+    private let library: LibraryStore
+    private let bookID: String
+    private let capture: () async throws -> Bookmark
+    private let navigate: (Locator) -> Void
+    private let tabs = UISegmentedControl(items: ["目录", "书签"])
+    private var contents: [(Link, Int)] = []
+    private var contentsMessage = "正在读取目录…"
+    private var feedback: String?
+    private var bookmarks: [Bookmark] { library.books.first { $0.id == bookID }?.bookmarks ?? [] }
+
+    init(publication: Publication, library: LibraryStore, bookID: String,
+         capture: @escaping () async throws -> Bookmark, navigate: @escaping (Locator) -> Void) {
+        self.publication = publication
+        self.library = library
+        self.bookID = bookID
+        self.capture = capture
+        self.navigate = navigate
+        super.init(style: .insetGrouped)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tabs.selectedSegmentIndex = 0
+        tabs.addTarget(self, action: #selector(refresh), for: .valueChanged)
+        navigationItem.titleView = tabs
+        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "完成", style: .done, target: self, action: #selector(done))
+        navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addBookmark))
+        navigationItem.rightBarButtonItem?.accessibilityLabel = "添加书签"
+        tableView.accessibilityIdentifier = "book-navigation"
+        Task {
+            do {
+                func flatten(_ links: [Link], depth: Int) -> [(Link, Int)] {
+                    links.flatMap { [($0, depth)] + flatten($0.children, depth: depth + 1) }
+                }
+                contents = flatten(try await publication.tableOfContents().get(), depth: 0)
+                contentsMessage = "本书没有目录"
+            } catch { contentsMessage = "目录读取失败，请关闭后重试" }
+            refresh()
+        }
+    }
+    @objc private func refresh() { tableView.reloadData() }
+    @objc private func done() { dismiss(animated: true) }
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? { feedback }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        max(1, tabs.selectedSegmentIndex == 0 ? contents.count : bookmarks.count)
+    }
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        cell.textLabel?.font = .preferredFont(forTextStyle: .body)
+        cell.detailTextLabel?.font = .preferredFont(forTextStyle: .caption1)
+        for label in [cell.textLabel, cell.detailTextLabel] { label?.numberOfLines = 0; label?.adjustsFontForContentSizeCategory = true }
+        if tabs.selectedSegmentIndex == 0 {
+            if contents.isEmpty { cell.textLabel?.text = contentsMessage; cell.selectionStyle = .none }
+            else {
+                let (link, depth) = contents[indexPath.row]
+                cell.textLabel?.text = link.title ?? "未命名章节"
+                cell.indentationLevel = min(depth, 4)
+                cell.accessoryType = .disclosureIndicator
+            }
+        } else if bookmarks.isEmpty { cell.textLabel?.text = "暂无书签"; cell.selectionStyle = .none }
+        else {
+            let bookmark = bookmarks[indexPath.row]
+            cell.textLabel?.text = bookmark.title
+            cell.detailTextLabel?.text = bookmark.excerpt
+            cell.accessibilityIdentifier = "bookmark-\(bookmark.id)"
+            cell.accessoryType = .disclosureIndicator
+        }
+        return cell
+    }
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let isContents = tabs.selectedSegmentIndex == 0
+        guard isContents ? !contents.isEmpty : !bookmarks.isEmpty else { return }
+        let link = isContents ? contents[indexPath.row].0 : nil
+        let bookmark = isContents ? nil : bookmarks[indexPath.row]
+        Task {
+            let target: Locator?
+            if let link { target = await publication.locate(link) }
+            else { target = try? bookmark?.location() }
+            guard let target else { showFailure(title: "无法定位原文", message: "目标位置无效，请选择其他目录或书签。", retry: nil); return }
+            dismiss(animated: true) { [navigate] in navigate(target) }
+        }
+    }
+    @objc private func addBookmark() {
+        navigationItem.rightBarButtonItem?.isEnabled = false
+        Task {
+            defer { navigationItem.rightBarButtonItem?.isEnabled = true }
+            do {
+                let bookmark = try await capture()
+                save(bookmark)
+            } catch { showFailure(title: "无法添加书签", message: "当前没有可确认的原文位置，请返回正文后重试。", retry: nil) }
+        }
+    }
+    private func save(_ bookmark: Bookmark) {
+        do {
+            try library.saveBookmark(bookmark, for: bookID)
+            tabs.selectedSegmentIndex = 1
+            feedback = "书签已保存"
+            refresh()
+        } catch { showFailure(title: "书签保存失败", message: "尚未保存，重启后不会保留。可重试或取消本次添加。", retry: { [weak self] in self?.save(bookmark) }) }
+    }
+    override func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool {
+        tabs.selectedSegmentIndex == 1 && !bookmarks.isEmpty
+    }
+    override func tableView(_ tableView: UITableView, titleForDeleteConfirmationButtonForRowAt indexPath: IndexPath) -> String? { "移除" }
+    override func tableView(_ tableView: UITableView, commit editingStyle: UITableViewCell.EditingStyle, forRowAt indexPath: IndexPath) {
+        remove(bookmarks[indexPath.row].id)
+    }
+    private func remove(_ id: UUID) {
+        do {
+            try library.removeBookmark(id, for: bookID)
+            feedback = "书签已移除"
+            refresh()
+        } catch { showFailure(title: "书签移除失败", message: "原书签仍保留，可重试或取消本次移除。", retry: { [weak self] in self?.remove(id) }) }
+    }
+    private func showFailure(title: String, message: String, retry: (() -> Void)?) {
+        feedback = nil
+        refresh()
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        if let retry { alert.addAction(UIAlertAction(title: "重试保存", style: .default) { _ in retry() }) }
+        alert.addAction(UIAlertAction(title: retry == nil ? "知道了" : "取消", style: .cancel))
         present(alert, animated: true)
     }
 }

@@ -31,6 +31,44 @@ final class LibraryTests: XCTestCase {
 }
 
 extension LibraryTests {
+    func testBookmarksSurviveRestartAndFailedMutationsRetryWithoutDuplicates() async throws {
+        let library = try LibraryStore(root: root)
+        let book = try await library.importBook(from: fixture()).book
+        let location = try XCTUnwrap(Locator(json: JSONValue(jsonString: """
+        {"href":"OEBPS/ch2.xhtml","type":"application/xhtml+xml","locations":{"cssSelector":"#c2-p30","progression":0.99},"text":{"before":"first occurrence; ","highlight":"repeated sentence","after":" chapter end"}}
+        """, warnings: nil), warnings: nil))
+        let bookmark = Bookmark(locator: location)
+        try library.saveBookmark(bookmark, for: book.id)
+        try library.saveBookmark(bookmark, for: book.id)
+        try library.saveBookmark(Bookmark(locator: location), for: book.id)
+        var reflowed = location
+        reflowed.locations.progression = 0.7
+        try library.saveBookmark(Bookmark(locator: reflowed), for: book.id)
+        let restarted = try LibraryStore(root: root)
+        XCTAssertEqual(restarted.books.first?.bookmarks?.count, 1)
+        XCTAssertEqual(restarted.books.first?.bookmarks?.first?.locatorJSON, location.description)
+        let catalog = root.appendingPathComponent("library.json")
+        let backup = root.appendingPathComponent("committed.json")
+        try FileManager.default.moveItem(at: catalog, to: backup)
+        try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try library.removeBookmark(bookmark.id, for: book.id))
+        XCTAssertEqual(library.books.first?.bookmarks?.count, 1)
+        var otherLocation = location
+        otherLocation.href = AnyURL(string: "OEBPS/ch3.xhtml")!
+        let other = Bookmark(locator: otherLocation)
+        XCTAssertThrowsError(try library.saveBookmark(other, for: book.id))
+        XCTAssertEqual(library.books.first?.bookmarks?.count, 1)
+        try FileManager.default.removeItem(at: catalog)
+        try FileManager.default.moveItem(at: backup, to: catalog)
+        XCTAssertEqual(try LibraryStore(root: root).books.first?.bookmarks?.count, 1)
+        try library.saveBookmark(other, for: book.id)
+        try library.saveBookmark(other, for: book.id)
+        XCTAssertEqual(try LibraryStore(root: root).books.first?.bookmarks?.count, 2)
+        try library.removeBookmark(bookmark.id, for: book.id)
+        try library.removeBookmark(bookmark.id, for: book.id)
+        XCTAssertEqual(try LibraryStore(root: root).books.first?.bookmarks?.map(\.id), [other.id])
+    }
+
     func testSettingsAndLocationCommitTogetherAndRecoverAfterWriteFailure() async throws {
         let library = try LibraryStore(root: root)
         let book = try await library.importBook(from: fixture()).book
