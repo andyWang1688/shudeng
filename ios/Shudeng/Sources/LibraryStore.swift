@@ -3,11 +3,18 @@ import CryptoKit
 import ReadiumShared
 import ReadiumStreamer
 
+struct ReadingSettings: Codable, Equatable {
+    var scroll = false
+    var fontSize = 100
+    var dark = false
+}
+
 struct Book: Codable, Identifiable {
     let id: String
     let title: String
     let author: String
     var locatorJSON: String?
+    var readingSettings: ReadingSettings?
 }
 
 struct ImportedBook {
@@ -101,9 +108,14 @@ final class LibraryStore {
     }
 
     func saveLocation(_ locator: Locator, for id: String) throws {
+        try saveReadingState(locator, settings: books.first(where: { $0.id == id })?.readingSettings ?? ReadingSettings(), for: id)
+    }
+
+    func saveReadingState(_ locator: Locator, settings: ReadingSettings, for id: String) throws {
         guard let index = books.firstIndex(where: { $0.id == id }) else { throw LibraryError.missing }
         var updated = books
         updated[index].locatorJSON = locator.description
+        updated[index].readingSettings = settings
         do { try commit(updated) } catch { throw LibraryError.save }
     }
 

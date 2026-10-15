@@ -31,6 +31,34 @@ final class LibraryTests: XCTestCase {
 }
 
 extension LibraryTests {
+    func testSettingsAndLocationCommitTogetherAndRecoverAfterWriteFailure() async throws {
+        let library = try LibraryStore(root: root)
+        let book = try await library.importBook(from: fixture()).book
+        XCTAssertEqual(book.readingSettings ?? ReadingSettings(), ReadingSettings())
+        let first = Locator(href: AnyURL(string: "OEBPS/ch1.xhtml")!, mediaType: .xhtml, locations: .init(progression: 0.2))
+        let next = Locator(href: AnyURL(string: "OEBPS/ch2.xhtml")!, mediaType: .xhtml, locations: .init(progression: 0.4))
+        try library.saveReadingState(first, settings: ReadingSettings(), for: book.id)
+        let changed = ReadingSettings(scroll: true, fontSize: 150, dark: true)
+        let catalog = root.appendingPathComponent("library.json")
+        let committed = root.appendingPathComponent("committed.json")
+        try FileManager.default.moveItem(at: catalog, to: committed)
+        try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try library.saveReadingState(next, settings: changed, for: book.id))
+        XCTAssertEqual(library.books.first?.readingSettings, ReadingSettings())
+        XCTAssertEqual(try library.location(for: book.id)?.href.string, "OEBPS/ch1.xhtml")
+        try FileManager.default.removeItem(at: catalog)
+        try FileManager.default.moveItem(at: committed, to: catalog)
+        let reopened = try LibraryStore(root: root)
+        XCTAssertEqual(reopened.books.first?.readingSettings, ReadingSettings())
+        XCTAssertEqual(try reopened.location(for: book.id)?.href.string, "OEBPS/ch1.xhtml")
+        try library.saveReadingState(next, settings: changed, for: book.id)
+        try library.saveReadingState(next, settings: changed, for: book.id)
+        let restored = try LibraryStore(root: root)
+        XCTAssertEqual(restored.books.count, 1)
+        XCTAssertEqual(restored.books.first?.readingSettings, changed)
+        XCTAssertEqual(try restored.location(for: book.id)?.href.string, "OEBPS/ch2.xhtml")
+    }
+
     func testRejectedFilesNeverAppearAfterRestart() async throws {
         let library = try LibraryStore(root: root)
         for url in [fixture("corrupted"), fixture("fixed-layout"), fixture("missing-chapter"), fixture("unsupported", extension: "txt")] {
