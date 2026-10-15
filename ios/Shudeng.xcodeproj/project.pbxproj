@@ -10,6 +10,24 @@
 	<string>46</string>
 	<key>objects</key>
 	<dict>
+		<key>0000000000000000000001F8</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>NotesController.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>0000000000000000000001F9</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>0000000000000000000001F8</string>
+		</dict>
 		<key>0000000000000000000001F4</key>
 		<dict>
 			<key>isa</key>
@@ -968,6 +986,7 @@
 				<string>2CFBA6EF4529AF2B90C53EB3</string>
 				<string>0000000000000000000001F5</string>
 				<string>0000000000000000000001F7</string>
+				<string>0000000000000000000001F9</string>
 			</array>
 			<key>isa</key>
 			<string>PBXSourcesBuildPhase</string>
@@ -1017,6 +1036,7 @@
 				<string>A7317CF3611042FFC7352C26</string>
 				<string>0000000000000000000001F4</string>
 				<string>0000000000000000000001F6</string>
+				<string>0000000000000000000001F8</string>
 			</array>
 			<key>isa</key>
 			<string>PBXGroup</string>

@@ -28,14 +28,17 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private var curlSize = CGSize.zero
     private var leaving = false
     private var changingBounds = false
+    private var openingTarget: Locator?
+    private var highlightedIDs: [UUID] = []
 
-    init(book: Book, publication: Publication, library: LibraryStore) throws {
+    init(book: Book, publication: Publication, library: LibraryStore, target: Locator? = nil) throws {
         self.book = book
         self.library = library
         self.publication = publication
+        openingTarget = target
         settings = book.readingSettings ?? ReadingSettings()
         navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: library.location(for: book.id),
-                                                   config: .init(preferences: Self.preferences(settings)))
+                                                   config: Self.configuration(settings))
         super.init(nibName: nil, bundle: nil)
         navigator.delegate = self
     }
@@ -43,6 +46,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private static func preferences(_ settings: ReadingSettings) -> EPUBPreferences {
         EPUBPreferences(fontSize: Double(settings.fontSize) / 100, publisherStyles: false,
                         scroll: settings.scroll && settings.pageCurl != true, theme: settings.dark ? .dark : .light)
+    }
+    private static func configuration(_ settings: ReadingSettings) -> EPUBNavigatorViewController.Configuration {
+        .init(preferences: preferences(settings), editingActions: [
+            EditingAction(title: "高亮", action: #selector(highlightSelection)),
+            EditingAction(title: "写笔记", action: #selector(noteSelection))
+        ] + EditingAction.defaultActions)
     }
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -112,6 +121,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     deinit { NotificationCenter.default.removeObserver(self) }
     private func attachNavigator() {
+        applyHighlights()
+        navigator.observeDecorationInteractions(inGroup: "notes") { [weak self] event in
+            guard let self, !self.loading, !self.curlBusy, !self.navigating,
+                  let note = self.library.books.first(where: { $0.id == self.book.id })?.notes?.first(where: { $0.id.uuidString == event.decoration.id }) else { return }
+            self.edit(note)
+        }
         addChild(navigator)
         navigator.view.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(navigator.view)
@@ -160,7 +175,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 // changes. Save only its settled location with the new preferences.
                 let next = try EPUBNavigatorViewController(publication: publication,
                     initialLocation: location,
-                    config: .init(preferences: Self.preferences(changed)))
+                    config: Self.configuration(changed))
                 loading = true
                 configure.isEnabled = false
                 setRetryVisible(false)
@@ -240,6 +255,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
         guard !leaving, !changingBounds, navigator === self.navigator, !loadFailed, !navigating, !navigationFailed else { return }
+        if let target = openingTarget {
+            openingTarget = nil
+            loading = false
+            navigate(to: target)
+            return
+        }
         if let curl {
             if curl.locationChanged(locator) { return }
             stopCurl()
@@ -293,7 +314,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             navigator.removeFromParent()
             do {
                 navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: pendingLocation,
-                    config: .init(preferences: Self.preferences(settings)))
+                    config: Self.configuration(settings))
                 navigator.delegate = self
                 attachNavigator()
             } catch { showError() }
@@ -410,6 +431,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         navigator.nativePaginationEnabled = false
         curlSize = content.bounds.size
         let controller = ReaderCurlController(reader: navigator, publication: publication, host: content, parent: self,
+            highlightsReady: { [weak self] in await self?.highlightsReady() ?? false },
             busy: { [weak self] in
                 guard let self else { return }
                 self.curlBusy = true
@@ -477,6 +499,139 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             changeSettings(settings, force: true)
         }
     }
+
+    private var notes: [BookNote] { library.books.first { $0.id == book.id }?.notes ?? [] }
+
+    private func applyHighlights() {
+        highlightedIDs = notes.map(\.id)
+        navigator.apply(decorations: notes.compactMap { note in
+            guard let locator = try? note.location() else { return nil }
+            return Decoration(id: note.id.uuidString, locator: locator, style: .highlight(tint: .systemYellow))
+        }, in: "notes")
+    }
+    // Readium applies decorations asynchronously. Verify actual ranges before
+    // capturing a curl snapshot, including newly loaded neighboring resources.
+    private func highlightsReady() async -> Bool {
+        let reader = navigator
+        guard let href = reader.currentLocation?.href.removingFragment() else { return false }
+        let expected = notes.filter { (try? $0.location().href.removingFragment()) == href }.map { $0.id.uuidString }
+        guard !expected.isEmpty else { return true }
+        let ids = String(data: try! JSONEncoder().encode(expected), encoding: .utf8)!
+        let script = """
+        (() => {
+          const items = readium.getDecorations('notes').items;
+          return \(ids).every(id => {
+            const item = items.find(i => i.decoration.id === id);
+            if (!item || !item.container || !item.container.childElementCount) return false;
+            const loc = item.decoration.locator, root = document.querySelector(loc.locations.cssSelector);
+            if (!root || item.range.toString() !== loc.text.highlight) return false;
+            const prefix = document.createRange(); prefix.selectNodeContents(root);
+            prefix.setEnd(item.range.startContainer, item.range.startOffset);
+            return prefix.toString() === loc.text.before;
+          });
+        })()
+        """
+        for _ in 0..<60 {
+            guard !leaving, navigator === reader, !Task.isCancelled else { return false }
+            if case let .success(ready as Bool) = await reader.evaluateJavaScript(script), ready { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+    private func refreshHighlights() {
+        guard highlightedIDs != notes.map(\.id) else { return }
+        let wasCurl = curl != nil
+        stopCurl() // Discard every neighbor snapshot on annotation changes.
+        applyHighlights()
+        Task {
+            guard await highlightsReady() else {
+                status.text = "高亮未能显示，请返回书架后重试；已保存记录仍在笔记中"
+                status.textColor = .systemRed
+                return
+            }
+            if wasCurl { startCurl() }
+        }
+    }
+    private func edit(_ note: BookNote) {
+        navigator.clearSelection()
+        let editor = NoteEditorController(library: library, bookID: book.id, note: note,
+            changed: { [weak self] in self?.refreshHighlights() })
+        let sheet = UINavigationController(rootViewController: editor)
+        sheet.overrideUserInterfaceStyle = overrideUserInterfaceStyle
+        sheet.modalPresentationStyle = .fullScreen
+        present(sheet, animated: true)
+    }
+    @objc private func highlightSelection() { captureSelection(writeNote: false) }
+    @objc private func noteSelection() { captureSelection(writeNote: true) }
+    private func captureSelection(writeNote: Bool) {
+        guard !loading, !curlBusy, !navigating, let selection = navigator.currentSelection else { return }
+        Task {
+            do {
+                guard case let .success(anchor as [String: Any]) = await navigator.evaluateJavaScript(Self.selectionAnchor),
+                      let selector = anchor["selector"] as? String,
+                      let highlight = anchor["highlight"] as? String, !highlight.isEmpty,
+                      let range = anchor["domRange"] as? [String: Any] else { throw LibraryError.invalidLocation }
+                var locator = selection.locator
+                locator.locations.cssSelector = selector
+                locator.locations.otherLocations["domRange"] = try JSONValue(jsonString: String(data: JSONSerialization.data(withJSONObject: range), encoding: .utf8)!, warnings: nil)
+                locator.text = Locator.Text(after: anchor["after"] as? String, before: anchor["before"] as? String, highlight: highlight)
+                let candidates = notes + (library.books.first { $0.id == book.id }?.noteDrafts ?? [])
+                let existing = candidates.first { note in
+                    guard let saved = try? note.location() else { return false }
+                    return saved.href == locator.href && saved.locations.domRange == locator.locations.domRange && saved.text == locator.text
+                }
+                let note = existing ?? BookNote(locator: locator)
+                #if DEBUG
+                NSLog("SHUDENG_NOTE selection id=%@ locator=%@", note.id.uuidString, locator.description)
+                #endif
+                if writeNote { edit(note) }
+                else { saveHighlight(note) }
+            } catch {
+                let alert = UIAlertController(title: "无法保存选文", message: "未能确认原文选区，请重新选择。", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "知道了", style: .default))
+                present(alert, animated: true)
+            }
+        }
+    }
+    private func saveHighlight(_ note: BookNote) {
+        do {
+            try library.saveNote(note, for: book.id, highlightOnly: true)
+            navigator.clearSelection()
+            refreshHighlights()
+        } catch {
+            let alert = UIAlertController(title: "高亮保存失败", message: "尚未保存；重试仍使用同一条记录。", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "重试保存高亮", style: .default) { [weak self] _ in self?.saveHighlight(note) })
+            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+            present(alert, animated: true)
+        }
+    }
+    private static let selectionAnchor = """
+    (() => {
+      const selection = getSelection();
+      if (!selection.rangeCount || selection.isCollapsed) return null;
+      const range = selection.getRangeAt(0);
+      const root = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+      function selector(el) {
+        const path = [];
+        for (; el; el = el.parentElement) {
+          if (el.id) { path.unshift('#' + CSS.escape(el.id)); break; }
+          let index = 1;
+          for (let sib = el.previousElementSibling; sib; sib = sib.previousElementSibling)
+            if (sib.localName === el.localName) index++;
+          path.unshift(el.localName + ':nth-of-type(' + index + ')');
+        }
+        return path.join(' > ');
+      }
+      function point(node, offset) {
+        if (node.nodeType === Node.TEXT_NODE) return { cssSelector: selector(node.parentElement), textNodeIndex: Array.from(node.parentElement.childNodes).indexOf(node), charOffset: offset };
+        return { cssSelector: selector(node), textNodeIndex: offset };
+      }
+      const before = document.createRange(); before.selectNodeContents(root); before.setEnd(range.startContainer, range.startOffset);
+      const after = document.createRange(); after.selectNodeContents(root); after.setStart(range.endContainer, range.endOffset);
+      return { selector: selector(root), highlight: range.toString(), before: before.toString(), after: after.toString(),
+        domRange: { start: point(range.startContainer, range.startOffset), end: point(range.endContainer, range.endOffset) } };
+    })()
+    """
 
     private static func targetIsVisible(_ locator: Locator) -> String {
         // Verify the exact occurrence inside its original element. A matching
@@ -761,6 +916,7 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
     private let reader: EPUBNavigatorViewController
     private let publication: Publication
     private unowned let host: UIView
+    private let highlightsReady: () async -> Bool
     private unowned let readerParent: UIViewController
     private let busy: () -> Void
     private let settled: (Locator, Bool) -> Void
@@ -780,8 +936,10 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
     private var task: Task<Void, Never>?
 
     init(reader: EPUBNavigatorViewController, publication: Publication, host: UIView, parent: UIViewController,
+         highlightsReady: @escaping () async -> Bool,
          busy: @escaping () -> Void, settled: @escaping (Locator, Bool) -> Void, failed: @escaping () -> Void) {
         self.reader = reader; self.publication = publication; self.host = host; readerParent = parent
+        self.highlightsReady = highlightsReady
         self.busy = busy; self.settled = settled; self.failed = failed
         super.init(nibName: nil, bundle: nil)
     }
@@ -852,7 +1010,8 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
         guard let id, let page = cache[id] else { return nil }
         return CurlPage(locator: page.locator, image: page.image)
     }
-    private func capture(_ locator: Locator) async -> Page {
+    private func capture(_ locator: Locator) async throws -> Page {
+        guard await highlightsReady(), active else { throw MoveError.failed }
         let first = await reader.firstVisibleElementLocator()
         var reflowLocation = locator
         if case let .success(anchor as [String: String]) = await reader.evaluateJavaScript(ReaderController.visibleTextAnchor) {
@@ -948,7 +1107,7 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
         do {
             var record: Page
             if let existing = cache[key(original)] { record = existing }
-            else { record = await capture(original) }
+            else { record = try await capture(original) }
             guard active else { return }
             userLocation = record.reflowLocation
             let page = CurlPage(locator: original, image: record.image)
@@ -959,7 +1118,7 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
             following = controller(record.following); previous = controller(record.previous)
             if !record.nextKnown || (record.following != nil && following == nil) {
                 if let location = try await move(direction: 1) {
-                    var neighbor = await capture(location)
+                    var neighbor = try await capture(location)
                     neighbor.previous = key(original); neighbor.previousKnown = true
                     store(neighbor); record.following = key(location); following = controller(record.following)
                     _ = try await move(to: original)
@@ -968,7 +1127,7 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
             }
             if !record.previousKnown || (record.previous != nil && previous == nil) {
                 if let location = try await move(direction: -1) {
-                    var neighbor = await capture(location)
+                    var neighbor = try await capture(location)
                     neighbor.following = key(original); neighbor.nextKnown = true
                     store(neighbor); record.previous = key(location); previous = controller(record.previous)
                     _ = try await move(to: original)

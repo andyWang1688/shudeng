@@ -851,3 +851,324 @@ final class ReadingUITests: XCTestCase {
         XCTFail("Storage was not restored during the fault exercise")
     }
 }
+
+extension ReadingUITests {
+    private func noteMenu(_ title: String, in app: XCUIApplication) {
+        let button = app.buttons[title]
+        let item = app.menuItems[title]
+        XCTAssertTrue(button.waitForExistence(timeout: 3) || item.waitForExistence(timeout: 2))
+        evidence("note-native-selection-" + title, app)
+        if button.exists { button.tap() } else { item.tap() }
+    }
+    private func selectForNote(_ app: XCUIApplication, action: String) {
+        app.webViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).press(forDuration: 1.3)
+        noteMenu(action, in: app)
+    }
+    private func noteRow(_ text: String, in app: XCUIApplication) -> XCUIElement {
+        app.tables["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+    }
+    private func replaceNoteBody(_ text: String, in app: XCUIApplication) {
+        let body = app.textViews["note-body"]
+        body.tap()
+        // Select only the personal text view; never the quoted original.
+        if !(body.value as? String ?? "").isEmpty {
+            body.press(forDuration: 1.1)
+            let all = app.buttons.matching(NSPredicate(format: "label IN %@", ["全选", "Select All"])).firstMatch
+            let menu = app.menuItems.matching(NSPredicate(format: "label IN %@", ["全选", "Select All"])).firstMatch
+            if all.waitForExistence(timeout: 2) { all.tap() }
+            else if menu.exists { menu.tap() }
+            else {
+                body.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (body.value as? String ?? "").count))
+            }
+        }
+        body.typeText(text)
+    }
+    func testNotesNativeSelectionDraftEditReturnAndThreeModes() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tables["library"].cells[navigationBookID].tap()
+        waitForBody(app)
+        settings(app, mode: "分页", dark: false, font: 100)
+        contents("第1章末", in: app)
+        waitForBody(app)
+        app.webViews.staticTexts["C1-P30"].firstMatch.press(forDuration: 1.3)
+        noteMenu("写笔记", in: app)
+        XCTAssertTrue(app.textViews["note-quote"].waitForExistence(timeout: 5))
+        XCTAssertFalse((app.textViews["note-quote"].value as? String ?? "").isEmpty)
+        replaceNoteBody("N6-end-v1", in: app)
+        app.buttons["保存笔记"].tap()
+        waitForBody(app)
+        evidence("note-highlight-chapter-end", app)
+        app.buttons["书架"].tap()
+        app.tabBars.buttons["笔记"].tap()
+        let row = noteRow("N6-end-v1", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        let id = row.identifier
+        row.tap()
+        replaceNoteBody("D6-end-recover", in: app)
+        app.buttons["保存草稿"].tap()
+        XCTAssertTrue(app.staticTexts["草稿已保存，可继续编辑"].waitForExistence(timeout: 5))
+        evidence("note-existing-draft-committed-before-interruption", app)
+        XCUIDevice.shared.press(.home)
+        app.terminate(); app.launch()
+        app.tabBars.buttons["笔记"].tap()
+        let draft = app.tables["notes"].cells[id]
+        XCTAssertTrue(draft.waitForExistence(timeout: 5))
+        draft.tap()
+        XCTAssertEqual(app.textViews["note-body"].value as? String, "D6-end-recover")
+        evidence("note-draft-recovered-after-restart", app)
+        replaceNoteBody("N6-end-v2", in: app)
+        app.buttons["保存笔记"].tap()
+        XCTAssertTrue(app.tables["notes"].cells[id].waitForExistence(timeout: 5))
+        app.tables["notes"].cells[id].tap()
+        app.buttons["返回原文"].tap()
+        waitForBody(app)
+        evidence("note-return-chapter-end", app)
+        for mode in ["滚动", "仿真", "分页"] {
+            settings(app, mode: mode, dark: true, font: 200)
+            contents(mode == "仿真" ? "第3章" : "第2章", in: app)
+            waitForBody(app)
+            selectForNote(app, action: "高亮")
+            waitForBody(app)
+            evidence("note-highlight-" + mode, app)
+            if mode == "仿真" {
+                for cycle in 1...2 {
+                    curlTurn(app, forward: true)
+                    curlTurn(app, forward: false)
+                    evidence("note-cache-rebuilt-cycle-\(cycle)", app)
+                }
+            }
+        }
+        app.buttons["书架"].tap()
+        app.tabBars.buttons["笔记"].tap()
+        app.tables["notes"].cells[id].tap()
+        app.buttons["返回原文"].tap()
+        waitForBody(app)
+        evidence("note-return-after-reflow", app)
+        app.terminate(); app.launch()
+        app.tabBars.buttons["笔记"].tap()
+        XCTAssertTrue(app.tables["notes"].cells[id].waitForExistence(timeout: 5))
+        app.tables["notes"].cells[id].tap()
+        XCTAssertEqual(app.textViews["note-body"].value as? String, "N6-end-v2")
+        evidence("note-final-restart-same-id-and-body", app)
+        app.buttons["关闭"].tap()
+    }
+}
+
+extension ReadingUITests {
+    func testNotesRepeatedOccurrenceSelectionAndDraftRecovery() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tables["library"].cells[navigationBookID].tap()
+        waitForBody(app)
+        settings(app, mode: "滚动", dark: false, font: 100)
+        contents("第2章", in: app)
+        waitForBody(app)
+        let marker = app.webViews.staticTexts["C2-P20"].firstMatch
+        for _ in 0..<24 where !visibleMarkers(app).contains("C2-P20") { app.webViews.firstMatch.swipeUp() }
+        XCTAssertTrue(visibleMarkers(app).contains("C2-P20"))
+        print("N6_REPEAT marker=\(marker.frame) body=\(app.webViews.firstMatch.frame)")
+        print(app.webViews.firstMatch.debugDescription)
+        evidence("repeat-p20-before-native-selection", app)
+        // The second English occurrence is in the same paragraph after its
+        // first Chinese/English pair. Only native touches create the selection.
+        marker.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0)).withOffset(CGVector(dx: 150, dy: 105)).press(forDuration: 1.3)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: 20, dy: marker.frame.minY + 94)).press(forDuration: 0.1,
+            thenDragTo: origin.withOffset(CGVector(dx: 349, dy: marker.frame.minY + 55)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        noteMenu("写笔记", in: app)
+        XCTAssertEqual(app.textViews["note-quote"].value as? String, "The same sentence can belong to a different argument.")
+        replaceNoteBody("D6-R1-new-draft", in: app)
+        app.buttons["保存草稿"].tap()
+        XCTAssertTrue(app.staticTexts["草稿已保存，可继续编辑"].waitForExistence(timeout: 5))
+        evidence("repeat-new-draft-before-interruption", app)
+        app.terminate(); app.launch()
+        app.tabBars.buttons["笔记"].tap()
+        let row = noteRow("D6-R1-new-draft", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        let id = row.identifier
+        row.tap()
+        XCTAssertEqual(app.textViews["note-body"].value as? String, "D6-R1-new-draft")
+        evidence("repeat-new-draft-restored", app)
+        replaceNoteBody("N6-R1-v1", in: app)
+        app.buttons["保存笔记"].tap()
+        app.tables["notes"].cells[id].tap()
+        replaceNoteBody("D6-R1-v2-survives-rehighlight", in: app)
+        app.buttons["保存草稿"].tap()
+        app.buttons["返回原文"].tap()
+        waitForBody(app)
+        evidence("repeat-return-exact-occurrence", app)
+        print("N6_REPEAT_RETURN \(app.webViews.firstMatch.debugDescription)")
+        app.buttons["书架"].tap()
+        app.tabBars.buttons["笔记"].tap()
+        XCTAssertTrue(app.tables["notes"].cells[id].exists)
+        app.tables["notes"].cells[id].tap()
+        XCTAssertEqual(app.textViews["note-body"].value as? String, "D6-R1-v2-survives-rehighlight")
+        evidence("repeat-draft-retained-after-return", app)
+        app.buttons["关闭"].tap()
+    }
+}
+
+extension ReadingUITests {
+    func testNoteHighlightRealWriteFailureAndRetry() throws {
+        guard ProcessInfo.processInfo.environment["SHUDENG_NOTE_FAULT"] == "1" else { throw XCTSkip("Run with scripts/verify-note-failure.sh") }
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tables["library"].cells[bookID].tap()
+        waitForBody(app)
+        settings(app, mode: "分页", dark: false, font: 100)
+        contents("第2章", in: app)
+        waitForBody(app)
+        print("N6_INJECT_HIGHLIGHT_FAULT")
+        Thread.sleep(forTimeInterval: 3)
+        selectForNote(app, action: "高亮")
+        XCTAssertTrue(app.alerts["高亮保存失败"].waitForExistence(timeout: 5))
+        evidence("note-real-highlight-write-failure", app)
+        print("N6_RESTORE_HIGHLIGHT_FAULT")
+        Thread.sleep(forTimeInterval: 3)
+        app.alerts.buttons["重试保存高亮"].tap()
+        XCTAssertFalse(app.alerts["高亮保存失败"].exists)
+        evidence("note-highlight-retry-succeeded", app)
+    }
+
+    func testNoteEditRealWriteFailureAndRetry() throws {
+        guard ProcessInfo.processInfo.environment["SHUDENG_NOTE_FAULT"] == "1" else { throw XCTSkip("Run with scripts/verify-note-failure.sh") }
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tabBars.buttons["笔记"].tap()
+        let row = noteRow("N6-end-v2", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        let id = row.identifier
+        row.tap()
+        replaceNoteBody("D6-fault-durable", in: app)
+        app.buttons["保存草稿"].tap()
+        XCTAssertTrue(app.staticTexts["草稿已保存，可继续编辑"].waitForExistence(timeout: 5))
+        print("N6_INJECT_EDIT_FAULT")
+        Thread.sleep(forTimeInterval: 3)
+        replaceNoteBody("N6-fault-v2", in: app)
+        app.buttons["保存笔记"].tap()
+        XCTAssertTrue(app.staticTexts["笔记保存失败，内容仍在此页；请重试保存笔记"].waitForExistence(timeout: 5))
+        evidence("note-real-edit-write-failure", app)
+        app.buttons["关闭"].tap()
+        XCTAssertTrue(app.textViews["note-body"].exists)
+        XCTAssertTrue(app.staticTexts["草稿保存失败，内容仍在此页；请重试保存草稿"].exists)
+        evidence("note-failed-draft-prevents-close", app)
+        print("N6_RESTORE_EDIT_FAULT")
+        Thread.sleep(forTimeInterval: 3)
+        app.buttons["保存笔记"].tap()
+        XCTAssertTrue(app.tables["notes"].cells[id].waitForExistence(timeout: 5))
+        app.terminate(); app.launch()
+        app.tabBars.buttons["笔记"].tap()
+        app.tables["notes"].cells[id].tap()
+        XCTAssertEqual(app.textViews["note-body"].value as? String, "N6-fault-v2")
+        evidence("note-real-write-retry-restart-same-id", app)
+        app.buttons["关闭"].tap()
+    }
+}
+
+extension ReadingUITests {
+    func testNoteExactChapterEndAndNewCurlHighlightCache() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tables["library"].cells[navigationBookID].tap()
+        waitForBody(app)
+        settings(app, mode: "分页", dark: false, font: 100)
+        contents("第1章末", in: app)
+        waitForBody(app)
+        let marker = app.webViews.staticTexts["C1-P30"].firstMatch
+        XCTAssertTrue(app.webViews.firstMatch.frame.intersects(marker.frame))
+        marker.press(forDuration: 1.3)
+        noteMenu("写笔记", in: app)
+        replaceNoteBody("N6-exact-P30", in: app)
+        evidence("note-exact-P30-editor", app)
+        app.buttons["保存笔记"].tap()
+        app.buttons["书架"].tap()
+        app.tabBars.buttons["笔记"].tap()
+        let row = noteRow("N6-exact-P30", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        let id = row.identifier
+        row.tap(); app.buttons["返回原文"].tap()
+        waitForBody(app)
+        evidence("note-exact-P30-return", app)
+        settings(app, mode: "仿真", dark: true, font: 200)
+        evidence("note-exact-P30-curl-200-dark", app)
+        contents("第3章", in: app)
+        waitForBody(app)
+        selectForNote(app, action: "高亮")
+        waitForBody(app)
+        evidence("note-new-chapter3-curl-highlight", app)
+        for cycle in 1...2 {
+            curlTurn(app, forward: true)
+            curlTurn(app, forward: false)
+            evidence("note-new-chapter3-cache-round-\(cycle)", app)
+        }
+        app.buttons["书架"].tap()
+        app.tabBars.buttons["笔记"].tap()
+        app.tables["notes"].cells[id].tap(); app.buttons["返回原文"].tap()
+        waitForBody(app)
+        evidence("note-exact-P30-after-cross-chapter-curl", app)
+        settings(app, mode: "滚动", dark: true, font: 200)
+        evidence("note-exact-P30-scroll-200-dark", app)
+        app.terminate(); app.launch()
+        app.tabBars.buttons["笔记"].tap()
+        app.tables["notes"].cells[id].tap(); app.buttons["返回原文"].tap()
+        waitForBody(app)
+        evidence("note-exact-P30-restart", app)
+    }
+
+    func testNoteRepeatedParagraphAndChapterIdentity() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        for (chapter, paragraph, name) in [(2, 10, "N6-R2"), (3, 20, "N6-R3")] {
+            app.tables["library"].cells[navigationBookID].tap()
+            waitForBody(app)
+            settings(app, mode: "滚动", dark: false, font: 100)
+            contents("第\(chapter)章", in: app)
+            waitForBody(app)
+            let text = String(format: "C%d-P%02d", chapter, paragraph)
+            for _ in 0..<24 where !visibleMarkers(app).contains(text) { app.webViews.firstMatch.swipeUp() }
+            let marker = app.webViews.staticTexts[text].firstMatch
+            XCTAssertTrue(visibleMarkers(app).contains(text))
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 170, dy: marker.frame.minY + 105)).press(forDuration: 1.3)
+            noteMenu("写笔记", in: app)
+            XCTAssertEqual(app.textViews["note-quote"].value as? String, "argument.")
+            replaceNoteBody(name, in: app)
+            app.buttons["保存笔记"].tap()
+            contents("第1章", in: app)
+            waitForBody(app)
+            app.buttons["书架"].tap(); app.tabBars.buttons["笔记"].tap()
+            noteRow(name, in: app).tap(); app.buttons["返回原文"].tap()
+            waitForBody(app)
+            evidence(name + "-return-after-leaving-chapter", app)
+            app.buttons["书架"].tap(); app.tabBars.buttons["书架"].tap()
+        }
+    }
+
+    func testNoteSmallScreenLargeTextKeyboardAndReturn() throws {
+        guard ProcessInfo.processInfo.environment["SHUDENG_SMALL_SCREEN"] == "1" else { throw XCTSkip("Small screen only") }
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        // Arrange the real P30 record from the main simulator, preserving a
+        // backup of this simulator's original catalog; no application hooks.
+        app.tabBars.buttons["笔记"].tap()
+        noteRow("N6-exact-P30", in: app).tap()
+        replaceNoteBody("N6-small-keyboard", in: app)
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        evidence("note-small-keyboard-large-text", app)
+        app.buttons["保存草稿"].tap()
+        XCTAssertTrue(app.staticTexts["草稿已保存，可继续编辑"].waitForExistence(timeout: 5))
+        app.buttons["保存笔记"].tap()
+        app.buttons["书架"].tap(); app.tabBars.buttons["笔记"].tap()
+        noteRow("N6-small-keyboard", in: app).tap()
+        app.buttons["返回原文"].tap()
+        waitForBody(app)
+        evidence("note-small-return", app)
+    }
+}

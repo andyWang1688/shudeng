@@ -18,6 +18,28 @@ struct Book: Codable, Identifiable {
     var locatorJSON: String?
     var readingSettings: ReadingSettings?
     var bookmarks: [Bookmark]?
+    var notes: [BookNote]?
+    var noteDrafts: [BookNote]?
+}
+
+struct BookNote: Codable, Identifiable {
+    let id: UUID
+    let locatorJSON: String
+    var body: String
+
+    init(locator: Locator, body: String = "") {
+        id = UUID()
+        locatorJSON = locator.description
+        self.body = body
+    }
+
+    func location() throws -> Locator {
+        guard let locator = try Locator(json: JSONValue(jsonString: locatorJSON, warnings: nil), warnings: nil) else {
+            throw LibraryError.invalidLocation
+        }
+        return locator
+    }
+    var quote: String { (try? location().text.highlight) ?? "" }
 }
 
 struct Bookmark: Codable, Identifiable {
@@ -169,6 +191,33 @@ final class LibraryStore {
         let data = try JSONEncoder().encode(updated)
         try data.write(to: catalog, options: .atomic)
         books = updated // Publish success only after the atomic rename succeeds.
+    }
+
+    func saveNote(_ note: BookNote, for id: String, draft: Bool = false, highlightOnly: Bool = false) throws {
+        guard let index = books.firstIndex(where: { $0.id == id }) else { throw LibraryError.missing }
+        // Re-highlighting an existing record is not a submission of its body.
+        // In particular it must never consume a newer saved editing draft.
+        if highlightOnly, books[index].notes?.contains(where: { $0.id == note.id }) == true { return }
+        let locator = try note.location()
+        guard locator.locations.domRange != nil, !(locator.text.highlight ?? "").isEmpty else { throw LibraryError.invalidLocation }
+        var updated = books
+        if draft {
+            var drafts = updated[index].noteDrafts ?? []
+            if let existing = drafts.firstIndex(where: { $0.id == note.id }) { drafts[existing] = note }
+            else { drafts.append(note) }
+            updated[index].noteDrafts = drafts
+        } else {
+            var notes = updated[index].notes ?? []
+            if let existing = notes.firstIndex(where: { $0.id == note.id }) { notes[existing] = note }
+            else {
+                var added = note
+                if highlightOnly { added.body = "" }
+                notes.append(added)
+            }
+            updated[index].notes = notes
+            if !highlightOnly { updated[index].noteDrafts = (updated[index].noteDrafts ?? []).filter { $0.id != note.id } }
+        }
+        do { try commit(updated) } catch { throw LibraryError.save }
     }
 
     private func validatedPublication(at url: URL) async throws -> Publication {

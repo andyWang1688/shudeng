@@ -146,3 +146,58 @@ extension LibraryTests {
         XCTAssertEqual(library.books.count, 1)
     }
 }
+
+extension LibraryTests {
+    func testNotesDraftsAtomicFailureRetryAndBookIsolation() async throws {
+        let library = try LibraryStore(root: root)
+        let a = try await library.importBook(from: fixture("navigation-fixture")).book
+        let b = try await library.importBook(from: fixture()).book
+        func selected(_ offset: Int) throws -> Locator {
+            try XCTUnwrap(Locator(json: JSONValue(jsonString: """
+            {"href":"OEBPS/ch2.xhtml","type":"application/xhtml+xml","locations":{"cssSelector":"#c2-p20","domRange":{"start":{"cssSelector":"#c2-p20","textNodeIndex":1,"charOffset":\(offset)},"end":{"cssSelector":"#c2-p20","textNodeIndex":1,"charOffset":\(offset + 4)}}},"text":{"before":"\(offset)","highlight":"same","after":"end"}}
+            """, warnings: nil), warnings: nil))
+        }
+        var note = BookNote(locator: try selected(100), body: "v1")
+        let secondOccurrence = BookNote(locator: try selected(200), body: "second occurrence")
+        try library.saveNote(note, for: a.id)
+        try library.saveNote(secondOccurrence, for: a.id)
+        let otherBook = BookNote(locator: try selected(100), body: "other book")
+        try library.saveNote(otherBook, for: b.id)
+        note.body = "draft"
+        try library.saveNote(note, for: a.id, draft: true)
+        let before = try LibraryStore(root: root)
+        XCTAssertEqual(before.books.first { $0.id == a.id }?.notes?.first?.body, "v1")
+        XCTAssertEqual(before.books.first { $0.id == a.id }?.noteDrafts?.first?.body, "draft")
+        let staleCommitted = try XCTUnwrap(before.books.first { $0.id == a.id }?.notes?.first)
+        try library.saveNote(staleCommitted, for: a.id, highlightOnly: true)
+        let repeated = try LibraryStore(root: root)
+        XCTAssertEqual(repeated.books.first { $0.id == a.id }?.notes?.first?.body, "v1")
+        XCTAssertEqual(repeated.books.first { $0.id == a.id }?.noteDrafts?.first?.body, "draft")
+        let catalog = root.appendingPathComponent("library.json"), backup = root.appendingPathComponent("baseline.json")
+        try FileManager.default.moveItem(at: catalog, to: backup)
+        try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: false)
+        defer {
+            try? FileManager.default.removeItem(at: catalog)
+            try? FileManager.default.moveItem(at: backup, to: catalog)
+        }
+        note.body = "v2"
+        XCTAssertThrowsError(try library.saveNote(note, for: a.id))
+        XCTAssertThrowsError(try library.saveNote(BookNote(locator: selected(300)), for: a.id))
+        XCTAssertThrowsError(try library.saveNote(note, for: a.id, draft: true))
+        XCTAssertEqual(library.books.first { $0.id == a.id }?.notes?.first?.body, "v1")
+        XCTAssertEqual(library.books.first { $0.id == a.id }?.noteDrafts?.first?.body, "draft")
+        try FileManager.default.removeItem(at: catalog)
+        try FileManager.default.moveItem(at: backup, to: catalog)
+        try library.saveNote(note, for: a.id)
+        try library.saveNote(note, for: a.id)
+        let after = try LibraryStore(root: root)
+        let saved = try XCTUnwrap(after.books.first { $0.id == a.id })
+        XCTAssertEqual(saved.notes?.map(\.id), [note.id, secondOccurrence.id])
+        XCTAssertEqual(saved.notes?.first?.body, "v2")
+        XCTAssertTrue(saved.noteDrafts?.isEmpty == true)
+        XCTAssertEqual(saved.notes?.first?.locatorJSON, note.locatorJSON)
+        XCTAssertNotEqual(try saved.notes?[0].location().locations.domRange, try saved.notes?[1].location().locations.domRange)
+        XCTAssertEqual(after.books.first { $0.id == b.id }?.notes?.map(\.body), ["other book"])
+        XCTAssertNil(saved.locatorJSON) // Notes never replace daily reading progress.
+    }
+}
