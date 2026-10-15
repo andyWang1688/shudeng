@@ -9,8 +9,6 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private let navigator: EPUBNavigatorViewController
     private let status = UILabel()
     private let retry = UIButton(type: .system)
-    private var captureTask: Task<Void, Never>?
-    private var generation = 0
     private var pendingLocation: Locator?
     private var saveFailed = false
 
@@ -67,24 +65,13 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         navigator.didMove(toParent: self)
         NotificationCenter.default.addObserver(self, selector: #selector(background), name: UIApplication.willResignActiveNotification, object: nil)
     }
-    deinit { captureTask?.cancel(); NotificationCenter.default.removeObserver(self) }
+    deinit { NotificationCenter.default.removeObserver(self) }
 
     func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
-        generation += 1
-        let currentGeneration = generation
         pendingLocation = locator
-        // Commit the navigator's real resource/progression immediately, then enrich
-        // it with the visible element anchor once WebKit has settled. Never let a
-        // delayed capture from an earlier page overwrite a newer location.
+        // Preserve Readium's current resource/progression. A first-visible-element
+        // selector may start on the preceding page when a paragraph spans pages.
         persistPending()
-        captureTask?.cancel()
-        captureTask = Task { [weak self] in
-            guard let self else { return }
-            let anchored = await self.navigator.firstVisibleElementLocator()
-            guard !Task.isCancelled, currentGeneration == self.generation, let anchored else { return }
-            self.pendingLocation = anchored
-            self.persistPending()
-        }
     }
     private func persistPending() {
         guard let pendingLocation else { return }

@@ -1,6 +1,7 @@
 import XCTest
 
 final class ReadingUITests: XCTestCase {
+    private let bookID = "book-a08282a3fd59d6398d4173469b0159c51c5b980afaa1aa3024cfd05a43b14a27"
     private func choose(_ name: String, in app: XCUIApplication) {
         app.buttons["导入"].tap()
         let file = app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", name + ",")).firstMatch
@@ -33,7 +34,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(app.alerts["书籍已在书架"].exists)
         app.alerts.buttons["知道了"].tap()
         XCTAssertEqual(app.tables["library"].cells.count, count)
-        app.tables["library"].cells.firstMatch.tap()
+        app.tables["library"].cells[bookID].tap()
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 15))
         let before = visibleMarker(app)
         for _ in 0..<3 { app.swipeLeft() }
@@ -47,7 +48,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].exists)
         app.terminate()
         app.launch()
-        app.tables["library"].cells.firstMatch.tap()
+        app.tables["library"].cells[bookID].tap()
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 15))
         XCTAssertEqual(visibleMarker(app), marker)
         evidence("restored-" + marker, app)
@@ -65,5 +66,27 @@ final class ReadingUITests: XCTestCase {
             app.alerts.buttons["知道了"].tap()
             XCTAssertEqual(app.tables["library"].cells.count, count)
         }
+    }
+    func testStorageFailureAndRetry() throws {
+        guard ProcessInfo.processInfo.environment["SHUDENG_STORAGE_FAULT"] == "1" else {
+            throw XCTSkip("Run with a real simulator filesystem fault; see delivery report.")
+        }
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tables["library"].cells[bookID].tap()
+        XCTAssertTrue(app.buttons["重试保存"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.staticTexts["阅读位置已保存"].exists)
+        evidence("storage-failure-visible", app)
+        print("RESTORE_STORAGE_NOW")
+        for _ in 0..<30 {
+            app.buttons["重试保存"].tap()
+            if app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 1) {
+                XCTAssertFalse(app.buttons["重试保存"].exists)
+                evidence("storage-retry-saved", app)
+                return
+            }
+        }
+        XCTFail("Storage was not restored during the fault exercise")
     }
 }

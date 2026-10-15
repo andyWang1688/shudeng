@@ -6,7 +6,7 @@
 - SHA-256(完整 EPUB 字节) 是书籍身份。改名但字节相同复用记录和进度；同名/同 identifier 但字节不同分别保存，不猜测内容版本关联。本票没有移除操作。
 - `Library/Application Support/Shudeng/Books/<sha256>.epub` 保留导入文件；`library.json` 保存书籍元数据和 Readium Locator JSON。原子写成功之后才更新内存并显示成功；位置失败显示持续错误与“重试保存”，保留内存中最新位置。重启只承诺最后已提交位置。
 - 导入先复制隔离文件，确认 EPUB、版式、全部 spine 文件存在/可读及 XHTML 结构，再移动文件并原子提交书架；提交失败移除本次新增文件。被中断的 staging/orphan 不进入书架，下次同文件导入可复用身份。元数据读取失败阻止进入书架，不静默清空已有记录。
-- 真实定位保存 `href`、resource progression，并补充 Readium 首个可见元素位置；采用递增代次防止较早页面异步回调覆盖较新位置。正文加载、原文匹配和 UI 错误需另外通过运行证据核实。
+- 真实定位原样保存 Readium 当前 Locator（`href`、resource progression、position），不使用屏幕页码。首个可见段落可能跨页，不能用其段落起点覆盖分页位置；本票保持字号与分页设置固定，跨字号/模式恢复由相应后续票处理。正文加载、原文匹配和 UI 错误另通过运行证据核实。
 - Readium 3.11.0 的源码与资源保存在 `Vendor/Readium`；全部网络依赖 exact 锁定并提交 Package.resolved。仅移除旧 OpenDyslexic 5 文件及注册语句、裁剪 Package 产品；本票未提前实现卷页、滚动、目录或 AI。
 - 三个未实施栏目仅提供入口及空态；网格书架/搜索/排序属于后续票，本票书架以最小列表承载导入与继续阅读。
 
