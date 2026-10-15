@@ -1,0 +1,85 @@
+{
+  "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+  "source": "https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "download_provenance": "Fixed-revision HF mirror; model and tokenizer LFS SHA independently checked against official fixed-revision Hugging Face metadata",
+  "license": "Apache-2.0",
+  "vector_space": "minilm-e8f8c211-arm64-int8-128-mean-l2-v1",
+  "dimension": 384,
+  "max_window_tokens_including_specials": 128,
+  "pooling": "mean of all unpadded token embeddings, including special tokens; L2 normalization",
+  "execution": "ONNX Runtime 1.24.2, CPU, intra-op threads=2; local app bundle only",
+  "upstream_model_path": "onnx/model_qint8_arm64.onnx",
+  "uncompressed_model": {
+    "bytes": 118412398,
+    "sha256": "783fea82d71a58179b830a4dbd2d58447e640609e98eedf9ffa12622d375a672"
+  },
+  "upstream_tokenizer_config_sha256": "5036ea374ffedd706e3bef33e2e0d6953cb868ef8a490e76e32ba0faa37a6b9b",
+  "modifications": [
+    "Lossless gzip level 6, mtime=0, no filename, OS byte=3",
+    "tokenizer_config.json: tokenizer_class PreTrainedTokenizerFast -> XLMRobertaTokenizer; pretty JSON formatting"
+  ],
+  "files": {
+    "LICENSE.txt": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "MODEL_CARD.md": {
+      "bytes": 3888,
+      "sha256": "1e98ea05b0de579fcaad3d625b62ea55647142ed674d5f5ebf1440e4bbbb6f23"
+    },
+    "NOTICE.txt": {
+      "bytes": 965,
+      "sha256": "750d70881834d129369622880b0a46d91d1e21b0ad264659c58c712b8be92b6b"
+    },
+    "model.onnx.gz": {
+      "bytes": 75546406,
+      "sha256": "e4ec66a19479ab9996124d52874e47c560b8bb6af2e07556b52e07d6419b0184"
+    },
+    "tokenizer.json": {
+      "bytes": 9081518,
+      "sha256": "2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8"
+    },
+    "tokenizer_config.json": {
+      "bytes": 581,
+      "sha256": "fdc4d08ae5071db078dee8eeb26a861f926cc27692637fa45ec7fd29753193e2"
+    }
+  },
+  "dependencies": [
+    {
+      "name": "onnxruntime-swift-package-manager",
+      "source": "https://github.com/microsoft/onnxruntime-swift-package-manager",
+      "revision": "b7fb7f7dea8a2469e6335d95a61b8f36d0dc83b2",
+      "version": "1.24.2",
+      "license": "MIT"
+    },
+    {
+      "name": "swift-collections",
+      "source": "https://github.com/apple/swift-collections.git",
+      "revision": "35a1edcb8ebd2bfe251d587f0b69e62af28f508c",
+      "version": "1.7.3",
+      "license": "Apache-2.0 with Runtime Library Exception"
+    },
+    {
+      "name": "swift-jinja",
+      "source": "https://github.com/huggingface/swift-jinja.git",
+      "revision": "4588064a20f3fc093c95f2f7d3359999bf30cae5",
+      "version": "2.5.1",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "swift-transformers",
+      "source": "https://github.com/huggingface/swift-transformers",
+      "revision": "573e5c9036c2f136b3a8a071da8e8907322403d0",
+      "version": "1.1.6",
+      "license": "Apache-2.0"
+    }
+  ],
+  "onnxruntime_binary": {
+    "source": "https://download.onnxruntime.ai/pod-archive-onnxruntime-c-1.24.2.zip",
+    "swiftpm_sha256": "f7100a992d2a8135168c8afd831e6a58b465349101982aa58b3e11d36e600b54"
+  },
+  "reproduce": "Run scripts/fetch-semantic-model.py in a virtualenv. Optional HF_ENDPOINT=https://hf-mirror.com uses the same pinned bytes. Python/zlib compression output must match the manifest before replacing resources.",
+  "notices": "../ThirdPartyNotices.txt includes model license, dependencies and ONNX Runtime v1.24.2 ThirdPartyNotices.txt",
+  "validation_boundary": "Short reference tokenizer/vector parity and fixed bilingual retrieval cases verified on iOS simulator; arbitrary Unicode tokenizer equivalence, physical iPhone performance and App Store acceptance unverified"
+}

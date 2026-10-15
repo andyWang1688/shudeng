@@ -10,6 +10,112 @@
 	<string>46</string>
 	<key>objects</key>
 	<dict>
+	<key>A10000000000000000000007</key>
+	<dict>
+		<key>fileRef</key>
+		<string>A10000000000000000000006</string>
+		<key>isa</key>
+		<string>PBXBuildFile</string>
+	</dict>
+
+	<key>A10000000000000000000006</key>
+	<dict>
+		<key>isa</key>
+		<string>PBXFileReference</string>
+		<key>lastKnownFileType</key>
+		<string>sourcecode.swift</string>
+		<key>path</key>
+		<string>SemanticRetrieval.swift</string>
+		<key>sourceTree</key>
+		<string>&lt;group&gt;</string>
+	</dict>
+
+	<key>A10000000000000000000012</key>
+	<dict>
+		<key>isa</key>
+		<string>PBXBuildFile</string>
+		<key>productRef</key>
+		<string>A10000000000000000000011</string>
+	</dict>
+
+	<key>A10000000000000000000011</key>
+	<dict>
+		<key>isa</key>
+		<string>XCSwiftPackageProductDependency</string>
+		<key>package</key>
+		<string>A10000000000000000000010</string>
+		<key>productName</key>
+		<string>SemanticRuntime</string>
+	</dict>
+
+	<key>A10000000000000000000010</key>
+	<dict>
+		<key>isa</key>
+		<string>XCLocalSwiftPackageReference</string>
+		<key>relativePath</key>
+		<string>../Vendor/SemanticRuntime</string>
+	</dict>
+
+	<key>A10000000000000000000005</key>
+	<dict>
+		<key>fileRef</key>
+		<string>A10000000000000000000004</string>
+		<key>isa</key>
+		<string>PBXBuildFile</string>
+	</dict>
+
+	<key>A10000000000000000000004</key>
+	<dict>
+		<key>isa</key>
+		<string>PBXFileReference</string>
+		<key>lastKnownFileType</key>
+		<string>folder</string>
+		<key>path</key>
+		<string>SemanticModel</string>
+		<key>sourceTree</key>
+		<string>&lt;group&gt;</string>
+	</dict>
+
+	<key>A10000000000000000000003</key>
+	<dict>
+		<key>fileRef</key>
+		<string>A10000000000000000000002</string>
+		<key>isa</key>
+		<string>PBXBuildFile</string>
+	</dict>
+
+	<key>A10000000000000000000002</key>
+	<dict>
+		<key>isa</key>
+		<string>PBXFileReference</string>
+		<key>lastKnownFileType</key>
+		<string>sourcecode.swift</string>
+		<key>path</key>
+		<string>SemanticTests.swift</string>
+		<key>sourceTree</key>
+		<string>&lt;group&gt;</string>
+	</dict>
+
+	<key>A10000000000000000000001</key>
+	<dict>
+		<key>fileRef</key>
+		<string>A10000000000000000000000</string>
+		<key>isa</key>
+		<string>PBXBuildFile</string>
+	</dict>
+
+	<key>A10000000000000000000000</key>
+	<dict>
+		<key>isa</key>
+		<string>PBXFileReference</string>
+		<key>lastKnownFileType</key>
+		<string>sourcecode.swift</string>
+		<key>path</key>
+		<string>SemanticEmbedding.swift</string>
+		<key>sourceTree</key>
+		<string>&lt;group&gt;</string>
+	</dict>
+
 <key>A19000000000000000000004</key><dict><key>isa</key><string>PBXFileReference</string><key>lastKnownFileType</key><string>sourcecode.swift</string><key>path</key><string>QuestionTests.swift</string><key>sourceTree</key><string>&lt;group&gt;</string></dict><key>A19000000000000000000005</key><dict><key>isa</key><string>PBXBuildFile</string><key>fileRef</key><string>A19000000000000000000004</string></dict>
 <key>A19000000000000000000000</key>
 <dict><key>isa</key><string>PBXFileReference</string><key>lastKnownFileType</key><string>sourcecode.swift</string><key>path</key><string>ReadingQuestion.swift</string><key>sourceTree</key><string>&lt;group&gt;</string></dict>
@@ -458,7 +564,9 @@
 				<string>74CAFDC90577CD595D9BC0F0</string>
 				<string>6224240E7B92BD8DB47B09F5</string>
 				<string>3CE47512C18C7848D3B3F6D2</string>
-			</array>
+
+<string>A10000000000000000000012</string>
+</array>
 			<key>isa</key>
 			<string>PBXFrameworksBuildPhase</string>
 			<key>runOnlyForDeploymentPostprocessing</key>
@@ -516,7 +624,9 @@
 			<key>children</key>
 			<array>
 				<string>2354684755D2E995D461CD82</string>
-			</array>
+
+<string>A10000000000000000000004</string>
+</array>
 			<key>isa</key>
 			<string>PBXGroup</string>
 			<key>name</key>
@@ -750,7 +860,9 @@
 				<string>A19000000000000000000005</string>
 				<string>A17000000000000000000005</string>
 				<string>8DA87EC64F9B436498C342F7</string>
-			</array>
+
+<string>A10000000000000000000003</string>
+</array>
 			<key>isa</key>
 			<string>PBXSourcesBuildPhase</string>
 			<key>runOnlyForDeploymentPostprocessing</key>
@@ -787,7 +899,9 @@
 			<key>packageReferences</key>
 			<array>
 				<string>45F0213C736AE69099275DF1</string>
-			</array>
+
+<string>A10000000000000000000010</string>
+</array>
 			<key>preferredProjectObjectVersion</key>
 			<string>100</string>
 			<key>productRefGroup</key>
@@ -862,7 +976,9 @@
 			<key>files</key>
 			<array>
 				<string>F837CFB7248AAD60FD365496</string>
-			</array>
+
+<string>A10000000000000000000005</string>
+</array>
 			<key>isa</key>
 			<string>PBXResourcesBuildPhase</string>
 			<key>runOnlyForDeploymentPostprocessing</key>
@@ -927,7 +1043,9 @@
 				<string>7366EB2710D6871C0D359675</string>
 				<string>340E35FCBB902B8573785CBF</string>
 				<string>CE523464274C3EF72E6CF0DA</string>
-			</array>
+
+<string>A10000000000000000000011</string>
+</array>
 			<key>productName</key>
 			<string>Shudeng</string>
 			<key>productReference</key>
@@ -1087,7 +1205,11 @@
 				<string>A19000000000000000000003</string>
 				<string>A18000000000000000000003</string>
 				<string>0000000000000000000001F9</string>
-			</array>
+
+<string>A10000000000000000000001</string>
+
+<string>A10000000000000000000007</string>
+</array>
 			<key>isa</key>
 			<string>PBXSourcesBuildPhase</string>
 			<key>runOnlyForDeploymentPostprocessing</key>
@@ -1143,7 +1265,11 @@
 				<string>A19000000000000000000002</string>
 				<string>A18000000000000000000002</string>
 				<string>0000000000000000000001F8</string>
-			</array>
+
+<string>A10000000000000000000000</string>
+
+<string>A10000000000000000000006</string>
+</array>
 			<key>isa</key>
 			<string>PBXGroup</string>
 			<key>name</key>
@@ -1309,7 +1435,9 @@
 				<string>A17000000000000000000004</string>
 				<string>CC3FD7228EB298E48206E3CC</string>
 				<string>000000000000000000000700</string>
-			</array>
+
+<string>A10000000000000000000002</string>
+</array>
 			<key>isa</key>
 			<string>PBXGroup</string>
 			<key>name</key>

@@ -120,7 +120,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             let store = try AIConfigurationStore(root: library.root)
             guard let configuration = store.configurations.first(where: { $0.id == store.selectedID }) else { throw QuestionError.configuration }
             let ready = library.preparation.states[record.bookID]?.ready == true
-            let message = "问题、选文、附近原文" + (ready ? "和当前书关键词命中（可能来自其他章节）" : "（当前资料未齐，仅可主动选择局部解释）") + "将交给“\(configuration.name)”（\(configuration.address)），可能产生费用。单次原文容量有限，实际材料和不足范围将记录在本对话。"
+            let message = "问题、选文、附近原文" + (ready ? "和当前书关键词、本地语义检索命中及补齐的邻段原文（可能来自其他章节）" : "（当前资料未齐，仅可主动选择局部解释）") + "将交给“\(configuration.name)”（\(configuration.address)），可能产生费用。单次原文容量有限，实际材料和不足范围将记录在本对话。"
             let alert = UIAlertController(title: ready ? "发送书内原文" : "资料尚未准备完整", message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: ready ? "发送并查找书内依据" : "仅用选文和邻文解释", style: .default) { [weak self] _ in
                 guard let self else { return }; self.library.questions.send(self.id, library: self.library, local: !ready)

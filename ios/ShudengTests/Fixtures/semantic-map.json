@@ -1,0 +1,1511 @@
+{
+  "semantic-fixture": {
+    "sha256": "df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67",
+    "source_fixture_sha256": "44550e12322be6ed9bb3cec39156c961203d18d7eed826c39f722c3d16aab9a5",
+    "license": "Original Shudeng test prose, authorized for use and redistribution",
+    "records": [
+      {
+        "id": "ch1-p1",
+        "book": "saltbridge",
+        "chapter": "盐桥计划：定义与制度",
+        "href": "OEBPS/ch1.xhtml",
+        "selector": "#ch1-p1",
+        "text": "盐桥不是桥梁，而是六座山间气象站共同使用的观测协议。站点只能上报读数，不能凭一次异常修改记录。"
+      },
+      {
+        "id": "ch1-p2",
+        "book": "saltbridge",
+        "chapter": "盐桥计划：定义与制度",
+        "href": "OEBPS/ch1.xhtml",
+        "selector": "#ch1-p2",
+        "text": "书中的‘余辉’并非光学现象：一条停机指令送达后，装置仍按旧指令运行十二小时，这段延迟叫余辉。它来自旧式机械计时器。"
+      },
+      {
+        "id": "ch1-p3",
+        "book": "saltbridge",
+        "chapter": "盐桥计划：定义与制度",
+        "href": "OEBPS/ch1.xhtml",
+        "selector": "#ch1-p3",
+        "text": "作者把自由定义为在明确约束内选择方法，同时承担结果；没有任何边界的行动，在本书里称为失序。"
+      },
+      {
+        "id": "ch1-p4",
+        "book": "saltbridge",
+        "chapter": "盐桥计划：定义与制度",
+        "href": "OEBPS/ch1.xhtml",
+        "selector": "#ch1-p4",
+        "text": "观测员判断大雾时须同时核对湿度和能见度。湿度高但能见度未下降，只能记录为待核查，不能立刻发布雾警。"
+      },
+      {
+        "id": "ch1-p5",
+        "book": "saltbridge",
+        "chapter": "盐桥计划：定义与制度",
+        "href": "OEBPS/ch1.xhtml",
+        "selector": "#ch1-p5",
+        "text": "初版规则规定所有停机指令必须等到第二天执行。作者认为等待能够让两名观测员分别复核异常。"
+      },
+      {
+        "id": "ch1-p6",
+        "book": "saltbridge",
+        "chapter": "盐桥计划：定义与制度",
+        "href": "OEBPS/ch1.xhtml",
+        "selector": "#ch1-p6",
+        "text": "每条原始记录保留站号、时间和修改原因。错误不被擦除，而是追加一条更正记录。这使事后调查可以重建当时的判断。"
+      },
+      {
+        "id": "ch2-p1",
+        "book": "saltbridge",
+        "chapter": "事故与规则修订",
+        "href": "OEBPS/ch2.xhtml",
+        "selector": "#ch2-p1",
+        "text": "第四座站在第七日发生电池漏液。等待次日执行的停机规定让漏液持续扩大，损坏了两台温度仪。"
+      },
+      {
+        "id": "ch2-p2",
+        "book": "saltbridge",
+        "chapter": "事故与规则修订",
+        "href": "OEBPS/ch2.xhtml",
+        "selector": "#ch2-p2",
+        "text": "事故后作者修订了规则：出现漏液或起火危险时立即停机，普通读数异常仍等待复核。改动针对危险程度，不是否定所有等待。"
+      },
+      {
+        "id": "ch2-p3",
+        "book": "saltbridge",
+        "chapter": "事故与规则修订",
+        "href": "OEBPS/ch2.xhtml",
+        "selector": "#ch2-p3",
+        "text": "第二章的结论是‘因此，立即停机并不违反审慎原则’。这里的因此指向漏液事故与危险分级；只读这一句会误以为所有异常都该立刻停机。"
+      },
+      {
+        "id": "ch2-p4",
+        "book": "saltbridge",
+        "chapter": "事故与规则修订",
+        "href": "OEBPS/ch2.xhtml",
+        "selector": "#ch2-p4",
+        "text": "修订没有改变余辉的机械事实：立即发送停机指令后，旧计时器仍可能让设备工作十二小时。危险时应切断主供电，而非只发送指令。"
+      },
+      {
+        "id": "ch2-p5",
+        "book": "saltbridge",
+        "chapter": "事故与规则修订",
+        "href": "OEBPS/ch2.xhtml",
+        "selector": "#ch2-p5",
+        "text": "对现场出现的红色告警灯，作者没有解释其电路颜色选择，也没有提供制造商信息。告警灯亮只表示待检查。"
+      },
+      {
+        "id": "ch2-p6",
+        "book": "saltbridge",
+        "chapter": "事故与规则修订",
+        "href": "OEBPS/ch2.xhtml",
+        "selector": "#ch2-p6",
+        "text": "复核员和当班员必须分别签名。即使两人意见相同，也不能用一个人的签名替代另一个人的检查。"
+      },
+      {
+        "id": "ch3-p1",
+        "book": "saltbridge",
+        "chapter": "备用能源与观测",
+        "href": "OEBPS/ch3.xhtml",
+        "selector": "#ch3-p1",
+        "text": "每座站的温度仪由主电池供电，计时器和记录器则接在独立的备用电池上。主供电切断后，后两者继续工作，温度仪停止。"
+      },
+      {
+        "id": "ch3-p2",
+        "book": "saltbridge",
+        "chapter": "备用能源与观测",
+        "href": "OEBPS/ch3.xhtml",
+        "selector": "#ch3-p2",
+        "text": "The recorder draws power from an independent backup cell. Removing the main battery stops the thermometer but does not stop the recorder or the timer."
+      },
+      {
+        "id": "ch3-p3",
+        "book": "saltbridge",
+        "chapter": "备用能源与观测",
+        "href": "OEBPS/ch3.xhtml",
+        "selector": "#ch3-p3",
+        "text": "雨后墙面形成水珠不是设备漏液。冷表面使空气中的水汽凝结，墙面结露可能触发湿度提醒，但不会触发电池停机。"
+      },
+      {
+        "id": "ch3-p4",
+        "book": "saltbridge",
+        "chapter": "备用能源与观测",
+        "href": "OEBPS/ch3.xhtml",
+        "selector": "#ch3-p4",
+        "text": "高海拔第三站的夜间读数偏低，原因是传感器暴露在冷风中。给传感器加防风罩之后，读数与附近站点接近。"
+      },
+      {
+        "id": "ch3-p5",
+        "book": "saltbridge",
+        "chapter": "备用能源与观测",
+        "href": "OEBPS/ch3.xhtml",
+        "selector": "#ch3-p5",
+        "text": "巡检间隔是六小时。间隔由两次人工签名之间的时间计算，不是由记录器写入次数计算。"
+      },
+      {
+        "id": "ch3-p6",
+        "book": "saltbridge",
+        "chapter": "备用能源与观测",
+        "href": "OEBPS/ch3.xhtml",
+        "selector": "#ch3-p6",
+        "text": "本章反复强调外观相似不代表原因相同；诊断时需分别检查电池漏液、墙面结露和传感器受风。"
+      },
+      {
+        "id": "ch4-p1",
+        "book": "saltbridge",
+        "chapter": "责任与结论",
+        "href": "OEBPS/ch4.xhtml",
+        "selector": "#ch4-p1",
+        "text": "作者坚持保留原始记录。第二章容许危险时立刻行动，第四章要求行动后补写依据；快行动和可追溯共同构成负责的自由。"
+      },
+      {
+        "id": "ch4-p2",
+        "book": "saltbridge",
+        "chapter": "责任与结论",
+        "href": "OEBPS/ch4.xhtml",
+        "selector": "#ch4-p2",
+        "text": "本书的核心主张有四部分：边界内的自由、基于危险等级的例外、设备之间的供电分离、保留原始记录以承担责任。理解全书要把四部分放在一起。"
+      },
+      {
+        "id": "ch4-p3",
+        "book": "saltbridge",
+        "chapter": "责任与结论",
+        "href": "OEBPS/ch4.xhtml",
+        "selector": "#ch4-p3",
+        "text": "作者没有在书里给出盐桥计划的建设预算，也没有给出任何商业报价。读者不能从设备数量推出项目费用。"
+      },
+      {
+        "id": "ch4-p4",
+        "book": "saltbridge",
+        "chapter": "责任与结论",
+        "href": "OEBPS/ch4.xhtml",
+        "selector": "#ch4-p4",
+        "text": "修订制度不等于改写历史。第七日漏液造成的损失保留在旧记录中，之后新的停机制度另行注明生效时间。"
+      },
+      {
+        "id": "ch4-p5",
+        "book": "saltbridge",
+        "chapter": "责任与结论",
+        "href": "OEBPS/ch4.xhtml",
+        "selector": "#ch4-p5",
+        "text": "同一句‘立即行动’在第一章的失序例子和第二章的危险处理里意义不同。引文必须同时保留章节与上下文。"
+      },
+      {
+        "id": "ch4-p6",
+        "book": "saltbridge",
+        "chapter": "责任与结论",
+        "href": "OEBPS/ch4.xhtml",
+        "selector": "#ch4-p6",
+        "text": "计划结束时六站没有被合并成一站。各站仍独立记录，只共享复核规则；一致的方法不要求相同的原始读数。"
+      },
+      {
+        "id": "appendix-p1",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p1",
+        "text": "杂记第1项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p2",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p2",
+        "text": "杂记第2项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p3",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p3",
+        "text": "杂记第3项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p4",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p4",
+        "text": "杂记第4项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p5",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p5",
+        "text": "杂记第5项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p6",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p6",
+        "text": "杂记第6项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p7",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p7",
+        "text": "杂记第7项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p8",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p8",
+        "text": "杂记第8项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p9",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p9",
+        "text": "杂记第9项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p10",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p10",
+        "text": "杂记第10项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p11",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p11",
+        "text": "杂记第11项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p12",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p12",
+        "text": "杂记第12项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p13",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p13",
+        "text": "杂记第13项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p14",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p14",
+        "text": "杂记第14项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p15",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p15",
+        "text": "杂记第15项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p16",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p16",
+        "text": "杂记第16项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p17",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p17",
+        "text": "杂记第17项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p18",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p18",
+        "text": "杂记第18项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p19",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p19",
+        "text": "杂记第19项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p20",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p20",
+        "text": "杂记第20项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p21",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p21",
+        "text": "杂记第21项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p22",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p22",
+        "text": "杂记第22项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p23",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p23",
+        "text": "杂记第23项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p24",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p24",
+        "text": "杂记第24项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p25",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p25",
+        "text": "杂记第25项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p26",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p26",
+        "text": "杂记第26项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p27",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p27",
+        "text": "杂记第27项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p28",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p28",
+        "text": "杂记第28项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p29",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p29",
+        "text": "杂记第29项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p30",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p30",
+        "text": "杂记第30项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p31",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p31",
+        "text": "杂记第31项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p32",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p32",
+        "text": "杂记第32项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p33",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p33",
+        "text": "杂记第33项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p34",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p34",
+        "text": "杂记第34项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p35",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p35",
+        "text": "杂记第35项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p36",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p36",
+        "text": "杂记第36项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p37",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p37",
+        "text": "杂记第37项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p38",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p38",
+        "text": "杂记第38项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p39",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p39",
+        "text": "杂记第39项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p40",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p40",
+        "text": "杂记第40项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p41",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p41",
+        "text": "杂记第41项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p42",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p42",
+        "text": "杂记第42项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p43",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p43",
+        "text": "杂记第43项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p44",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p44",
+        "text": "杂记第44项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p45",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p45",
+        "text": "杂记第45项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p46",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p46",
+        "text": "杂记第46项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p47",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p47",
+        "text": "杂记第47项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p48",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p48",
+        "text": "杂记第48项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p49",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p49",
+        "text": "杂记第49项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p50",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p50",
+        "text": "杂记第50项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p51",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p51",
+        "text": "杂记第51项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p52",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p52",
+        "text": "杂记第52项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p53",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p53",
+        "text": "杂记第53项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p54",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p54",
+        "text": "杂记第54项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p55",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p55",
+        "text": "杂记第55项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p56",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p56",
+        "text": "杂记第56项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p57",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p57",
+        "text": "杂记第57项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p58",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p58",
+        "text": "杂记第58项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p59",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p59",
+        "text": "杂记第59项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p60",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p60",
+        "text": "杂记第60项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p61",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p61",
+        "text": "杂记第61项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p62",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p62",
+        "text": "杂记第62项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p63",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p63",
+        "text": "杂记第63项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p64",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p64",
+        "text": "杂记第64项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p65",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p65",
+        "text": "杂记第65项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p66",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p66",
+        "text": "杂记第66项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p67",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p67",
+        "text": "杂记第67项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p68",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p68",
+        "text": "杂记第68项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p69",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p69",
+        "text": "杂记第69项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p70",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p70",
+        "text": "杂记第70项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p71",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p71",
+        "text": "杂记第71项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p72",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p72",
+        "text": "杂记第72项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p73",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p73",
+        "text": "杂记第73项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p74",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p74",
+        "text": "杂记第74项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p75",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p75",
+        "text": "杂记第75项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p76",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p76",
+        "text": "杂记第76项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p77",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p77",
+        "text": "杂记第77项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p78",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p78",
+        "text": "杂记第78项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p79",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p79",
+        "text": "杂记第79项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p80",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p80",
+        "text": "杂记第80项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      }
+    ]
+  },
+  "semantic-english": {
+    "sha256": "b7c52c52a8c38296421e7f06ccfc5008afa2c31da01bc46a25b5704819ef658a",
+    "source_fixture_sha256": "44550e12322be6ed9bb3cec39156c961203d18d7eed826c39f722c3d16aab9a5",
+    "license": "Original Shudeng test prose, authorized for use and redistribution",
+    "records": [
+      {
+        "id": "ch3-p2",
+        "book": "saltbridge",
+        "chapter": "备用能源与观测",
+        "href": "OEBPS/ch3.xhtml",
+        "selector": "#ch3-p2",
+        "text": "The recorder draws power from an independent backup cell. Removing the main battery stops the thermometer but does not stop the recorder or the timer."
+      },
+      {
+        "id": "appendix-p1",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p1",
+        "text": "杂记第1项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p2",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p2",
+        "text": "杂记第2项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p3",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p3",
+        "text": "杂记第3项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p4",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p4",
+        "text": "杂记第4项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p5",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p5",
+        "text": "杂记第5项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p6",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p6",
+        "text": "杂记第6项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p7",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p7",
+        "text": "杂记第7项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p8",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p8",
+        "text": "杂记第8项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p9",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p9",
+        "text": "杂记第9项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p10",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p10",
+        "text": "杂记第10项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p11",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p11",
+        "text": "杂记第11项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p12",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p12",
+        "text": "杂记第12项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p13",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p13",
+        "text": "杂记第13项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p14",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p14",
+        "text": "杂记第14项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p15",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p15",
+        "text": "杂记第15项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p16",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p16",
+        "text": "杂记第16项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p17",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p17",
+        "text": "杂记第17项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p18",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p18",
+        "text": "杂记第18项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p19",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p19",
+        "text": "杂记第19项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p20",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p20",
+        "text": "杂记第20项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p21",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p21",
+        "text": "杂记第21项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p22",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p22",
+        "text": "杂记第22项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p23",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p23",
+        "text": "杂记第23项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p24",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p24",
+        "text": "杂记第24项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p25",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p25",
+        "text": "杂记第25项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p26",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p26",
+        "text": "杂记第26项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p27",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p27",
+        "text": "杂记第27项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p28",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p28",
+        "text": "杂记第28项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p29",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p29",
+        "text": "杂记第29项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p30",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p30",
+        "text": "杂记第30项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p31",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p31",
+        "text": "杂记第31项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p32",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p32",
+        "text": "杂记第32项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p33",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p33",
+        "text": "杂记第33项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p34",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p34",
+        "text": "杂记第34项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p35",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p35",
+        "text": "杂记第35项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p36",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p36",
+        "text": "杂记第36项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p37",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p37",
+        "text": "杂记第37项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p38",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p38",
+        "text": "杂记第38项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p39",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p39",
+        "text": "杂记第39项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p40",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p40",
+        "text": "杂记第40项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p41",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p41",
+        "text": "杂记第41项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p42",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p42",
+        "text": "杂记第42项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p43",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p43",
+        "text": "杂记第43项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p44",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p44",
+        "text": "杂记第44项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p45",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p45",
+        "text": "杂记第45项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p46",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p46",
+        "text": "杂记第46项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p47",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p47",
+        "text": "杂记第47项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p48",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p48",
+        "text": "杂记第48项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p49",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p49",
+        "text": "杂记第49项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p50",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p50",
+        "text": "杂记第50项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p51",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p51",
+        "text": "杂记第51项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p52",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p52",
+        "text": "杂记第52项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p53",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p53",
+        "text": "杂记第53项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p54",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p54",
+        "text": "杂记第54项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p55",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p55",
+        "text": "杂记第55项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p56",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p56",
+        "text": "杂记第56项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p57",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p57",
+        "text": "杂记第57项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p58",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p58",
+        "text": "杂记第58项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p59",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p59",
+        "text": "杂记第59项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p60",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p60",
+        "text": "杂记第60项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p61",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p61",
+        "text": "杂记第61项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p62",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p62",
+        "text": "杂记第62项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p63",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p63",
+        "text": "杂记第63项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p64",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p64",
+        "text": "杂记第64项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p65",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p65",
+        "text": "杂记第65项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p66",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p66",
+        "text": "杂记第66项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p67",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p67",
+        "text": "杂记第67项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p68",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p68",
+        "text": "杂记第68项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p69",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p69",
+        "text": "杂记第69项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p70",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p70",
+        "text": "杂记第70项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p71",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p71",
+        "text": "杂记第71项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p72",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p72",
+        "text": "杂记第72项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      },
+      {
+        "id": "appendix-p73",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p73",
+        "text": "杂记第73项。图书馆给纸质档案编号，先按年份分柜，再按作者姓氏排序。书架编号不代表观点先后。"
+      },
+      {
+        "id": "appendix-p74",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p74",
+        "text": "杂记第74项。山路运输用木箱保护玻璃器材，箱子外侧标注重量。大雨天推迟运输可以减少路面打滑。"
+      },
+      {
+        "id": "appendix-p75",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p75",
+        "text": "杂记第75项。小组记录厨房食材消耗，每周更换清单。剩余米饭需要放入冷藏柜，与气象读数无关。"
+      },
+      {
+        "id": "appendix-p76",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p76",
+        "text": "杂记第76项。旧灯塔每晚点亮，引航员按天气调节灯的亮度。维修人员检查玻璃而不修改航道名称。"
+      },
+      {
+        "id": "appendix-p77",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p77",
+        "text": "杂记第77项。机械钟的齿轮在潮湿环境中需要保养。齿轮涂油后运行平稳，维护费用单独记录。"
+      },
+      {
+        "id": "appendix-p78",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p78",
+        "text": "杂记第78项。站内的日历用红墨水标注休息日。红色只是印刷习惯，日历不参与告警电路。"
+      },
+      {
+        "id": "appendix-p79",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p79",
+        "text": "杂记第79项。自由讨论时成员可以提出不同意见，主持人最后整理会议笔记。讨论不是控制设备的指令。"
+      },
+      {
+        "id": "appendix-p80",
+        "book": "saltbridge",
+        "chapter": "附录：生活与杂记",
+        "href": "OEBPS/appendix.xhtml",
+        "selector": "#appendix-p80",
+        "text": "杂记第80项。观测报告的封面采用蓝色，纸张来源是镇上印刷铺。封面颜色不能判断数据是否准确。"
+      }
+    ]
+  },
+  "semantic-other": {
+    "sha256": "91596d461eec70d5167646cb4ac2c8cd3802fe74ae9eecd0825856593e4526f3",
+    "source_fixture_sha256": "44550e12322be6ed9bb3cec39156c961203d18d7eed826c39f722c3d16aab9a5",
+    "license": "Original Shudeng test prose, authorized for use and redistribution",
+    "records": [
+      {
+        "id": "other-p1",
+        "book": "unrelated",
+        "chapter": "另一书",
+        "href": "OEBPS/other.xhtml",
+        "selector": "#other-p1",
+        "text": "盐桥计划建设预算是一百万元。余辉延迟仅有三分钟，红色灯由厂商Z制造。"
+      }
+    ]
+  }
+}

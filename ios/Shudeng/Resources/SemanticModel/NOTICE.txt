@@ -1,0 +1,11 @@
+Local semantic model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+Source: https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/tree/e8f8c211226b894fcb81acc59f3b34ba3efd5f42
+Publisher: sentence-transformers. License: Apache-2.0 (fixed model card declares license).
+The model is the publisher-provided onnx/model_qint8_arm64.onnx; weights are unchanged.
+Shudeng changes: lossless gzip packaging; tokenizer_config.json tokenizer_class changed
+from PreTrainedTokenizerFast to XLMRobertaTokenizer for Swift tokenizer dispatch.
+tokenizer.json is unchanged. Runtime limits each window to 128 tokens including specials,
+applies mean pooling and L2 normalization, and uses ONNX Runtime CPU with two threads.
+No embedding server, remote translation or automatic model download is used by the app.
+See manifest.json for all fixed versions, checksums and sizes; MODEL_CARD.md and LICENSE.txt
+are redistributed alongside the model.

@@ -1416,14 +1416,14 @@ extension ReadingUITests {
 }
 
 extension ReadingUITests {
-    private func questionService(_ app: XCUIApplication, format: String, model: String = "test-model") {
+    private func questionService(_ app: XCUIApplication, format: String, model: String = "test-model", address: String = "http://127.0.0.1:18769/v1") {
         app.tabBars.buttons["我的"].tap()
         if !app.tables["ai-services"].exists { app.buttons["AI 服务"].tap() }
         app.buttons["添加"].tap()
         let name = "I9-" + format + "-" + model + "-" + UUID().uuidString.prefix(6)
         app.textFields["ai-name"].tap(); app.textFields["ai-name"].typeText(name)
         if format == "Anthropic" { app.cells["ai-format"].tap(); app.buttons["Anthropic"].tap() }
-        app.textFields["ai-address"].tap(); app.textFields["ai-address"].typeText("http://127.0.0.1:18769/v1")
+        app.textFields["ai-address"].tap(); app.textFields["ai-address"].typeText(address)
         app.textFields["ai-model"].tap(); app.textFields["ai-model"].typeText(model)
         app.secureTextFields["ai-key"].tap(); app.secureTextFields["ai-key"].typeText("not-a-real-credential")
         app.navigationBars.buttons["保存"].tap()
@@ -1458,6 +1458,40 @@ extension ReadingUITests {
         let label = app.staticTexts["question-status"]
         let ready = NSPredicate { _, _ in label.label == "回答已保存" }
         expectation(for: ready, evaluatedWith: app); waitForExpectations(timeout: 15)
+    }
+    func testSemanticBackgroundCitationActualHTTPJumpAndReturn() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launch()
+        let book = app.tables["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
+        if !book.exists {
+            choose("A-semantic.epub", in: app)
+            app.alerts.buttons["知道了"].tap()
+        }
+        let ready = NSPredicate { _, _ in (book.value as? String ?? "").contains("书内资料可用") }
+        expectation(for: ready, evaluatedWith: app); waitForExpectations(timeout: 60)
+        questionService(app, format: "OpenAI", model: "semantic-background", address: "http://127.0.0.1:18770/v1")
+        book.tap(); waitForBody(app)
+        settings(app, mode: "滚动", dark: false, font: 100)
+        searchBook(app, query: "建设预算", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
+        let selected = "作者没有在书里给出盐桥计划的建设预算，也没有给出任何商业报价。读者不能从设备数量推出项目费用。"
+        let marker = app.webViews.staticTexts[selected].firstMatch
+        XCTAssertTrue(marker.waitForExistence(timeout: 5))
+        marker.press(forDuration: 1.3); noteMenu("提问", in: app)
+        evidence("issue10-actual-selection-and-forced-neighbors", app)
+        sendSelectedQuestion(app, text: "切掉首要电源后，哪两件装置依旧运转？")
+        questionSaved(app)
+        app.scrollViews["question-scroll"].swipeUp()
+        app.buttons["question-reference-0"].tap()
+        evidence("issue10-semantic-background-verified-reference", app)
+        app.buttons["跳转原文"].tap(); waitForBody(app)
+        let target = "每座站的温度仪由主电池供电，计时器和记录器则接在独立的备用电池上。主供电切断后，后两者继续工作，温度仪停止。"
+        searchMarkerVisible(app, target)
+        evidence("issue10-semantic-db-evidence-exact-original-jump", app)
+        app.buttons["回提问处"].tap(); waitForBody(app)
+        searchMarkerVisible(app, selected)
+        evidence("issue10-semantic-reference-return-to-real-selection", app)
+        app.buttons["书架"].tap(); app.terminate()
     }
     func testQuestionAnthropicSelectionReferencesRestartAndDraft() throws {
         continueAfterFailure = false

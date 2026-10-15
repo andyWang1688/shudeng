@@ -46,6 +46,7 @@ struct ReadingQuestion: Codable, Identifiable {
     var citations: [QuestionEvidence] = []
     var notice = ""
     var failure: String?
+    var retrievalTrace: RetrievalTrace?
     var serviceName: String?
     var model: String?
     var format: AIFormat?
@@ -122,7 +123,7 @@ final class QuestionStore {
                 guard state.ready || local else { throw QuestionError.preparation }
                 let plan = try await QuestionPlan.make(record, index: library.preparation.index, local: local, state: state)
                 try Task.checkCancellation()
-                record.evidence = plan.evidence; record.notice = plan.notice
+                record.evidence = plan.evidence; record.notice = plan.notice; record.retrievalTrace = plan.trace
                 record.serviceName = configuration.name; record.model = configuration.model; record.format = configuration.format
                 record.state = .generating
                 guard save(record) else {
@@ -149,9 +150,10 @@ final class QuestionStore {
 }
 
 enum QuestionError: LocalizedError {
-    case configuration, preparation, budget
+    case configuration, preparation, budget, scope
     var errorDescription: String? {
         switch self {
+        case .scope: return "选文或邻文不属于当前书允许的参考范围，未发送请求。"
         case .configuration: return "请先在“我的 → AI 服务”保存并选择服务。"
         case .preparation: return "资料尚未准备完整；可等待，或主动选择局部解释。"
         case .budget: return "选文及邻文超过本次上下文容量，请缩短选文后重新提问；未发送请求。"
@@ -163,36 +165,43 @@ struct QuestionPlan {
     let evidence: [QuestionEvidence]
     let notice: String
     let prompt: String
-    static func make(_ record: ReadingQuestion, index: BookIndex, local: Bool, state: BookPreparationState) async throws -> QuestionPlan {
+    let trace: RetrievalTrace?
+    static func make(_ record: ReadingQuestion, index: BookIndex, local: Bool, state: BookPreparationState, scope: BookEvidenceScope? = nil) async throws -> QuestionPlan {
         var required = (record.selectionParts ?? [record.selection]) + record.neighbors
+        if !local || scope != nil {
+            let allowed = scope ?? BookEvidenceScope(bookID: record.bookID)
+            guard allowed.bookID == record.bookID,
+                  try await index.permits(required, scope: allowed) else { throw QuestionError.scope }
+        }
         var optional: [QuestionEvidence] = []
+        var trace: RetrievalTrace?
         if !local {
-            for term in keywords(record.question + " " + record.selection.quote) {
-                try Task.checkCancellation()
-                for hit in try await index.search(bookID: record.bookID, query: term).prefix(8) {
-                    let value = QuestionEvidence(locator: hit.locator, context: hit.context)
-                    if !optional.contains(where: { $0.locatorJSON == value.locatorJSON }) { optional.append(value) }
-                }
-            }
+            let allowed = scope ?? BookEvidenceScope(bookID: record.bookID)
+            guard allowed.bookID == record.bookID else { throw QuestionError.preparation }
+            let result = try await index.retrieve(scope: allowed, query: record.question + " " + record.selection.quote)
+            optional = result.evidence; trace = result.trace
         }
         var seen: Set<String> = []
         required = required.filter { !$0.quote.isEmpty && seen.insert($0.locatorJSON).inserted }
+        guard required.count <= 15 else { throw QuestionError.budget }
+        // Only the verified source span is sent. Locator prefix/suffix stay local.
+        required = try required.map { QuestionEvidence(locator: try $0.location(), context: $0.quote) }
         var selected = required
         func notice(_ clipped: Bool) -> String {
-            (local ? "读者主动选择局部解释，仅发送选文与邻文。" : "本次参考选文、邻文和当前书关键词命中；可能漏掉相关背景，不代表整书理解完成。") +
-            "资料已准备\(state.completed)/\(state.total)章。" + (clipped ? "部分关键词材料超出容量未发送；依据与上下文可能不足。" : "未命中相关材料时不能断言书内不存在依据。")
+            (local ? "读者主动选择局部解释，仅发送选文与邻文。" : "本次参考选文、邻文和当前书关键词与本地语义命中；可能漏掉相关背景，不代表整书理解完成。") +
+            "资料已准备\(state.completed)/\(state.total)章。" + (clipped ? "部分检索材料超出15段或上下文容量未发送；依据与上下文可能不足。" : "未命中相关材料时不能断言书内不存在依据。")
         }
         guard try prompt(record, evidence: selected, notice: notice(false)).utf8.count <= 23000 else { throw QuestionError.budget }
         var clipped = false
         for value in optional where seen.insert(value.locatorJSON).inserted {
-            if try prompt(record, evidence: selected + [value], notice: notice(true)).utf8.count <= 23000 { selected.append(value) }
+            if selected.count < 15, try prompt(record, evidence: selected + [value], notice: notice(true)).utf8.count <= 23000 { selected.append(value) }
             else { clipped = true }
         }
         for i in selected.indices { selected[i].id = "E\(i + 1)" }
         let scope = notice(clipped) + "实际发送\(selected.count)段，\(selected.reduce(0) { $0 + $1.context.count })字；章节：" + Set(selected.map(\.chapter)).sorted().joined(separator: "、")
         let body = try prompt(record, evidence: selected, notice: scope)
         guard body.utf8.count <= 24000 else { throw QuestionError.budget }
-        return QuestionPlan(evidence: selected, notice: scope, prompt: body)
+        return QuestionPlan(evidence: selected, notice: scope, prompt: body, trace: trace)
     }
     static func keywords(_ text: String) -> [String] {
         let expression = try! NSRegularExpression(pattern: "[A-Za-z][A-Za-z0-9'-]{2,}|[\\p{Han}]{2,}")
@@ -202,7 +211,7 @@ struct QuestionPlan {
         for match in expression.matches(in: text, range: NSRange(location: 0, length: source.length)) {
             let value = source.substring(with: match.range).lowercased()
             guard !stop.contains(value) else { continue }
-            let parts = value.unicodeScalars.contains { $0.value >= 0x4e00 && $0.value <= 0x9fff } ? stride(from: 0, to: max(1, value.count - 1), by: 2).map { String(value.dropFirst($0).prefix(2)) } : [value]
+            let parts = value.unicodeScalars.contains { $0.value >= 0x4e00 && $0.value <= 0x9fff } ? stride(from: 0, to: max(1, value.count - 1), by: 1).map { String(value.dropFirst($0).prefix(2)) } : [value]
             for part in parts where !terms.contains(part) { terms.append(part) }
         }
         return Array(terms.prefix(10))

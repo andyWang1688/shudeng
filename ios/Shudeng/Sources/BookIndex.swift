@@ -9,10 +9,16 @@ struct BookPreparationState {
     var total = 0
     var failure: String?
     var preparing = true
-    var ready: Bool { !preparing && total > 0 && completed == total && failure == nil }
+    var vectorsCompleted = 0
+    var vectorsTotal = 0
+    var semanticReady = false
+    var ready: Bool { !preparing && total > 0 && completed == total && semanticReady && failure == nil }
     var message: String {
         if let failure { return "资料准备失败（已完成\(completed)/\(total)章）：\(failure)；仍可阅读" }
-        return ready ? "书内资料可用（\(total)章）" : "正在准备书内资料（已完成\(completed)/\(total)章），不影响阅读"
+        if completed == total && total > 0 && !semanticReady {
+            return "正在准备本地语义资料（已提交\(vectorsCompleted)/\(vectorsTotal)段），不影响阅读和原文搜索"
+        }
+        return ready ? "书内资料可用（\(total)章，语义资料已完成）" : "正在准备书内资料（已完成\(completed)/\(total)章），不影响阅读"
     }
 }
 
@@ -48,17 +54,22 @@ final class BookPreparation {
                 try await index.prepare(bookID: book.id, file: file, rebuild: rebuild) { state in
                     self.update(state, for: book.id)
                 }
+                try await index.prepareVectors(bookID: book.id) { state in self.update(state, for: book.id) }
             } catch is CancellationError {
                 // Startup resumes the committed chapter checkpoint.
             } catch {
                 var state = states[book.id] ?? BookPreparationState()
-                state.failure = (error as? IndexError)?.errorDescription ?? "无法读取或保存资料，请检查文件与储存空间后重试"
+                state.failure = (error as? IndexError)?.errorDescription ?? (error as? EmbeddingError)?.errorDescription ?? "无法读取或保存资料，请检查文件与储存空间后重试"
                 state.preparing = false
                 states[book.id] = state
             }
             jobs[book.id] = nil
             notify()
         }
+    }
+    /// Await owned tasks before an owner removes its storage (also used by integration teardown).
+    func waitForCurrentWork() async {
+        for job in Array(jobs.values) { await job.value }
     }
     private func update(_ state: BookPreparationState, for id: String) { states[id] = state; notify() }
     private func notify() { NotificationCenter.default.post(name: Self.changed, object: self) }
@@ -221,7 +232,7 @@ enum BookText {
 }
 
 /// Short-lived connections, only used by BookIndex's actor.
-private final class IndexDatabase {
+final class IndexDatabase {
     private var db: OpaquePointer?
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     init(url: URL) throws {
@@ -229,6 +240,8 @@ private final class IndexDatabase {
             sqlite3_close(db); throw IndexError.storage
         }
         do {
+            try execute("CREATE TABLE IF NOT EXISTS embeddings(book_id TEXT NOT NULL, model TEXT NOT NULL, fragment_id INTEGER NOT NULL, piece INTEGER NOT NULL, offset INTEGER NOT NULL, original TEXT NOT NULL, vector BLOB NOT NULL CHECK(length(vector)=1536), PRIMARY KEY(book_id,fragment_id,piece))")
+            try execute("CREATE TABLE IF NOT EXISTS embedding_progress(book_id TEXT PRIMARY KEY, model TEXT NOT NULL, cursor INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL)")
             try execute("CREATE TABLE IF NOT EXISTS preparations(book_id TEXT PRIMARY KEY, version INTEGER NOT NULL, total INTEGER NOT NULL, completed INTEGER NOT NULL DEFAULT 0)")
             try execute("CREATE TABLE IF NOT EXISTS chapters(book_id TEXT NOT NULL, ordinal INTEGER NOT NULL, href TEXT NOT NULL, title TEXT NOT NULL, PRIMARY KEY(book_id,ordinal))")
             try execute("CREATE TABLE IF NOT EXISTS contents(book_id TEXT PRIMARY KEY, links TEXT NOT NULL)")
@@ -238,12 +251,12 @@ private final class IndexDatabase {
         } catch { sqlite3_close(db); db = nil; throw error }
     }
     deinit { sqlite3_close(db) }
-    private func execute(_ sql: String, _ args: [String] = []) throws {
+    func execute(_ sql: String, _ args: [String] = []) throws {
         let statement = try statement(sql, args)
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_DONE else { throw IndexError.storage }
     }
-    private func statement(_ sql: String, _ args: [String]) throws -> OpaquePointer {
+    func statement(_ sql: String, _ args: [String]) throws -> OpaquePointer {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw IndexError.storage }
         for (index, value) in args.enumerated() {
@@ -251,7 +264,7 @@ private final class IndexDatabase {
         }
         return statement
     }
-    private func rows(_ sql: String, _ args: [String]) throws -> [[String]] {
+    func rows(_ sql: String, _ args: [String]) throws -> [[String]] {
         let statement = try statement(sql, args)
         defer { sqlite3_finalize(statement) }
         var result: [[String]] = []
@@ -264,7 +277,7 @@ private final class IndexDatabase {
             }
         }
     }
-    private func transaction(_ body: () throws -> Void) throws {
+    func transaction(_ body: () throws -> Void) throws {
         try execute("BEGIN IMMEDIATE")
         do { try body(); try execute("COMMIT") }
         catch { try? execute("ROLLBACK"); throw error }
@@ -273,6 +286,8 @@ private final class IndexDatabase {
         let old = try rows("SELECT version,total FROM preparations WHERE book_id=?", [book]).first
         try transaction {
             if rebuild || (old != nil && old != ["2", String(total)]) {
+                try execute("DELETE FROM embeddings WHERE book_id=?", [book])
+                try execute("DELETE FROM embedding_progress WHERE book_id=?", [book])
                 try execute("DELETE FROM fragment_terms WHERE book_id=?", [book])
                 try execute("DELETE FROM fragments WHERE book_id=?", [book])
                 try execute("DELETE FROM chapters WHERE book_id=?", [book])
@@ -286,7 +301,13 @@ private final class IndexDatabase {
     func completed(_ book: String) throws -> Int { try state(book).completed }
     func state(_ book: String) throws -> BookPreparationState {
         guard let row = try rows("SELECT completed,total FROM preparations WHERE book_id=?", [book]).first else { return BookPreparationState() }
-        return BookPreparationState(completed: Int(row[0])!, total: Int(row[1])!, preparing: row[0] != row[1])
+        var state = BookPreparationState(completed: Int(row[0])!, total: Int(row[1])!, preparing: row[0] != row[1])
+        if let vector = try rows("SELECT model,completed,total FROM embedding_progress WHERE book_id=?", [book]).first,
+           vector[0] == SemanticEmbedding.version {
+            state.vectorsCompleted = Int(vector[1])!; state.vectorsTotal = Int(vector[2])!
+            state.semanticReady = vector[1] == vector[2]
+        }
+        return state
     }
     func commit(_ book: String, chapter: Int, href: String, title: String, fragments: [BookFragment]) throws {
         try transaction {

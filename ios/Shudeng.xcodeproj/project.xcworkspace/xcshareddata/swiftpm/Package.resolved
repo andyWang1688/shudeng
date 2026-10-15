@@ -1,5 +1,5 @@
 {
-  "originHash" : "3a53aa9342cc3132e57c5a0bbe6e4d86fc457cf3b370e68e6005fd0ad298be9f",
+  "originHash" : "fce03d304ff78c6919b20979dd9bdc2082b545dcabda77d4762ac602b0822486",
   "pins" : [
     {
       "identity" : "cryptoswift",
@@ -26,6 +26,42 @@
       "state" : {
         "revision" : "173ec944ca6f2e8024ceb7324bcb8a3cc95a0661",
         "version" : "4.0.1"
+      }
+    },
+    {
+      "identity" : "onnxruntime-swift-package-manager",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/microsoft/onnxruntime-swift-package-manager",
+      "state" : {
+        "revision" : "b7fb7f7dea8a2469e6335d95a61b8f36d0dc83b2",
+        "version" : "1.24.2"
+      }
+    },
+    {
+      "identity" : "swift-collections",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-collections.git",
+      "state" : {
+        "revision" : "35a1edcb8ebd2bfe251d587f0b69e62af28f508c",
+        "version" : "1.7.3"
+      }
+    },
+    {
+      "identity" : "swift-jinja",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/huggingface/swift-jinja.git",
+      "state" : {
+        "revision" : "4588064a20f3fc093c95f2f7d3359999bf30cae5",
+        "version" : "2.5.1"
+      }
+    },
+    {
+      "identity" : "swift-transformers",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/huggingface/swift-transformers",
+      "state" : {
+        "revision" : "573e5c9036c2f136b3a8a071da8e8907322403d0",
+        "version" : "1.1.6"
       }
     },
     {
