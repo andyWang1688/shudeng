@@ -136,7 +136,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         sheet.sheetPresentationController?.detents = [.large()]
         present(sheet, animated: true)
     }
-    private func changeSettings(_ changed: ReadingSettings, force: Bool = false) {
+    private func changeSettings(_ changed: ReadingSettings, force: Bool = false, restoring userLocation: Locator? = nil) {
         guard (changed != settings || force), !loading, !curlBusy else { return }
         stopCurl()
         loading = true
@@ -147,8 +147,11 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         navigator.delegate = nil
         Task {
             do {
-                var location = navigator.currentLocation ?? pendingLocation
-                if force || changed.scroll != settings.scroll || changed.pageCurl != settings.pageCurl || changed.fontSize != settings.fontSize,
+                var location = userLocation ?? navigator.currentLocation ?? pendingLocation
+                // An interrupted prefetch is showing a temporary neighbor. Its
+                // JavaScript anchor must not overwrite the explicit user page.
+                if userLocation == nil,
+                   force || changed.scroll != settings.scroll || changed.pageCurl != settings.pageCurl || changed.fontSize != settings.fontSize,
                    case let .success(anchor as [String: String]) = await navigator.evaluateJavaScript(Self.visibleTextAnchor) {
                     location?.locations.cssSelector = anchor["selector"]
                     location?.text = Locator.Text(after: anchor["after"], before: anchor["before"], highlight: anchor["highlight"])
@@ -179,7 +182,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     // Transient reflow anchor; native locations remain the persisted format.
     // Preserve the first visible character, including inside a long paragraph,
     // with element-scoped quotation context rather than a paragraph start.
-    private static let visibleTextAnchor = """
+    fileprivate static let visibleTextAnchor = """
     (() => {
       const visible = r => r.width > 0 && r.height > 0 && r.left >= 0 &&
         r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight;
@@ -453,13 +456,17 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
         guard settings.pageCurl == true else { return }
+        let userLocation = curl?.userLocation ?? pendingLocation
+        #if DEBUG
+        NSLog("SHUDENG_CURL rotate user=%@ actual=%@", userLocation?.description ?? "live", navigator.currentLocation?.description ?? "nil")
+        #endif
         changingBounds = true
         stopCurl()
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in
             guard let self, !self.leaving else { return }
             self.changingBounds = false
             self.loading = false
-            self.changeSettings(self.settings, force: true)
+            self.changeSettings(self.settings, force: true, restoring: userLocation)
         }
     }
     override func viewDidLayoutSubviews() {
@@ -743,6 +750,7 @@ private final class CurlPage: UIViewController {
 private final class ReaderCurlController: UIViewController, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
     private struct Page {
         let locator: Locator
+        let reflowLocation: Locator
         let image: UIImage
         let selector: String?
         var previous: String?
@@ -762,6 +770,7 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
     private var cache: [String: Page] = [:]
     private var order: [String] = []
     private var current: CurlPage?
+    private(set) var userLocation: Locator?
     private var previous: CurlPage?
     private var following: CurlPage?
     private var active = true
@@ -845,10 +854,15 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
     }
     private func capture(_ locator: Locator) async -> Page {
         let first = await reader.firstVisibleElementLocator()
+        var reflowLocation = locator
+        if case let .success(anchor as [String: String]) = await reader.evaluateJavaScript(ReaderController.visibleTextAnchor) {
+            reflowLocation.locations.cssSelector = anchor["selector"]
+            reflowLocation.text = Locator.Text(after: anchor["after"], before: anchor["before"], highlight: anchor["highlight"])
+        }
         let image = UIGraphicsImageRenderer(bounds: reader.view.bounds).image { _ in
             reader.view.drawHierarchy(in: reader.view.bounds, afterScreenUpdates: true)
         }
-        return Page(locator: locator, image: image, selector: first?.locations.cssSelector)
+        return Page(locator: locator, reflowLocation: reflowLocation, image: image, selector: first?.locations.cssSelector)
     }
     private func trace(_ message: String) {
         #if DEBUG
@@ -928,6 +942,7 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
 
     private func prepare() async {
         guard active, let original = reader.currentLocation else { return }
+        userLocation = original
         working = true; busy()
         pager.view.isUserInteractionEnabled = false
         do {
@@ -935,6 +950,7 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
             if let existing = cache[key(original)] { record = existing }
             else { record = await capture(original) }
             guard active else { return }
+            userLocation = record.reflowLocation
             let page = CurlPage(locator: original, image: record.image)
             current = page
             pager.setViewControllers([page], direction: .forward, animated: false)
@@ -998,6 +1014,9 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
             if let current { settled(current.locator, false) }
             return
         }
+        // Publish the completed target synchronously, before go or prepare can
+        // suspend. Rotation must keep it even while the reader visits neighbors.
+        userLocation = cache[key(target.locator)]?.reflowLocation ?? target.locator
         working = true; pager.view.isUserInteractionEnabled = false
         task = Task {
             guard active else { return }

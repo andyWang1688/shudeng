@@ -149,6 +149,83 @@ final class ReadingUITests: XCTestCase {
         app.buttons["取消"].tap()
     }
 
+    func testCurlRotationDuringInitialPrefetchPreservesUserPage() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        app.tables["library"].cells[bookID].tap()
+        waitForBody(app)
+        settings(app, mode: "分页", dark: false, font: 100)
+        contents("第1章", in: app)
+        waitForBody(app)
+        evidence("curl-busy-rotation-original", app)
+        settings(app, mode: "仿真", dark: false, font: 100, wait: false)
+        // Reuse the acceptance timing; the trace must independently confirm
+        // that rotation interrupted an actual temporary-neighbor visit.
+        Thread.sleep(forTimeInterval: 1.55)
+        print("CURL_INITIAL_PREFETCH_ROTATE \(Date().timeIntervalSince1970)")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForBody(app)
+        assertVisibleChapterStart(app)
+        evidence("curl-busy-rotation-landscape", app)
+        print("CAPTURE_CURL_INITIAL_LANDSCAPE_NOW")
+        Thread.sleep(forTimeInterval: 3)
+        app.terminate(); app.launch()
+        app.tables["library"].cells[bookID].tap()
+        waitForBody(app)
+        assertVisibleChapterStart(app)
+        evidence("curl-busy-rotation-landscape-restart", app)
+        XCUIDevice.shared.orientation = .portrait
+        waitForBody(app)
+        XCTAssertTrue(visibleMarkers(app).contains("C1-P01"))
+    }
+
+    private func assertVisibleChapterStart(_ app: XCUIApplication) {
+        let title = app.webViews.staticTexts["第1章：原创验证文本"]
+        XCTAssertTrue(title.exists)
+        XCTAssertGreaterThan(title.frame.minX, 5)
+        XCTAssertTrue(app.webViews.firstMatch.frame.contains(title.frame), "Must show the user's chapter start in landscape, not the temporary neighbor")
+    }
+
+    func testCurlRotationDuringCompletedTurnPrefetchKeepsTarget() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        app.tables["library"].cells[bookID].tap()
+        waitForBody(app)
+        settings(app, mode: "仿真", dark: false, font: 100)
+        contents("第1章", in: app)
+        waitForBody(app)
+        XCTAssertTrue(visibleMarkers(app).contains("C1-P01"))
+        let content = app.otherElements["reading-content"]
+        content.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.6)).press(forDuration: 0.1,
+            thenDragTo: content.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.6)),
+            withVelocity: .fast, thenHoldForDuration: 0)
+        Thread.sleep(forTimeInterval: 0.9)
+        print("CURL_COMPLETED_TURN_PREFETCH_ROTATE \(Date().timeIntervalSince1970)")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForBody(app)
+        XCTAssertTrue(visibleMarkers(app).contains("C1-P03"), "Keep the completed target, not the previously committed first page")
+        evidence("curl-completed-turn-busy-landscape", app)
+        print("CAPTURE_CURL_TARGET_LANDSCAPE_NOW")
+        Thread.sleep(forTimeInterval: 3)
+        app.terminate(); app.launch()
+        app.tables["library"].cells[bookID].tap()
+        waitForBody(app)
+        XCTAssertTrue(visibleMarkers(app).contains("C1-P03"))
+        evidence("curl-completed-turn-landscape-restart", app)
+        XCUIDevice.shared.orientation = .portrait
+        waitForBody(app)
+        evidence("curl-completed-turn-return-portrait", app)
+        // Landscape starts inside paragraph 2's first English occurrence. That
+        // exact text fits at the bottom of the preceding portrait page; P03
+        // need not fit too. Pair the paragraph check with the saved screenshot
+        // and the reflow Locator's before/highlight/after to verify occurrence.
+        XCTAssertTrue(visibleMarkers(app).contains("C1-P02"))
+    }
+
     func testCurlRotationRebuildsUsableViewport() {
         continueAfterFailure = false
         let app = XCUIApplication()
