@@ -394,9 +394,19 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             let accepted = validResource ? await navigator.go(to: target, options: .init(animated: false)) : false
             var arrived = false
             if accepted {
+                // Wait beyond Readium's scroll-end debounce, then refresh from
+                // the native viewport even when the jump stayed on the same page.
+                try? await Task.sleep(nanoseconds: 350_000_000)
                 for _ in 0..<60 {
                     if loadFailed { break }
-                    if navigator.currentLocation?.href.removingFragment() == resource,
+                    // Readium can expose the pending search Locator before its
+                    // native position is recomputed. Never seed curl caches with
+                    // that temporary selector/quote and a fallback progression.
+                    if let current = await navigator.refreshLocationFromViewport(),
+                       current.href.removingFragment() == resource,
+                       current.locations.progression != nil,
+                       current.locations.cssSelector == nil, current.locations.domRange == nil,
+                       current.text.highlight == nil,
                        case let .success(visible as Bool) = await navigator.evaluateJavaScript(Self.targetIsVisible(target)), visible {
                         arrived = true
                         break
@@ -696,12 +706,18 @@ private final class BookNavigationController: UITableViewController {
         super.init(style: .insetGrouped)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setToolbarHidden(false, animated: false)
+    }
     override func viewDidLoad() {
         super.viewDidLoad()
         tabs.selectedSegmentIndex = 0
         tabs.addTarget(self, action: #selector(refresh), for: .valueChanged)
         navigationItem.titleView = tabs
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: "完成", style: .done, target: self, action: #selector(done))
+        toolbarItems = [UIBarButtonItem(title: "书内搜索", style: .plain, target: self, action: #selector(openSearch))]
+        navigationController?.setToolbarHidden(false, animated: false)
         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addBookmark))
         navigationItem.rightBarButtonItem?.accessibilityLabel = "添加书签"
         tableView.accessibilityIdentifier = "book-navigation"
@@ -717,6 +733,10 @@ private final class BookNavigationController: UITableViewController {
         }
     }
     @objc private func refresh() { tableView.reloadData() }
+    @objc private func openSearch() {
+        guard let book = library.books.first(where: { $0.id == bookID }) else { return }
+        navigationController?.pushViewController(BookSearchController(library: library, book: book, navigate: navigate), animated: true)
+    }
     @objc private func done() { dismiss(animated: true) }
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? { feedback }
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {

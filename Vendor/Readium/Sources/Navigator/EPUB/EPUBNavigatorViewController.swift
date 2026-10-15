@@ -711,6 +711,17 @@ open class EPUBNavigatorViewController: InputObservableViewController,
         return await spreadView.findFirstVisibleElementLocator()
     }
 
+    /// Shudeng extension: same-page jumps may leave a pending Locator in
+    /// currentLocation because an unchanged progression emits no new callback.
+    /// Call only after go completes and verify the target in the rendered DOM.
+    public func refreshLocationFromViewport() async -> Locator? {
+        guard state == .idle else { return nil }
+        let result = await computeCurrentLocationAndViewport()
+        guard state == .idle else { return nil }
+        (currentLocation, viewport) = result
+        return currentLocation
+    }
+
     /// Last current location notified to the delegate.
     /// Used to avoid sending twice the same location.
     private var notifiedCurrentLocation: Locator?

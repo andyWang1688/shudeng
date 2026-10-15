@@ -10,6 +10,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         do {
             let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Shudeng")
             let library = try LibraryStore(root: root)
+            library.prepareBooks()
             let tabs = UITabBarController()
             let shelf = UINavigationController(rootViewController: LibraryController(library: library))
             shelf.tabBarItem = UITabBarItem(title: "书架", image: UIImage(systemName: "books.vertical"), tag: 0)
@@ -88,14 +89,19 @@ final class AboutController: UIViewController {
 final class LibraryController: UITableViewController, UIDocumentPickerDelegate {
     private let library: LibraryStore
     private var busy = false
+    private var preparationObserver: NSObjectProtocol?
     init(library: LibraryStore) { self.library = library; super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    deinit { if let preparationObserver { NotificationCenter.default.removeObserver(preparationObserver) } }
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "书架"
         navigationController?.navigationBar.prefersLargeTitles = true
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "导入", style: .plain, target: self, action: #selector(importFile))
         tableView.accessibilityIdentifier = "library"
+        preparationObserver = NotificationCenter.default.addObserver(forName: BookPreparation.changed, object: library.preparation, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
         refresh()
     }
     private func refresh() {
@@ -136,7 +142,10 @@ final class LibraryController: UITableViewController, UIDocumentPickerDelegate {
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
         cell.textLabel?.text = book.title
         cell.textLabel?.numberOfLines = 0
-        cell.detailTextLabel?.text = book.author.isEmpty ? "EPUB" : book.author
+        let state = library.preparation.states[book.id] ?? BookPreparationState()
+        cell.detailTextLabel?.text = (book.author.isEmpty ? "EPUB" : book.author) + "\n" + state.message
+        cell.detailTextLabel?.numberOfLines = 0
+        cell.accessibilityValue = state.message
         cell.accessoryType = .disclosureIndicator
         cell.accessibilityIdentifier = "book-\(book.id)"
         return cell

@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 import ReadiumShared
 @testable import Shudeng
 
@@ -27,6 +28,131 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(try reopened.location(for: first.book.id)?.href.string, "OEBPS/ch2.xhtml")
         XCTAssertEqual(try reopened.location(for: first.book.id)?.locations["cssSelector"]?.string, "#c2-p10")
         _ = try await reopened.open(first.book)
+    }
+}
+
+extension LibraryTests {
+    private func indexRows(_ url: URL, _ sql: String) throws -> [[String]] {
+        var db: OpaquePointer?, statement: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
+        defer { sqlite3_finalize(statement); sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_prepare_v2(db, sql, -1, &statement, nil), SQLITE_OK)
+        var rows: [[String]] = []
+        var step = sqlite3_step(statement)
+        while step == SQLITE_ROW {
+            rows.append((0..<sqlite3_column_count(statement)).map { String(cString: sqlite3_column_text(statement, $0)) })
+            step = sqlite3_step(statement)
+        }
+        guard step == SQLITE_DONE else { throw IndexError.storage }
+        return rows
+    }
+    private func indexExecute(_ url: URL, _ sql: String) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(url.path, &db) == SQLITE_OK else { throw IndexError.storage }
+        defer { sqlite3_close(db) }
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw IndexError.storage }
+    }
+
+    func testBookIndexOriginalOccurrencesIsolationAndRebuildKeepRecords() async throws {
+        let library = try LibraryStore(root: root)
+        let book = try await library.importBook(from: fixture()).book
+        let url = root.appendingPathComponent("verification-index.sqlite")
+        let index = BookIndex(url: url)
+        try await index.prepare(bookID: book.id, file: library.fileURL(for: book)) { _ in }
+        let repeats = try await index.search(bookID: book.id, query: "The same sentence can belong to a different argument.")
+        XCTAssertEqual(repeats.count, 12)
+        XCTAssertEqual(Set(repeats.map { $0.locator.href.string }).count, 3)
+        let pair = Array(repeats.prefix(2))
+        XCTAssertEqual(pair[0].locator.locations.cssSelector, pair[1].locator.locations.cssSelector)
+        XCTAssertNotEqual(pair[0].locator.text.before, pair[1].locator.text.before)
+        XCTAssertTrue(pair[1].locator.text.before!.contains(pair[0].locator.text.highlight!))
+        XCTAssertNotEqual(pair[0].id, pair[1].id)
+        let chinese = try await index.search(bookID: book.id, query: "同一句话也可能")
+        XCTAssertEqual(chinese.count, 12)
+        let english = try await index.search(bookID: book.id, query: "READING RELIES ON CONTEXT")
+        XCTAssertEqual(english.count, 168)
+        let noMatch = try await index.search(bookID: book.id, query: "not present ' OR 1=1 --")
+        XCTAssertTrue(noMatch.isEmpty)
+        let other = "different-book"
+        try await index.prepare(bookID: other, file: fixture()) { _ in }
+        let isolated = try await index.search(bookID: book.id, query: "C3-P30")
+        XCTAssertEqual(isolated.count, 1)
+        let missing = try await index.search(bookID: "missing-book", query: "C3-P30")
+        XCTAssertTrue(missing.isEmpty)
+        try library.saveBookmark(Bookmark(locator: pair[1].locator), for: book.id)
+        try library.saveLocation(pair[1].locator, for: book.id)
+        let snapshot = try Data(contentsOf: root.appendingPathComponent("library.json"))
+        let rows = try indexRows(url, "SELECT chapter,ordinal,original,locator FROM fragments WHERE book_id='\(book.id)' ORDER BY chapter,ordinal")
+        let otherRows = try indexRows(url, "SELECT id,original,locator FROM fragments WHERE book_id='\(other)' ORDER BY chapter,ordinal")
+        try await index.prepare(bookID: book.id, file: fixture(), rebuild: true) { _ in }
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("library.json")), snapshot)
+        XCTAssertTrue(try indexRows(url, "SELECT chapter,ordinal,original,locator FROM fragments WHERE book_id='\(book.id)' ORDER BY chapter,ordinal") == rows)
+        XCTAssertTrue(try indexRows(url, "SELECT id,original,locator FROM fragments WHERE book_id='\(other)' ORDER BY chapter,ordinal") == otherRows)
+        XCTAssertEqual(try indexRows(url, "SELECT count(*) FROM fragments f LEFT JOIN fragment_terms t ON t.rowid=f.id WHERE t.rowid IS NULL"), [["0"]])
+        print("I8_SQLITE occurrences=12 chinese=12 english=168 chapters=3 rebuild-identical=true other-book-unchanged=true")
+    }
+
+    func testBookIndexCommittedCheckpointInterruptionAndRealJournalFailureResume() async throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("checkpoint.sqlite")
+        let index = BookIndex(url: url)
+        let interrupted = Task {
+            try await index.prepare(bookID: "checkpoint", file: fixture()) { state in
+                if state.completed == 1 { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        do { try await interrupted.value; XCTFail("Expected interruption") }
+        catch is CancellationError { }
+        let first = try indexRows(url, "SELECT id,original,locator FROM fragments ORDER BY id")
+        XCTAssertFalse(first.isEmpty)
+        XCTAssertEqual(try indexRows(url, "SELECT completed,total FROM preparations"), [["1", "3"]])
+        // A directory at the real SQLite rollback-journal path prevents an actual write.
+        let journal = URL(fileURLWithPath: url.path + "-journal")
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: false)
+        let reopened = BookIndex(url: url)
+        do { try await reopened.prepare(bookID: "checkpoint", file: fixture()) { _ in }; XCTFail("Expected actual SQLite write failure") }
+        catch { XCTAssertTrue(error is IndexError) }
+        try FileManager.default.removeItem(at: journal)
+        XCTAssertEqual(try indexRows(url, "SELECT completed,total FROM preparations"), [["1", "3"]])
+        XCTAssertTrue(try indexRows(url, "SELECT id,original,locator FROM fragments ORDER BY id") == first)
+        // Database-only fault: abort after three rows of the next chapter have
+        // really been inserted in the same transaction. No product fault hook.
+        try indexExecute(url, """
+        CREATE TRIGGER issue8_abort_chapter BEFORE INSERT ON fragments
+        WHEN NEW.chapter=1 AND (SELECT count(*) FROM fragments WHERE book_id=NEW.book_id AND chapter=1)=3
+        BEGIN SELECT RAISE(ABORT,'issue8 transaction boundary'); END
+        """)
+        do { try await reopened.prepare(bookID: "checkpoint", file: fixture()) { _ in }; XCTFail("Expected in-transaction abort") }
+        catch { XCTAssertTrue(error is IndexError) }
+        XCTAssertEqual(try indexRows(url, "SELECT completed,total FROM preparations"), [["1", "3"]])
+        XCTAssertEqual(try indexRows(url, "SELECT count(*) FROM chapters WHERE ordinal=1"), [["0"]])
+        XCTAssertEqual(try indexRows(url, "SELECT count(*) FROM fragments WHERE chapter=1"), [["0"]])
+        XCTAssertEqual(try indexRows(url, "SELECT count(*) FROM fragment_terms"), [[String(first.count)]])
+        XCTAssertTrue(try indexRows(url, "SELECT id,original,locator FROM fragments ORDER BY id") == first)
+        try indexExecute(url, "DROP TRIGGER issue8_abort_chapter")
+        var progress: [Int] = []
+        try await reopened.prepare(bookID: "checkpoint", file: fixture()) { progress.append($0.completed) }
+        XCTAssertEqual(progress, [1, 2, 3])
+        XCTAssertTrue(Array(try indexRows(url, "SELECT id,original,locator FROM fragments ORDER BY id").prefix(first.count)) == first)
+        XCTAssertEqual(try indexRows(url, "SELECT count(*) FROM chapters"), [["3"]])
+        XCTAssertEqual(try indexRows(url, "SELECT count(*) FROM (SELECT book_id,chapter,ordinal,count(*) n FROM fragments GROUP BY book_id,chapter,ordinal HAVING n>1)"), [["0"]])
+        print("I8_CHECKPOINT committed=1/3 journal-initialization-write-failed=true transaction-aborted-after-3-inserts=true chapter-and-FTS-rollback=true old-original-unchanged=true resumed=[1,2,3] duplicates=0")
+    }
+
+    func testBookIndexInlineWhitespaceUnicodeAndNestedBlockIdentity() throws {
+        let html = "<html><body><div>开头<p> 😀 A&amp;B  <em>同一句</em>\n同一句 café</p>尾部<p>同一句</p></div><script>秘密</script></body></html>"
+        let fragments = try BookText.fragments(html: html, href: AnyURL(string: "chapter.xhtml")!, title: "章节")
+        XCTAssertEqual(fragments.map(\.text), ["开头", " 😀 A&B  同一句\n同一句 café", "尾部", "同一句"])
+        XCTAssertEqual(fragments[2].locator.text.before, "开头 😀 A&B  同一句\n同一句 café")
+        XCTAssertEqual(fragments[2].locator.text.after, "同一句")
+        XCTAssertEqual(fragments[1].locator.locations.cssSelector, "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1) > p:nth-of-type(1)")
+        XCTAssertFalse(fragments.contains { $0.text.contains("秘密") })
+        XCTAssertEqual(BookText.tokens("café"), BookText.tokens("CAFE"))
+        let hidden = try BookText.fragments(html: "<p>可见<span><span hidden>隐秘标记</span>后续可见</span>正文</p>", href: AnyURL(string: "hidden.xhtml")!, title: "隐藏边界")
+        XCTAssertEqual(hidden.map(\.text), ["可见", "后续可见", "正文"])
+        XCTAssertEqual(hidden[1].locator.text.before, "隐秘标记")
+        XCTAssertEqual(hidden[2].locator.text.before, "可见隐秘标记后续可见")
+        XCTAssertEqual(hidden[1].locator.locations.cssSelector, "html:nth-of-type(1) > body:nth-of-type(1) > p:nth-of-type(1) > span:nth-of-type(1)")
     }
 }
 

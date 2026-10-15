@@ -85,6 +85,7 @@ enum LibraryError: LocalizedError {
 final class LibraryStore {
     private(set) var books: [Book] = []
     let root: URL
+    lazy var preparation = BookPreparation(root: root)
     private let fileManager = FileManager.default
     private let http = DefaultHTTPClient()
     private lazy var retriever = AssetRetriever(httpClient: http)
@@ -134,7 +135,12 @@ final class LibraryStore {
             if !existed { try? fileManager.removeItem(at: destination) }
             throw LibraryError.save
         }
+        preparation.start(book, file: destination)
         return ImportedBook(book: book, isDuplicate: existing != nil)
+    }
+
+    func prepareBooks() {
+        for book in books { preparation.start(book, file: fileURL(for: book)) }
     }
 
     func fileURL(for book: Book) -> URL { files.appendingPathComponent(book.id + ".epub") }

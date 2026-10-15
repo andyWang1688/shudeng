@@ -1,6 +1,9 @@
 import XCTest
 
 final class ReadingUITests: XCTestCase {
+    private let searchBookID = "book-3c78bfd8640c246c6a6efa49667f89b3f7819721b22c9b9682281d79c97183c3"
+    private let searchOtherID = "book-ad52254cb4e46c6077c7bbe4f1c1822100a98ae6916fd87cb071930b8bd45a98"
+    private let searchLongID = "book-4aa9213d7e01875d35c2bd6f4409c5e902c9b57a5ce7c4ea8c03e8e888396ce8"
     private let bookID = "book-a08282a3fd59d6398d4173469b0159c51c5b980afaa1aa3024cfd05a43b14a27"
     private let navigationBookID = "book-51747c29e712f6e92e2a5c385cdddd773258b84ca9e671ef6df9aedd59f83cc2"
     private func choose(_ name: String, in app: XCUIApplication) {
@@ -16,8 +19,11 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(folder.waitForExistence(timeout: 5))
         folder.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
         let file = app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", name + ",")).firstMatch
+        let grid = app.collectionViews.matching(identifier: "File View").allElementsBoundByIndex.last(where: { $0.isHittable }) ?? app.collectionViews["File View"].firstMatch
+        if name.hasPrefix("search-") {
+            for _ in 0..<8 where !file.exists { grid.swipeUp() }
+        }
         XCTAssertTrue(file.waitForExistence(timeout: 5))
-        let grid = app.collectionViews["File View"]
         for _ in 0..<4 where file.frame.maxY > app.frame.height - 100 { grid.swipeUp() }
         if name == "curl-failure.epub" {
             // Keep the first row below Files' sticky search field.
@@ -1170,5 +1176,241 @@ extension ReadingUITests {
         app.buttons["返回原文"].tap()
         waitForBody(app)
         evidence("note-small-return", app)
+    }
+}
+
+extension ReadingUITests {
+    private func searchBook(_ app: XCUIApplication, query: String, count: Int) {
+        app.buttons["目录与书签"].tap()
+        XCTAssertTrue(app.buttons["书内搜索"].waitForExistence(timeout: 5))
+        app.buttons["书内搜索"].tap()
+        searchQuery(app, query: query, count: count)
+    }
+
+    func testBookSearchHiddenVisibleInlineIsolationRebuildAndRestart() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tables["library"].cells[searchBookID].tap()
+        if app.alerts["翻页准备失败"].waitForExistence(timeout: 1) { app.alerts.buttons["使用分页"].tap() }
+        waitForBody(app)
+        settings(app, mode: "仿真", dark: true, font: 150)
+        searchBook(app, query: "CAFE", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap()
+        waitForBody(app)
+        evidence("search-inline-accent-native-position-curl-focused", app)
+        searchBook(app, query: "OTHER-ONLY", count: 0)
+        app.buttons["重新准备"].tap()
+        XCTAssertTrue(app.staticTexts["书内资料可用（2章）"].waitForExistence(timeout: 15))
+        evidence("search-explicit-rebuild-focused", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["完成"].tap()
+        app.buttons["书架"].tap()
+        app.tables["library"].cells[searchOtherID].tap()
+        waitForBody(app)
+        searchBook(app, query: "S1-SECOND", count: 0)
+        searchQuery(app, query: "OTHER-ONLY", count: 2)
+        evidence("search-other-book-only-focused", app)
+        app.tables["book-search-results"].cells.element(boundBy: 1).tap()
+        waitForBody(app)
+        app.terminate(); app.launch()
+        app.tables["library"].cells[searchBookID].tap()
+        waitForBody(app)
+        searchBook(app, query: "重复句出现位置", count: 3)
+        searchHit(app, containing: "S1-SECOND")
+        searchMarkerVisible(app, "S1-SECOND")
+        evidence("search-focused-restart-second-original", app)
+    }
+
+    func testBookPreparationRealWriteFailureRetryAndReading() throws {
+        guard ProcessInfo.processInfo.environment["SHUDENG_INDEX_FAULT"] == "1" else { throw XCTSkip("Run with scripts/verify-index-failure.sh") }
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tables["library"].cells[searchBookID].tap()
+        waitForBody(app)
+        searchBook(app, query: "S1-SECOND", count: 1)
+        print("I8_INJECT_INDEX_FAULT")
+        Thread.sleep(forTimeInterval: 3)
+        app.buttons["重新准备"].tap()
+        let failure = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "资料准备失败")).firstMatch
+        XCTAssertTrue(failure.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["重试准备"].exists)
+        evidence("search-real-sqlite-write-failure-visible", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["完成"].tap()
+        waitForBody(app)
+        evidence("search-index-failure-still-reading", app)
+        searchBook(app, query: "S1-SECOND", count: 1)
+        print("I8_RESTORE_INDEX_FAULT")
+        Thread.sleep(forTimeInterval: 3)
+        app.buttons["重试准备"].tap()
+        XCTAssertTrue(app.staticTexts["书内资料可用（2章）"].waitForExistence(timeout: 15))
+        searchHit(app, containing: "S1-SECOND")
+        searchMarkerVisible(app, "S1-SECOND")
+        evidence("search-real-write-retry-still-exact-occurrence", app)
+    }
+
+    func testBookSearchSharedNavigationContentsAndBookmarkRegression() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tables["library"].cells[searchBookID].tap()
+        waitForBody(app)
+        contents("搜索第2章", in: app)
+        waitForBody(app)
+        searchMarkerVisible(app, "S2-CROSS")
+        app.buttons["目录与书签"].tap()
+        app.buttons["添加书签"].tap()
+        XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
+        let saved = app.tables["book-navigation"].cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "bookmark-")).allElementsBoundByIndex.last!
+        let id = saved.identifier
+        app.buttons["完成"].tap()
+        contents("搜索第1章", in: app)
+        waitForBody(app)
+        app.buttons["目录与书签"].tap()
+        app.segmentedControls.buttons["书签"].tap()
+        app.tables["book-navigation"].cells[id].tap()
+        waitForBody(app)
+        searchMarkerVisible(app, "S2-CROSS")
+        evidence("search-shared-native-refresh-contents-bookmark-return", app)
+    }
+
+    func testBookSearchVisibleAfterNestedHiddenSamePageJump() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tables["library"].cells[searchBookID].tap()
+        waitForBody(app)
+        searchBook(app, query: "CAFE", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap()
+        waitForBody(app)
+        searchBook(app, query: "后续可见", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap()
+        waitForBody(app)
+        XCTAssertFalse(app.alerts["无法定位原文"].exists)
+        XCTAssertFalse(app.alerts["翻页准备失败"].exists)
+        evidence("search-visible-after-nested-hidden-same-page-native-refresh", app)
+    }
+    private func searchQuery(_ app: XCUIApplication, query: String, count: Int) {
+        let field = app.searchFields["book-search-query"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        let clear = field.buttons.firstMatch
+        if clear.exists { clear.tap() }
+        field.typeText(query + "\n")
+        let expected = count == 0 ? "已准备原文中没有匹配结果" : "找到\(count)处原文"
+        XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 15))
+        XCTAssertEqual(app.tables["book-search-results"].cells.count, count)
+    }
+    private func searchHit(_ app: XCUIApplication, containing marker: String) {
+        let hit = app.tables["book-search-results"].cells.containing(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+        XCTAssertTrue(hit.waitForExistence(timeout: 5))
+        hit.tap()
+        waitForBody(app)
+        evidence("search-arrived-" + marker, app)
+    }
+    private func searchMarkerVisible(_ app: XCUIApplication, _ text: String) {
+        let marker = app.webViews.staticTexts[text].firstMatch
+        XCTAssertTrue(marker.waitForExistence(timeout: 5))
+        let body = app.webViews.firstMatch.frame
+        XCTAssertTrue(marker.frame.width > 0 && marker.frame.minX > 5 && body.contains(marker.frame), "Original marker is outside rendered viewport: \(text)")
+    }
+    func testBookSearchChineseEnglishRepeatedOccurrenceHiddenAndThreeModes() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        for name in ["search-fixture.epub", "search-other.epub"] {
+            choose(name, in: app)
+            app.alerts.buttons["知道了"].tap()
+        }
+        app.tables["library"].cells[searchBookID].tap()
+        waitForBody(app)
+        settings(app, mode: "分页", dark: false, font: 100)
+        searchBook(app, query: "the same sentence", count: 3)
+        evidence("search-english-three-original-occurrences", app)
+        searchHit(app, containing: "S1-SECOND")
+        searchMarkerVisible(app, "S1-SECOND")
+        settings(app, mode: "滚动", dark: true, font: 200)
+        searchBook(app, query: "重复句出现位置", count: 3)
+        evidence("search-chinese-same-paragraph-second-occurrence", app)
+        searchHit(app, containing: "S1-SECOND")
+        searchMarkerVisible(app, "S1-SECOND")
+        settings(app, mode: "仿真", dark: true, font: 150)
+        searchBook(app, query: "the same sentence", count: 3)
+        searchHit(app, containing: "S2-CROSS")
+        searchMarkerVisible(app, "S2-CROSS")
+        searchBook(app, query: "the same sentence", count: 3)
+        searchHit(app, containing: "S1-FIRST")
+        curlTurn(app, forward: true)
+        curlTurn(app, forward: false)
+        searchMarkerVisible(app, "S1-FIRST")
+        evidence("search-curl-cache-return-first-occurrence", app)
+        searchBook(app, query: "隐秘标记", count: 0)
+        evidence("search-hidden-descendant-not-indexed", app)
+        searchQuery(app, query: "后续可见", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap()
+        waitForBody(app)
+        evidence("search-visible-after-hidden-exact-offset", app)
+        searchBook(app, query: "CAFE", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap()
+        waitForBody(app)
+        evidence("search-inline-entity-emoji-accent-original", app)
+        searchBook(app, query: "OTHER-ONLY", count: 0)
+        evidence("search-current-book-isolation", app)
+        app.buttons["重新准备"].tap()
+        XCTAssertTrue(app.staticTexts["书内资料可用（2章）"].waitForExistence(timeout: 15))
+        evidence("search-explicit-rebuild-ready", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["完成"].tap()
+        app.buttons["书架"].tap()
+        app.tables["library"].cells[searchOtherID].tap()
+        waitForBody(app)
+        searchBook(app, query: "S1-SECOND", count: 0)
+        searchQuery(app, query: "OTHER-ONLY", count: 2)
+        evidence("search-other-book-only-own-original", app)
+        app.tables["book-search-results"].cells.element(boundBy: 1).tap()
+        waitForBody(app)
+        app.terminate()
+        app.launch()
+        app.tables["library"].cells[searchBookID].tap()
+        waitForBody(app)
+        searchBook(app, query: "重复句出现位置", count: 3)
+        searchHit(app, containing: "S1-SECOND")
+        searchMarkerVisible(app, "S1-SECOND")
+        evidence("search-restart-original-identity-retained", app)
+        print("I8_UI original-second-occurrence=true Chinese=3 English=3 hidden=0 visible-after-hidden=1 other-book=isolated modes=3 restart=true")
+    }
+
+    func testBookPreparationLongImportReadInterruptAndResume() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        choose("search-long.epub", in: app)
+        app.alerts.buttons["知道了"].tap()
+        let row = app.tables["library"].cells[searchLongID]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue((row.value as? String ?? "").contains("正在准备"))
+        evidence("search-long-preparing-does-not-block-shelf", app)
+        row.tap()
+        waitForBody(app)
+        evidence("search-long-reading-during-preparation", app)
+        print("I8_LONG_BEFORE_INTERRUPT")
+        app.terminate()
+        print("I8_LONG_TERMINATED")
+        // The sidecar snapshots committed SQLite after termination, before startup resumes.
+        Thread.sleep(forTimeInterval: 3)
+        app.launch()
+        let ready = NSPredicate { _, _ in (app.tables["library"].cells[self.searchLongID].value as? String ?? "").contains("书内资料可用") }
+        expectation(for: ready, evaluatedWith: app)
+        waitForExpectations(timeout: 180)
+        evidence("search-long-resumed-all-chapters-committed", app)
+        app.tables["library"].cells[searchLongID].tap()
+        waitForBody(app)
+        searchBook(app, query: "L40-P500", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap()
+        waitForBody(app)
+        evidence("search-long-last-committed-chapter-real-jump", app)
+        print("I8_LONG_RESUMED")
     }
 }
