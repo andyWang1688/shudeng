@@ -3,7 +3,7 @@ import SQLite3
 import ReadiumShared
 
 /// Scope is enforced before scoring and again for neighbor expansion.
-struct BookEvidenceScope {
+struct BookEvidenceScope: Codable {
     let bookID: String
     var throughChapter: Int = Int.max
     var throughOrdinal: Int = Int.max
@@ -257,9 +257,11 @@ extension BookIndex {
         return ChapterRetrieval(evidence: selected, ranks: ranks, groups: groups)
     }
 
-    func languageSample(bookID: String) throws -> String {
+    func languageSample(bookID: String, scope: BookEvidenceScope? = nil) throws -> String {
         let db = try IndexDatabase(url: url)
-        return String(try db.rows("SELECT original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal LIMIT 6", [bookID]).map { $0[0] }.joined(separator: " ").prefix(500))
+        let scope = scope ?? BookEvidenceScope(bookID: bookID)
+        guard scope.bookID == bookID else { throw QuestionError.scope }
+        return String(try db.rows("SELECT original FROM fragments WHERE book_id=? AND (chapter<? OR (chapter=? AND ordinal<=?)) ORDER BY chapter,ordinal LIMIT 6", [bookID, String(scope.throughChapter), String(scope.throughChapter), String(scope.throughOrdinal)]).map { $0[0] }.joined(separator: " ").prefix(500))
     }
 
     func localEvidence(scope: BookEvidenceScope, query: String) throws -> [QuestionEvidence] {

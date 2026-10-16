@@ -124,6 +124,183 @@ final class QuestionTests: XCTestCase {
 import WebKit
 
 extension QuestionTests {
+    private func issue12Attachment(_ name: String, store: QuestionStore) throws {
+        let attachment = XCTAttachment(data: try JSONEncoder().encode(store.records), uniformTypeIdentifier: "public.json")
+        attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+    }
+    private func issue12Book() async throws -> (LibraryStore, Book) {
+        let library = try LibraryStore(root: root)
+        let file = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "semantic-fixture", withExtension: "epub", subdirectory: "Fixtures"))
+        let book = try await library.importBook(from: file).book
+        for _ in 0..<2400 {
+            if library.preparation.states[book.id]?.ready == true { await library.preparation.waitForCurrentWork(); return (library, book) }
+            if let failure = library.preparation.states[book.id]?.failure { throw NSError(domain: failure, code: 1) }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw QuestionError.preparation
+    }
+    private func issue12Wait(_ store: QuestionStore, id: UUID) async throws {
+        for _ in 0..<600 {
+            if let state = store.record(id)?.state, state == .complete || state == .incomplete { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTFail("Request did not finish")
+    }
+    func testIssue12ConversationRenameDeleteDraftAndRealWriteFailures() throws {
+        let store = QuestionStore(root: root, secrets: secrets)
+        var first = question(); first.state = .complete; first.answer = "Original answer"; first.citations = [first.selection]
+        XCTAssertTrue(store.save(first))
+        let second = question(); XCTAssertTrue(store.save(second))
+        let follow = try XCTUnwrap(store.followUp(first.id)); store.edit(follow, text: "Saved follow-up draft")
+        XCTAssertNil(store.followUp(first.id)); XCTAssertEqual(store.conversations.count, 2)
+        XCTAssertEqual(QuestionStore(root: root, secrets: secrets).record(follow)?.question, "Saved follow-up draft")
+        let path = root.appendingPathComponent("reading-questions.json"), backup = root.appendingPathComponent("issue12-before.json")
+        try FileManager.default.moveItem(at: path, to: backup)
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
+        XCTAssertFalse(store.rename(first.id, title: "Renamed")); XCTAssertFalse(store.delete(first.id))
+        XCTAssertEqual(store.conversation(first.id)?.title, first.question); XCTAssertEqual(store.records.count, 3)
+        try issue12Attachment("issue12-failed-management", store: store)
+        try FileManager.default.removeItem(at: path); try FileManager.default.moveItem(at: backup, to: path)
+        XCTAssertTrue(store.rename(first.id, title: "Renamed"))
+        let restored = QuestionStore(root: root, secrets: secrets)
+        XCTAssertEqual(restored.conversation(first.id)?.title, "Renamed"); XCTAssertEqual(restored.record(first.id)?.question, first.question)
+        XCTAssertTrue(restored.delete(first.id))
+        let deleted = QuestionStore(root: root, secrets: secrets)
+        XCTAssertEqual(deleted.records.map(\.id), [second.id]); try issue12Attachment("issue12-deleted-restarted", store: deleted)
+    }
+    func testIssue12DeleteDuringGenerationDoesNotResurrect() async throws {
+        let (library, book) = try await issue12Book()
+        let configurations = try AIConfigurationStore(root: root, secrets: secrets)
+        let configuration = AIConfiguration(name: "Issue12 slow", format: .openAI, address: "http://127.0.0.1:18772/v1", model: "slow")
+        try configurations.save(configuration, newKey: "not-a-real-credential"); try configurations.select(configuration.id)
+        let store = QuestionStore(root: root, secrets: secrets)
+        var record = ReadingQuestion(book: book, origin: try question().origin()); record.question = "生成中删除"
+        record.state = .complete; record.answer = "先前已保存回答"
+        XCTAssertTrue(store.save(record))
+        let follow = try XCTUnwrap(store.followUp(record.id)); store.edit(follow, text: "生成中删除追问")
+        store.send(follow, library: library, local: false)
+        for _ in 0..<200 where store.record(follow)?.state != .generating { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(store.record(follow)?.state, .generating)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertTrue(store.delete(record.id)); XCTAssertNil(store.record(record.id))
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        XCTAssertNil(store.record(follow)); try issue12Attachment("issue12-deleted-generation-no-resurrection", store: store)
+        XCTAssertNil(QuestionStore(root: root, secrets: secrets).record(record.id))
+        XCTAssertEqual(try JSONDecoder().decode([ReadingQuestion].self, from: Data(contentsOf: root.appendingPathComponent("reading-questions.json"))).count, 0)
+    }
+    func testIssue12FollowupHTTPCompletionWriteFailureRetry() async throws {
+        let (library, book) = try await issue12Book()
+        let configurations = try AIConfigurationStore(root: root, secrets: secrets)
+        let configuration = AIConfiguration(name: "Issue12 slow save", format: .anthropic, address: "http://127.0.0.1:18772/v1", model: "slow")
+        try configurations.save(configuration, newKey: "not-a-real-credential"); try configurations.select(configuration.id)
+        let store = QuestionStore(root: root, secrets: secrets)
+        var first = ReadingQuestion(book: book, origin: try question().origin())
+        first.question = "已保存首问"; first.state = .complete; first.answer = "已有回答"
+        XCTAssertTrue(store.save(first))
+        let follow = try XCTUnwrap(store.followUp(first.id)); store.edit(follow, text: "HTTP返回时保存失败")
+        store.send(follow, library: library, local: false)
+        for _ in 0..<200 where store.record(follow)?.state != .generating { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(store.record(follow)?.state, .generating)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let path = root.appendingPathComponent("reading-questions.json"), backup = root.appendingPathComponent("issue12-generating.json")
+        try FileManager.default.moveItem(at: path, to: backup)
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
+        try await issue12Wait(store, id: follow)
+        XCTAssertEqual(store.record(follow)?.state, .complete); XCTAssertTrue(store.unsaved(follow))
+        XCTAssertFalse(store.record(follow)?.answer.isEmpty ?? true)
+        let before = try JSONDecoder().decode([ReadingQuestion].self, from: Data(contentsOf: backup))
+        XCTAssertEqual(before.first { $0.id == follow }?.state, .generating)
+        try issue12Attachment("issue12-http-answer-unsaved", store: store)
+        try FileManager.default.removeItem(at: path); try FileManager.default.moveItem(at: backup, to: path)
+        store.retrySave(follow); store.retrySave(follow)
+        let restarted = QuestionStore(root: root, secrets: secrets)
+        XCTAssertFalse(store.unsaved(follow)); XCTAssertEqual(restarted.records.count, 2)
+        XCTAssertEqual(restarted.record(follow)?.state, .complete)
+        XCTAssertEqual(restarted.record(follow)?.conversation, first.id)
+        XCTAssertEqual(restarted.record(follow)?.answer, store.record(follow)?.answer)
+        XCTAssertEqual(restarted.record(follow)?.citations, store.record(follow)?.citations)
+        try issue12Attachment("issue12-http-answer-retried-restarted", store: restarted)
+    }
+    func testIssue12FreshEvidenceSwitchServiceAndScopeZeroHTTP() async throws {
+        let (library, book) = try await issue12Book()
+        let db = try IndexDatabase(url: root.appendingPathComponent("book-index.sqlite"))
+        let row = try XCTUnwrap(db.rows("SELECT locator FROM fragments WHERE book_id=? AND original LIKE ?", [book.id, "%初版规则规定所有停机指令%"]).first)
+        let location = try XCTUnwrap(Locator(json: JSONValue(jsonString: row[0], warnings: nil), warnings: nil))
+        let configurations = try AIConfigurationStore(root: root, secrets: secrets)
+        var configuration = AIConfiguration(name: "Issue12 OpenAI", format: .openAI, address: "http://127.0.0.1:18772/v1", model: "issue12")
+        try configurations.save(configuration, newKey: "not-a-real-credential")
+        let store = QuestionStore(root: root, secrets: secrets)
+        var first = ReadingQuestion(book: book, selection: QuestionEvidence(locator: location), neighbors: [])
+        first.question = "初版规则要求多久后执行停机，等待是为了什么？"
+        XCTAssertTrue(store.save(first)); store.send(first.id, library: library, local: false)
+        try await issue12Wait(store, id: first.id); XCTAssertEqual(store.record(first.id)?.state, .complete)
+        let firstEvidence = try XCTUnwrap(store.record(first.id)).evidence
+        let follow = try XCTUnwrap(store.followUp(first.id)); store.edit(follow, text: "那他为什么改口？")
+        configuration = AIConfiguration(name: "Issue12 Anthropic", format: .anthropic, address: "http://127.0.0.1:18772/v1", model: "issue12")
+        try configurations.save(configuration, newKey: "not-a-real-credential"); try configurations.select(configuration.id)
+        store.send(follow, library: library, local: false); try await issue12Wait(store, id: follow)
+        let changed = try XCTUnwrap(store.record(follow))
+        XCTAssertEqual(changed.state, .complete); XCTAssertEqual(changed.format, .anthropic)
+        XCTAssertEqual(store.record(first.id)?.format, .openAI)
+        let quotes = changed.evidence.map(\.quote).joined()
+        for required in ["初版规则规定", "第七日发生电池漏液", "事故后作者修订"] { XCTAssertTrue(quotes.contains(required), required) }
+        let next = try XCTUnwrap(store.followUp(first.id)); store.edit(next, text: "那切断主供电后，记录器和计时器为什么还在运行？")
+        store.send(next, library: library, local: false, scope: BookEvidenceScope(bookID: book.id)); try await issue12Wait(store, id: next)
+        let third = try XCTUnwrap(store.record(next))
+        XCTAssertEqual(third.state, .complete)
+        XCTAssertTrue(third.evidence.contains { $0.quote.contains("独立的备用电池") })
+        XCTAssertTrue(third.evidence.contains { $0.quote.contains("危险时应切断主供电") })
+        XCTAssertFalse(Set(third.evidence.map(\.locatorJSON)).subtracting(firstEvidence.map(\.locatorJSON)).isEmpty, "New evidence must enter a follow-up")
+        try issue12Attachment("issue12-real-retrieval-three-turns", store: store)
+        // Both the selected text and prior full-book answers are disallowed before any resolver HTTP.
+        let restricted = try XCTUnwrap(store.followUp(first.id)); store.edit(restricted, text: "SCOPE12-NO-HTTP-SELECTED")
+        store.send(restricted, library: library, local: false, scope: BookEvidenceScope(bookID: book.id, throughChapter: -1, throughOrdinal: -1))
+        try await issue12Wait(store, id: restricted)
+        XCTAssertEqual(store.record(restricted)?.state, .incomplete)
+        XCTAssertTrue(store.record(restricted)?.failure?.contains("允许的参考范围") == true)
+        store.edit(restricted, text: "SCOPE12-NO-HTTP-HISTORY")
+        // Selection is allowed here, but previous answers used a wider scope.
+        store.send(restricted, library: library, local: false, scope: BookEvidenceScope(bookID: book.id, throughChapter: 0, throughOrdinal: Int.max))
+        try await issue12Wait(store, id: restricted)
+        XCTAssertEqual(store.record(restricted)?.state, .incomplete)
+        XCTAssertNil(store.record(restricted)?.retrievalQueries)
+        try issue12Attachment("issue12-scope-refused-before-http", store: store)
+        // Isolate the selection check from the historical-answer provenance check.
+        var selectedOnly = ReadingQuestion(book: book, selection: QuestionEvidence(locator: location), neighbors: [])
+        selectedOnly.question = "First draft"; selectedOnly.state = .complete
+        store.save(selectedOnly)
+        let outside = try XCTUnwrap(store.followUp(selectedOnly.id)); store.edit(outside, text: "SCOPE12-NO-HTTP-SELECTION-ONLY")
+        store.send(outside, library: library, local: false, scope: BookEvidenceScope(bookID: book.id, throughChapter: -1, throughOrdinal: -1))
+        try await issue12Wait(store, id: outside)
+        XCTAssertEqual(store.record(outside)?.state, .incomplete)
+        XCTAssertTrue(store.record(outside)?.failure?.contains("允许的参考范围") == true)
+        XCTAssertNil(store.record(outside)?.retrievalQueries)
+        var free = ReadingQuestion(book: book, origin: location); free.question = "SCOPE12-NO-HTTP-全书样本"
+        store.save(free)
+        store.send(free.id, library: library, local: false, scope: BookEvidenceScope(bookID: book.id, throughChapter: -1, throughOrdinal: -1))
+        try await issue12Wait(store, id: free.id)
+        XCTAssertEqual(store.record(free.id)?.state, .incomplete)
+        XCTAssertTrue(store.record(free.id)?.failure?.contains("允许的参考范围") == true)
+        try issue12Attachment("issue12-scope-selection-and-sample-zero-http", store: store)
+    }
+    func testIssue12HistoryBudgetAndProviderCapacity() async throws {
+        var record = question()
+        record.history = [QuestionHistoryTurn(id: UUID(), question: "long", answer: String(repeating: "大", count: 9000), state: .complete)]
+        XCTAssertThrowsError(try QuestionPlan.followUpPrompt(record)) { XCTAssertEqual($0 as? QuestionError, .budget) }
+        do { _ = try await QuestionPlan.make(record, index: BookIndex(url: root.appendingPathComponent("unused.sqlite")), local: true, state: BookPreparationState()); XCTFail("History cannot be silently clipped") }
+        catch { XCTAssertEqual(error as? QuestionError, .budget) }
+        let library = try LibraryStore(root: root), configurations = try AIConfigurationStore(root: root, secrets: secrets)
+        let configuration = AIConfiguration(name: "Capacity", format: .anthropic, address: "http://127.0.0.1:18772/v1", model: "capacity")
+        try configurations.save(configuration, newKey: "not-a-real-credential")
+        let store = QuestionStore(root: root, secrets: secrets), submitted = question()
+        store.save(submitted); store.send(submitted.id, library: library, local: true); try await issue12Wait(store, id: submitted.id)
+        XCTAssertEqual(store.record(submitted.id)?.state, .incomplete)
+        XCTAssertTrue(store.record(submitted.id)?.failure?.contains("容量") == true)
+        try issue12Attachment("issue12-provider-capacity", store: store)
+    }
+}
+
+extension QuestionTests {
     func testWebKitVisibleRunsAcrossParagraphsActualHTTPMaterialsAndLocators() async throws {
         let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 700))
         web.loadHTMLString("<html><head><title>HEAD-SECRET</title><style>/* STYLE-SECRET */</style></head><body><p>visible<span><b hidden>HIDDEN-SECRET</b>after</span>end</p><p>second paragraph<script>/* SCRIPT-SECRET */</script><template>TEMPLATE-SECRET</template></p><p style='display:none'>CSS-SECRET</p></body></html>", baseURL: nil)

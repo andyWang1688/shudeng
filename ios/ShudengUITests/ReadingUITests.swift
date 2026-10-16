@@ -1,6 +1,98 @@
 import XCTest
 
 final class ReadingUITests: XCTestCase {
+    private func issue12App() -> XCUIApplication {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--isolated-reading-test"]
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10),
+                      "Harness must simctl terminate, then launch dev.shudeng.app --isolated-reading-test before attach; never launch from XCTest")
+        return app
+    }
+    private func issue12Reach(_ element: XCUIElement, in app: XCUIApplication) {
+        let scroll = app.scrollViews["question-scroll"]
+        for _ in 0..<18 where !element.isHittable {
+            if element.frame.minY < 90 { scroll.swipeDown() } else { scroll.swipeUp() }
+        }
+        XCTAssertTrue(element.isHittable, app.debugDescription)
+    }
+    private func issue12Send(_ text: String, app: XCUIApplication) {
+        let input = app.textViews["question-input"]; issue12Reach(input, in: app)
+        input.tap(); input.typeText(text)
+        let send = app.buttons["question-send"]; issue12Reach(send, in: app); send.tap()
+        XCTAssertTrue(app.alerts["发送书内原文"].waitForExistence(timeout: 5))
+        evidence("issue12-disclosure-" + text, app)
+        app.alerts.buttons["发送并查找书内依据"].tap(); questionSaved(app)
+    }
+    private func issue12Row(_ name: String, app: XCUIApplication) -> XCUIElement {
+        app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
+    }
+    func testIssue12LocalFirstWithRealPreparationFault() {
+        let app = issue12App()
+        questionService(app, format: "OpenAI", model: "ui12", address: "http://127.0.0.1:18772/v1")
+        let book = app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
+        XCTAssertTrue((book.value as? String ?? "").contains("失败")); evidence("issue12-real-preparation-failure", app)
+        book.tap(); waitForBody(app)
+        let paragraph = app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "初版规则规定所有停机指令")).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 5)); paragraph.press(forDuration: 1.3); noteMenu("提问", in: app)
+        app.textViews["question-input"].tap(); app.textViews["question-input"].typeText("初版规则要求多久后执行停机，等待是为了什么？")
+        app.buttons["question-send"].tap()
+        XCTAssertTrue(app.alerts["资料尚未准备完整"].waitForExistence(timeout: 5))
+        evidence("issue12-explicit-local-choice", app)
+        app.alerts.buttons["仅用选文和邻文解释"].tap(); questionSaved(app)
+        XCTAssertTrue(app.staticTexts["question-scope"].label.contains("主动选择局部"))
+        evidence("issue12-local-first-saved", app)
+        app.buttons["关闭"].tap(); app.buttons["书架"].tap()
+    }
+    func testIssue12RecoveredFollowupAndTwoBookHistory() {
+        // Reuse local-first's isolated directory. After removing the preparation fault,
+        // the host must explicitly terminate/launch with --isolated-reading-test.
+        let app = issue12App()
+        let semantic = app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
+        expectation(for: NSPredicate { _, _ in (semantic.value as? String ?? "").contains("书内资料可用") }, evaluatedWith: app); waitForExpectations(timeout: 60)
+        evidence("issue12-recovered-preparation-before-history", app)
+        questionService(app, format: "Anthropic", model: "ui12", address: "http://127.0.0.1:18772/v1")
+        app.tabBars.buttons["对话"].tap(); issue12Row("初版规则要求多久", app: app).tap()
+        let follow = app.buttons["question-follow-up"]; issue12Reach(follow, in: app); follow.tap()
+        issue12Send("那他为什么改口？", app: app)
+        evidence("issue12-recovered-new-causes-saved", app)
+        app.buttons["关闭"].tap(); app.tabBars.buttons["书架"].tap()
+        semantic.tap(); waitForBody(app); app.buttons["reader-ask-book"].tap()
+        issue12Send("书中的余辉是什么意思？", app: app)
+        let follow2 = app.buttons["question-follow-up"]; issue12Reach(follow2, in: app); follow2.tap()
+        issue12Send("这种延迟在危险停机时应该怎么办？", app: app)
+        app.buttons["关闭"].tap(); app.buttons["书架"].tap()
+        app.collectionViews["library"].cells[bookID].tap(); waitForBody(app); app.buttons["reader-ask-book"].tap()
+        issue12Send("UI12第二书：阅读需要保留什么？", app: app)
+        app.buttons["关闭"].tap(); app.buttons["书架"].tap(); app.tabBars.buttons["对话"].tap()
+        XCTAssertEqual(app.tables["question-history"].cells.count, 3)
+        XCTAssertTrue(app.staticTexts["semantic-fixture"].exists); XCTAssertTrue(app.staticTexts["original-fixture"].exists)
+        evidence("issue12-two-book-grouped-history", app)
+        let row = issue12Row("UI12第二书", app: app); row.swipeLeft(); app.buttons["改名"].tap()
+        let field = app.textFields["conversation-name"]; field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (field.value as? String ?? "").count)); field.typeText("UI12改名已保存")
+        app.alerts.buttons["保存"].tap(); XCTAssertTrue(issue12Row("UI12改名已保存", app: app).exists)
+        let remove = issue12Row("书中的余辉", app: app); remove.swipeLeft(); app.buttons["删除"].tap(); app.alerts.buttons["取消"].tap()
+        XCTAssertTrue(issue12Row("书中的余辉", app: app).exists)
+        issue12Row("书中的余辉", app: app).swipeLeft(); app.buttons["删除"].tap(); app.alerts.buttons["删除"].tap()
+        XCTAssertEqual(app.tables["question-history"].cells.count, 2)
+        // Persist a follow-up draft, then let the external harness restart explicitly.
+        issue12Row("初版规则要求多久", app: app).tap()
+        let draft = app.buttons["question-follow-up"]; issue12Reach(draft, in: app); draft.tap()
+        let input = app.textViews["question-input"]; issue12Reach(input, in: app); input.tap(); input.typeText("UI12可恢复追问草稿")
+        app.buttons["关闭"].tap(); evidence("issue12-renamed-deleted-draft-saved", app)
+    }
+    func testIssue12OfflineRestartSnapshotsAndDraft() {
+        let app = issue12App(); app.tabBars.buttons["对话"].tap()
+        XCTAssertEqual(app.tables["question-history"].cells.count, 2)
+        XCTAssertTrue(issue12Row("UI12改名已保存", app: app).exists); XCTAssertFalse(issue12Row("书中的余辉", app: app).exists)
+        issue12Row("初版规则要求多久", app: app).tap()
+        let input = app.textViews["question-input"]; issue12Reach(input, in: app)
+        XCTAssertEqual(input.value as? String, "UI12可恢复追问草稿")
+        evidence("issue12-offline-recovered-draft-and-history", app)
+        let reference = app.buttons.matching(NSPredicate(format: "label BEGINSWITH '引用 '")).firstMatch
+        issue12Reach(reference, in: app); reference.tap()
+        XCTAssertTrue(app.navigationBars["原文材料"].waitForExistence(timeout: 5)); evidence("issue12-offline-original-snapshot", app)
+    }
     // The harness installs and launches with simctl --isolated-reading-test.
     // Attach only: never fall back to launching the business application.
     func testIssue14OpenAI20() throws { try backgroundQuestion(format: "OpenAI", delay: 20) }

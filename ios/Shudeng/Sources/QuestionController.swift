@@ -4,7 +4,7 @@ import ReadiumShared
 @MainActor
 final class QuestionController: UIViewController, UITextViewDelegate {
     private let library: LibraryStore
-    private let id: UUID
+    private var id: UUID
     private let jump: ((Locator, Locator) -> Void)?
     private let stack = UIStackView()
     private let quote = UILabel()
@@ -17,6 +17,8 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     private let cancel = UIButton(type: .system)
     private let retry = UIButton(type: .system)
     private let materials = UIButton(type: .system)
+    private let followUp = UIButton(type: .system)
+    private let history = UIStackView()
     private var observer: NSObjectProtocol?
     private var shownReferences: [QuestionEvidence] = []
     init(library: LibraryStore, id: UUID, jump: ((Locator, Locator) -> Void)? = nil) {
@@ -33,6 +35,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "关闭", style: .plain, target: self, action: #selector(closePanel))
         let scroll = UIScrollView(); scroll.keyboardDismissMode = .interactive; scroll.accessibilityIdentifier = "question-scroll"
         stack.axis = .vertical; stack.spacing = 16
+        history.axis = .vertical; history.spacing = 16
         references.axis = .vertical; references.spacing = 12
         let collapse = UIButton(type: .system)
         collapse.setTitle("展开／收起提问选文", for: .normal)
@@ -55,8 +58,10 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         cancel.setTitle("取消生成", for: .normal); cancel.addTarget(self, action: #selector(cancelQuestion), for: .touchUpInside)
         retry.setTitle("重试保存", for: .normal); retry.addTarget(self, action: #selector(retrySave), for: .touchUpInside)
         materials.setTitle("查看本次实际发送材料", for: .normal); materials.addTarget(self, action: #selector(showMaterials), for: .touchUpInside)
-        for item in [collapse, quote, input, status, retry, send, cancel, scope, materials, answer, references] { stack.addArrangedSubview(item) }
-        for button in [collapse, send, cancel, retry, materials] {
+        followUp.setTitle("继续追问", for: .normal); followUp.accessibilityIdentifier = "question-follow-up"
+        followUp.addTarget(self, action: #selector(continueConversation), for: .touchUpInside)
+        for item in [history, collapse, quote, input, status, retry, send, cancel, scope, materials, answer, references, followUp] { stack.addArrangedSubview(item) }
+        for button in [collapse, send, cancel, retry, materials, followUp] {
             button.titleLabel?.font = .preferredFont(forTextStyle: .body); button.titleLabel?.adjustsFontForContentSizeCategory = true
             button.titleLabel?.numberOfLines = 0; button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         }
@@ -76,10 +81,26 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     }
     private func refresh() {
         guard let record = library.questions.record(id) else { return }
+        let conversation = library.questions.conversation(record.conversation)
+        for view in history.arrangedSubviews { history.removeArrangedSubview(view); view.removeFromSuperview() }
+        for previous in conversation?.turns ?? [] where (previous.turnIndex ?? 0) < (record.turnIndex ?? 0) {
+            let label = UILabel(); label.numberOfLines = 0
+            label.font = .preferredFont(forTextStyle: .body); label.adjustsFontForContentSizeCategory = true
+            label.text = previous.question + "\n" + previous.answer + "\n" + previous.state.label
+            history.addArrangedSubview(label)
+            for evidence in previous.citations {
+                let button = UIButton(type: .system); button.setTitle("引用 " + evidence.chapter, for: .normal)
+                button.titleLabel?.numberOfLines = 0
+                button.addAction(UIAction { [weak self] _ in self?.open(evidence) }, for: .touchUpInside)
+                history.addArrangedSubview(button)
+            }
+        }
         if !input.isFirstResponder { input.text = record.question }
         input.isEditable = record.state == .draft || record.state == .incomplete
         quote.text = (record.selectionParts ?? [record.selection]).map(\.quote).joined(separator: "\n")
         let unsaved = library.questions.unsaved(id)
+        followUp.isHidden = record.state != .complete
+        followUp.isEnabled = !unsaved
         status.text = unsaved ? "保存失败：当前内容尚未保存，请重试保存；关闭应用可能丢失未存内容。" : record.state.label
         if let failure = record.failure { status.text! += "\n" + failure }
         status.textColor = unsaved || record.failure != nil ? .systemRed : .secondaryLabel
@@ -107,6 +128,10 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         }
     }
     func textViewDidChange(_ textView: UITextView) { library.questions.edit(id, text: textView.text) }
+    @objc private func continueConversation() {
+        guard let record = library.questions.record(id), let next = library.questions.followUp(record.conversation) else { return }
+        id = next; refresh(); input.becomeFirstResponder()
+    }
     @objc private func toggleQuote() { quote.isHidden.toggle() }
     @objc private func closePanel() { input.resignFirstResponder(); dismiss(animated: true) }
     @objc private func cancelQuestion() { library.questions.cancel(id) }
@@ -122,9 +147,14 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             let store = try AIConfigurationStore(root: library.root)
             guard let configuration = store.configurations.first(where: { $0.id == store.selectedID }) else { throw QuestionError.configuration }
             let ready = library.preparation.states[record.bookID]?.ready == true
+            let continuing = (record.turnIndex ?? 0) > 0
+            if continuing && !ready {
+                let alert = UIAlertController(title: "资料尚未准备完整", message: "追问需要重新查书，请等待资料准备；草稿已保留。", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "等待资料准备", style: .cancel)); present(alert, animated: true); return
+            }
             let free = record.freeQuestion == true
             let message = (free ? "问题与当前书内取材" : "问题、选文、附近原文") + (ready ? "和当前书关键词、本地语义检索命中及补齐的邻段原文（可能来自其他章节）" : "（当前资料未齐，仅可主动选择局部解释）") + "将交给“\(configuration.name)”（\(configuration.address)），可能产生费用。单次原文容量有限，实际材料和不足范围将记录在本对话。"
-            let extra = free && ready && QuestionPlan.wholeBook(record.question) ? "全书问题先发送问题与最多500字原文样本判断语言并拆解查询，再发送取材回答，共两次请求。" : ""
+            let extra = continuing ? "本次还会发送此前各轮问题与回答，先明确追问再重新查书，共两次请求；历史回答不作为原文依据。历史与原文均计入本地24KB预算，此上限不保证服务接受，容量不足会明确提示。" : free && ready && QuestionPlan.wholeBook(record.question) ? "全书问题先发送问题与最多500字原文样本判断语言并拆解查询，再发送取材回答，共两次请求。" : ""
             let alert = UIAlertController(title: ready ? "发送书内原文" : "资料尚未准备完整", message: message + extra, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: ready ? "发送并查找书内依据" : (free ? "仅用已准备资料解释" : "仅用选文和邻文解释"), style: .default) { [weak self] _ in
                 guard let self else { return }; self.library.questions.send(self.id, library: self.library, local: !ready)
@@ -189,6 +219,11 @@ final class EvidenceController: UITableViewController {
 final class QuestionHistoryController: UITableViewController {
     private let library: LibraryStore
     private var observer: NSObjectProtocol?
+    private var groups: [[ReadingConversation]] {
+        Dictionary(grouping: library.questions.conversations, by: { $0.first.bookID }).values.map {
+            $0.sorted { $0.updated > $1.updated }
+        }.sorted { $0[0].updated > $1[0].updated }
+    }
     init(library: LibraryStore) { self.library = library; super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
@@ -199,16 +234,18 @@ final class QuestionHistoryController: UITableViewController {
         }
     }
     override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); tableView.reloadData() }
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { max(1, library.questions.records.count) }
+    override func numberOfSections(in tableView: UITableView) -> Int { max(1, groups.count) }
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? { groups.isEmpty ? nil : groups[section][0].first.bookTitle }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { groups.isEmpty ? 1 : groups[section].count }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
         if library.questions.loadFailed { cell.textLabel?.text = "对话读取失败，点此重试；未覆盖原记录" }
         else if library.questions.records.isEmpty { cell.textLabel?.text = "还没有对话；阅读时选文提问" }
         else {
-            let record = library.questions.records[indexPath.row]
-            cell.textLabel?.text = record.question.isEmpty ? "未填写的问题草稿" : record.question
+            let conversation = groups[indexPath.section][indexPath.row], record = conversation.latest
+            cell.textLabel?.text = conversation.title
             cell.detailTextLabel?.text = record.bookTitle + " · " + (library.questions.unsaved(record.id) ? "尚未保存" : record.state.label)
-            cell.accessibilityIdentifier = "question-\(record.id)"; cell.accessoryType = .disclosureIndicator
+            cell.accessibilityIdentifier = "question-\(conversation.id)"; cell.accessoryType = .disclosureIndicator
         }
         cell.textLabel?.numberOfLines = 0; cell.detailTextLabel?.numberOfLines = 0; return cell
     }
@@ -216,8 +253,42 @@ final class QuestionHistoryController: UITableViewController {
         tableView.deselectRow(at: indexPath, animated: true)
         if library.questions.loadFailed { library.questions.load(); tableView.reloadData(); return }
         guard !library.questions.records.isEmpty else { return }
-        let controller = QuestionController(library: library, id: library.questions.records[indexPath.row].id)
+        let controller = QuestionController(library: library, id: groups[indexPath.section][indexPath.row].latest.id)
         let navigation = UINavigationController(rootViewController: controller); navigation.modalPresentationStyle = .pageSheet
         navigation.sheetPresentationController?.detents = [.large()]; present(navigation, animated: true)
+    }
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard !groups.isEmpty, !library.questions.loadFailed else { return nil }
+        let conversation = groups[indexPath.section][indexPath.row]
+        let rename = UIContextualAction(style: .normal, title: "改名") { [weak self] _, _, done in
+            done(false); self?.rename(conversation)
+        }
+        let delete = UIContextualAction(style: .destructive, title: "删除") { [weak self] _, _, done in
+            done(false); self?.delete(conversation)
+        }
+        let actions = UISwipeActionsConfiguration(actions: [delete, rename]); actions.performsFirstActionWithFullSwipe = false; return actions
+    }
+    private func rename(_ conversation: ReadingConversation) {
+        let alert = UIAlertController(title: "对话改名", message: "生成中或内容尚未保存时请先取消生成或重试保存。", preferredStyle: .alert)
+        alert.addTextField { $0.text = conversation.title; $0.accessibilityIdentifier = "conversation-name" }
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "保存", style: .default) { [weak self] _ in
+            guard let self else { return }
+            if !self.library.questions.rename(conversation.id, title: alert.textFields?[0].text ?? "") { self.failure("改名尚未保存，原名称未变；请检查名称、生成及保存状态后重试。") }
+        })
+        present(alert, animated: true)
+    }
+    private func delete(_ conversation: ReadingConversation) {
+        let alert = UIAlertController(title: "删除对话？", message: "删除本对话的所有轮次及引用快照；生成中的请求将取消。", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "删除", style: .destructive) { [weak self] _ in
+            guard let self else { return }
+            if !self.library.questions.delete(conversation.id) { self.failure("删除失败，对话仍保留；生成已取消，请重试删除。") }
+        })
+        present(alert, animated: true)
+    }
+    private func failure(_ message: String) {
+        let alert = UIAlertController(title: "操作未保存", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "知道了", style: .default)); present(alert, animated: true)
     }
 }
