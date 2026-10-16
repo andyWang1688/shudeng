@@ -83,6 +83,7 @@ private final class AIConfigurationController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = original == nil ? "添加服务" : "编辑服务"
+        tableView.accessibilityIdentifier = "ai-service-editor"
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: "取消", style: .plain, target: self, action: #selector(cancel))
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "保存", style: .done, target: self, action: #selector(save))
         tableView.keyboardDismissMode = .onDrag
@@ -95,10 +96,11 @@ private final class AIConfigurationController: UITableViewController {
             field.font = .preferredFont(forTextStyle: .body); field.adjustsFontForContentSizeCategory = true
             field.autocorrectionType = .no; field.autocapitalizationType = .none
             field.addTarget(self, action: #selector(edited), for: .editingChanged)
+            field.addTarget(self, action: #selector(finishEditing), for: .editingDidEndOnExit)
         }
         address.keyboardType = .URL
         key.isSecureTextEntry = true
-        key.textContentType = .password
+        key.textContentType = nil
     }
     override func numberOfSections(in tableView: UITableView) -> Int { 3 }
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { section == 0 ? 5 : section == 1 ? 2 : (original == nil ? 0 : 2) }
@@ -181,6 +183,7 @@ private final class AIConfigurationController: UITableViewController {
         status = "内容已修改，请重新检查；尚未保存。"
         tableView.reloadSections(IndexSet(integer: 1), with: .none)
     }
+    @objc private func finishEditing() { view.endEditing(true) }
     @objc private func save() {
         do {
             try store.save(configuration(), newKey: key.text ?? "")
@@ -197,8 +200,8 @@ private final class AIConfigurationController: UITableViewController {
             for field in [name, address, model, key] { field.isEnabled = false }
             tableView.reloadSections(IndexSet(integer: 1), with: .none)
             checkTask = Task { [weak self] in
-                var result = "连接成功；尚未保存。"
-                do { try await AIConnection().check(c, key: secret) }
+                var result: String
+                do { result = try await AIConnection().check(c, key: secret).statusDescription }
                 catch { result = (error as? AIError ?? .network).localizedDescription }
                 guard let self, !Task.isCancelled else { return }
                 self.status = result; self.checking = false

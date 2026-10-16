@@ -32,6 +32,16 @@ enum AIError: Error, LocalizedError, Equatable {
     }
 }
 
+enum AICheckResult: Equatable {
+    case completed, outputLimited
+    var statusDescription: String {
+        switch self {
+        case .completed: return "连接成功；尚未保存。"
+        case .outputLimited: return "连接可达，但测试输出达到上限，未完成完整回答；尚未保存。"
+        }
+    }
+}
+
 protocol AISecrets {
     func read(_ id: String) throws -> String
     func write(_ value: String, id: String) throws
@@ -178,10 +188,15 @@ final class AIConnection: NSObject, URLSessionTaskDelegate {
         guard let url = c.url else { throw AIError.address }
         return url
     }
-    func check(_ configuration: AIConfiguration, key: String) async throws {
-        _ = try await text(configuration, key: key, prompt: "Reply OK.", maxTokens: 16, timeout: 20)
+    @discardableResult
+    func check(_ configuration: AIConfiguration, key: String) async throws -> AICheckResult {
+        let response = try await response(configuration, key: key, prompt: "Reply OK.", maxTokens: 16, timeout: 20, checkingConnection: true)
+        return response.outputLimited ? .outputLimited : .completed
     }
     func text(_ configuration: AIConfiguration, key: String, prompt: String, maxTokens: Int, timeout: TimeInterval) async throws -> String {
+        try await response(configuration, key: key, prompt: prompt, maxTokens: maxTokens, timeout: timeout, checkingConnection: false).text
+    }
+    private func response(_ configuration: AIConfiguration, key: String, prompt: String, maxTokens: Int, timeout: TimeInterval, checkingConnection: Bool) async throws -> (text: String, outputLimited: Bool) {
         guard !configuration.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AIError.missing }
         guard key.rangeOfCharacter(from: .newlines) == nil else { throw AIError.authentication }
         let url = try Self.endpoint(for: configuration)
@@ -221,16 +236,22 @@ final class AIConnection: NSObject, URLSessionTaskDelegate {
             }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw AIError.incompatible }
             let text: String?
+            let outputLimited: Bool
+            var hasReasoning = false
             if configuration.format == .openAI {
-                let first = (json["choices"] as? [[String: Any]])?.first
-                if first?["finish_reason"] as? String == "length" { throw AIError.capacity }
-                text = (first?["message"] as? [String: Any])?["content"] as? String
+                guard let first = (json["choices"] as? [[String: Any]])?.first,
+                      let message = first["message"] as? [String: Any] else { throw AIError.incompatible }
+                outputLimited = first["finish_reason"] as? String == "length"
+                text = message["content"] as? String
+                hasReasoning = !(message["reasoning_content"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             } else {
-                if json["stop_reason"] as? String == "max_tokens" { throw AIError.capacity }
+                outputLimited = json["stop_reason"] as? String == "max_tokens"
                 text = (json["content"] as? [[String: Any]])?.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
             }
-            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AIError.incompatible }
-            return text
+            if outputLimited && !checkingConnection { throw AIError.capacity }
+            let hasText = !(text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            guard hasText || (checkingConnection && outputLimited && hasReasoning) else { throw AIError.incompatible }
+            return (text ?? "", outputLimited)
         } catch is CancellationError { throw CancellationError() }
         catch let error as AIError { throw error }
         catch { throw AIError.network } // Never display response bodies, URLs or headers.

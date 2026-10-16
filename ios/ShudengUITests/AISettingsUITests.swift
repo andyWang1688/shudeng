@@ -1,6 +1,48 @@
 import XCTest
 
 final class AISettingsUITests: XCTestCase {
+    private func dismissPasswordPrompt(_ app: XCUIApplication) -> Bool {
+        let sheet = app.sheets["保存密码？"]
+        guard sheet.waitForExistence(timeout: 1) else { return false }
+        sheet.buttons["以后"].tap()
+        return true
+    }
+    func testLimitedProbeCanSaveAndRestartBothFormats() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--isolated-reading-test"]
+        app.launch(); openSettings(app)
+        for format in ["OpenAI", "Anthropic"] {
+            let editor = app.tables["ai-service-editor"]
+            app.navigationBars.buttons["添加"].tap()
+            app.textFields["ai-name"].tap(); app.textFields["ai-name"].typeText("Probe " + format)
+            if format == "Anthropic" { app.cells["ai-format"].tap(); app.buttons["Anthropic"].tap() }
+            app.textFields["ai-address"].tap(); app.textFields["ai-address"].typeText("http://127.0.0.1:18767/v1")
+            app.textFields["ai-model"].tap(); app.textFields["ai-model"].typeText("output-limited")
+            app.secureTextFields["ai-key"].tap(); app.secureTextFields["ai-key"].typeText("not-a-real-credential\n")
+            _ = dismissPasswordPrompt(app)
+            XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+            editor.cells["ai-check"].tap()
+            let limited = "连接可达，但测试输出达到上限，未完成完整回答；尚未保存。"
+            if dismissPasswordPrompt(app) && !app.staticTexts[limited].exists { editor.cells["ai-check"].tap() }
+            XCTAssertTrue(app.staticTexts[limited].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.navigationBars.buttons["保存"].isEnabled)
+            app.navigationBars.buttons["保存"].tap()
+            if dismissPasswordPrompt(app) && app.navigationBars.buttons["保存"].exists { app.navigationBars.buttons["保存"].tap() }
+            XCTAssertFalse(app.alerts["操作未完成"].waitForExistence(timeout: 1))
+            let saved = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Probe " + format)).firstMatch
+            XCTAssertTrue(saved.waitForExistence(timeout: 5))
+            XCTAssertFalse(app.navigationBars["添加服务"].exists)
+            shot("limited-probe-saved-" + format, app)
+            app.terminate(); app.launch(); openSettings(app)
+            let config = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Probe " + format)).firstMatch
+            XCTAssertTrue(config.waitForExistence(timeout: 5)); config.tap()
+            XCTAssertEqual(app.secureTextFields["ai-key"].value as? String, "留空保留已保存的密钥")
+            editor.swipeUp(); editor.cells["ai-check"].tap()
+            XCTAssertTrue(app.staticTexts[limited].waitForExistence(timeout: 10))
+            app.navigationBars.buttons["取消"].tap()
+        }
+    }
     private func shot(_ name: String, _ app: XCUIApplication) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)

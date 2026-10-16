@@ -21,8 +21,9 @@ final class AIServiceTests: XCTestCase {
     func testRealHTTPBothFormatsAndClassifiedFailures() async throws {
         let connection = AIConnection()
         for format in AIFormat.allCases {
-            try await connection.check(configuration(format), key: token)
-            for (model, expected) in [("auth", AIError.authentication), ("forbidden", .authentication), ("missing-model", .incompatible), ("bad-model", .incompatible), ("limited", .limited), ("unavailable", .network), ("malformed", .incompatible), ("empty", .incompatible), ("redirect", .incompatible)] {
+            let result = try await connection.check(configuration(format), key: token)
+            XCTAssertEqual(result, .completed)
+            for (model, expected) in [("auth", AIError.authentication), ("forbidden", .authentication), ("missing-model", .incompatible), ("bad-model", .incompatible), ("limited", .limited), ("unavailable", .network), ("malformed", .incompatible), ("empty", .incompatible), ("redirect", .incompatible), ("context-long", .capacity), ("payload-too-large", .capacity)] {
                 do { try await connection.check(configuration(format, model: model), key: token); XCTFail("Expected classified failure") }
                 catch {
                     XCTAssertEqual(error as? AIError, expected)
@@ -39,6 +40,38 @@ final class AIServiceTests: XCTestCase {
         catch { XCTAssertEqual(error as? AIError, .network) }
         do { try await connection.check(configuration(), key: ""); XCTFail("Expected missing configuration") }
         catch { XCTAssertEqual(error as? AIError, .missing) }
+    }
+    func testConnectionProbeDistinguishesLimitedOutputFromIncompleteReadingAnswers() async throws {
+        let connection = AIConnection()
+        for format in AIFormat.allCases {
+            let result = try await connection.check(configuration(format, model: "output-limited"), key: token)
+            XCTAssertEqual(result, .outputLimited)
+            XCTAssertEqual(result.statusDescription, "连接可达，但测试输出达到上限，未完成完整回答；尚未保存。")
+            for model in ["empty-limited", "malformed-limited"] {
+                do { try await connection.check(configuration(format, model: model), key: token); XCTFail("Expected incompatible probe response") }
+                catch { XCTAssertEqual(error as? AIError, .incompatible) }
+            }
+            for model in ["output-limited", "context-long", "payload-too-large"] {
+                do {
+                    _ = try await connection.text(configuration(format, model: model), key: token, prompt: "Fixture reading question.", maxTokens: 128, timeout: 5)
+                    XCTFail("Incomplete reading answer must not succeed")
+                } catch { XCTAssertEqual(error as? AIError, .capacity) }
+            }
+        }
+    }
+    func testReasoningOnlyProbeRequiresEffectiveOutputAndLengthLimit() async throws {
+        let connection = AIConnection()
+        let c = configuration(model: "reasoning-limited")
+        let result = try await connection.check(c, key: token)
+        XCTAssertEqual(result, .outputLimited)
+        do {
+            _ = try await connection.text(c, key: token, prompt: "Fixture reading question.", maxTokens: 128, timeout: 5)
+            XCTFail("Reasoning must not become a complete reading answer")
+        } catch { XCTAssertEqual(error as? AIError, .capacity) }
+        for model in ["reasoning-empty-limited", "reasoning-complete"] {
+            do { try await connection.check(configuration(model: model), key: token); XCTFail("Expected incompatible probe response") }
+            catch { XCTAssertEqual(error as? AIError, .incompatible) }
+        }
     }
     func testEndpointContract() throws {
         var c = configuration()
