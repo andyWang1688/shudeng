@@ -16,6 +16,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private let configure = UIButton(type: .system)
     private let browse = UIButton(type: .system)
     private let toggle = UIButton(type: .system)
+    private let askBook = UIButton(type: .system)
     private var pendingLocation: Locator?
     private var saveFailed = false
     private var loading = true
@@ -73,7 +74,11 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         toggle.setImage(UIImage(systemName: "eye.slash"), for: .normal)
         toggle.accessibilityLabel = "隐藏工具栏"
         toggle.addTarget(self, action: #selector(toggleToolbar), for: .touchUpInside)
-        for button in [close, configure, browse, toggle] {
+        askBook.setImage(UIImage(systemName: "bubble.left"), for: .normal)
+        askBook.accessibilityLabel = "问这本书"; askBook.accessibilityIdentifier = "reader-ask-book"
+        askBook.addTarget(self, action: #selector(askCurrentBook), for: .touchUpInside)
+        askBook.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        for button in [close, configure, browse, toggle, askBook] {
             button.titleLabel?.font = .preferredFont(forTextStyle: .body)
             button.titleLabel?.adjustsFontForContentSizeCategory = true
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
@@ -87,7 +92,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             button.setPreferredSymbolConfiguration(.init(pointSize: 20), forImageIn: .normal)
         }
         toggle.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        let header = UIStackView(arrangedSubviews: [close, UIView(), browse, configure, toggle])
+        let header = UIStackView(arrangedSubviews: [close, UIView(), askBook, browse, configure, toggle])
         header.spacing = 12
         status.font = .preferredFont(forTextStyle: .caption1)
         status.adjustsFontForContentSizeCategory = true
@@ -581,6 +586,19 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     @objc private func highlightSelection() { captureSelection(writeNote: false) }
     @objc private func noteSelection() { captureSelection(writeNote: true) }
     @objc private func askSelection() { captureSelection(writeNote: false, question: true) }
+    @objc private func askCurrentBook() {
+        guard !loading, !curlBusy, !navigating, !library.questions.loadFailed, let origin = navigator.currentLocation else { return }
+        let record = ReadingQuestion(book: book, origin: origin)
+        library.questions.save(record)
+        navigator.clearSelection()
+        let controller = QuestionController(library: library, id: record.id) { [weak self] target, origin in
+            self?.questionOrigin = origin; self?.navigate(to: target)
+        }
+        let navigation = UINavigationController(rootViewController: controller)
+        navigation.modalPresentationStyle = .pageSheet
+        navigation.sheetPresentationController?.detents = [.large()]
+        present(navigation, animated: true)
+    }
     @objc private func backToQuestion() { if let questionOrigin { navigate(to: questionOrigin) } }
     private func captureSelection(writeNote: Bool, question: Bool = false) {
         guard !loading, !curlBusy, !navigating, let selection = navigator.currentSelection else { return }

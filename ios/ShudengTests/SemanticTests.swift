@@ -18,6 +18,114 @@ import SQLite3
 import ReadiumShared
 
 extension SemanticTests {
+    @MainActor func testIssue11BoundedWindowsDiagnostic() async throws {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Issue11Assessment")
+        let (library, book) = try await prepared("pride-and-prejudice", root: root)
+        // Human question decomposition checks local material only, not remote quality.
+        let queries = [
+            "What were Elizabeth and Darcy's first judgments of each other, and why?",
+            "What new information caused Elizabeth to reconsider her judgment of Darcy?",
+            "What criticism did they express at the time, and how did they later explain its effect on their behavior?",
+            "How did Elizabeth and Darcy's decisions and relationship with each other's families change by the end?"
+        ]
+        let result = try await library.preparation.index.chapterWindows(scope: BookEvidenceScope(bookID: book.id), queries: queries, wholeBook: true)
+        let origin = try XCTUnwrap(result.evidence.first).location()
+        var record = ReadingQuestion(book: book, origin: origin)
+        record.question = "概括全书中伊丽莎白与达西怎样逐步纠正对彼此的判断，哪些事件改变了他们的决定？"
+        let plan = try await QuestionPlan.make(record, index: library.preparation.index, local: false, state: library.preparation.states[book.id]!, queries: queries)
+        try attachment(["queries": queries, "groups": try JSONSerialization.jsonObject(with: JSONEncoder().encode(result.groups)), "candidates": try JSONSerialization.jsonObject(with: JSONEncoder().encode(result.evidence)), "final": try JSONSerialization.jsonObject(with: JSONEncoder().encode(plan.evidence)), "prompt": plan.prompt, "prompt_bytes": plan.prompt.utf8.count, "ranks": try JSONSerialization.jsonObject(with: JSONEncoder().encode(result.ranks))], name: "issue11-bounded-windows")
+        XCTAssertLessThanOrEqual(plan.evidence.count, 24)
+        XCTAssertLessThanOrEqual(plan.prompt.utf8.count, 24000)
+        let permitted = try await library.preparation.index.permits(plan.evidence, scope: BookEvidenceScope(bookID: book.id))
+        XCTAssertTrue(permitted)
+    }
+    @MainActor func testIssue11LocalChapterCandidateAssessment() async throws {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Issue11Assessment")
+        let (library, book) = try await prepared("pride-and-prejudice", root: root)
+        let result = try await library.preparation.index.chapterCandidates(scope: BookEvidenceScope(bookID: book.id), query: "概括全书中伊丽莎白与达西怎样逐步纠正对彼此的判断，哪些事件改变了他们的决定？")
+        let candidates = result.evidence
+        let db = try IndexDatabase(url: root.appendingPathComponent("book-index.sqlite"))
+        let all = try db.rows("SELECT locator FROM fragments WHERE book_id=? ORDER BY chapter,ordinal", [book.id])
+        let chapters = try all.compactMap { try Locator(json: JSONValue(jsonString: $0[0], warnings: nil), warnings: nil)?.locations.otherLocations["shudengChapter"]?.string }
+        let required = [
+            "You know how I detest it, unless I am particularly acquainted with my partner.",
+            "She is tolerable: but not handsome enough to tempt me;",
+            "Elizabeth remained with no very cordial feelings towards him.",
+            "His sense of her inferiority, of its being a degradation, of the family obstacles which judgment had always opposed to inclination",
+            "had you behaved in a more gentlemanlike manner.",
+            "Mr. Wickham’s chief object was unquestionably my sister’s fortune, which is thirty thousand pounds;",
+            "But vanity, not love, has been my folly.", "Till this moment, I never knew myself.",
+            "she had been blind, partial, prejudiced, absurd.",
+            "He is the best landlord, and the best master,",
+            "Amazed at the alteration of his manner since they last parted",
+            "They owed the restoration of Lydia, her character, everything to him.",
+            "For herself she was humbled; but she was proud of him",
+            "By you, I was properly humbled.", "My affections and wishes are unchanged;",
+            "her sentiments had undergone so material a change",
+            "receive with gratitude and pleasure his present assurances.",
+            "With the Gardiners they were always on the most intimate terms. Darcy, as well as Elizabeth, really loved them;",
+            "by bringing her into Derbyshire, had been the means of uniting them."
+        ]
+        func normalized(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        let missing = required.filter { quote in !candidates.contains { normalized($0.quote).contains(quote) } }
+        let data = try JSONEncoder().encode(candidates)
+        let source = try db.rows("SELECT id,chapter,ordinal,locator,original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal", [book.id])
+        let report: [String: Any] = ["bookID": book.id, "logical_sections": Set(chapters).sorted(), "candidates": try JSONSerialization.jsonObject(with: data), "candidate_json_bytes": data.count, "source_utf8_bytes": candidates.reduce(0) { $0 + $1.quote.utf8.count }, "missing_required": missing, "ranks": try JSONSerialization.jsonObject(with: JSONEncoder().encode(result.ranks)), "sources": source]
+        try attachment(report, name: "issue11-local-chapter-candidates")
+        print("I11_ASSESS candidates=\(candidates.count) source_bytes=\(candidates.reduce(0) { $0 + $1.quote.utf8.count }) missing=\(missing)")
+        XCTAssertTrue(missing.isEmpty, "Candidate evaluation only; all frozen necessary sentences remain required")
+    }
+
+    func testIssue11InlineChapterBoundariesSkipHiddenAndContinueAcrossResources() throws {
+        var logical: (key: String, title: String)? = ("a.xhtml#old", "Old")
+        let parts = try BookText.fragments(html: "<p>old<span id='new'></span>new<b hidden id='hidden'>secret</b>still new<i id='last'></i>last</p>", href: AnyURL(string: "a.xhtml")!, title: "resource", anchors: ["new":"New", "hidden":"Hidden", "last":"Last"], logical: &logical)
+        XCTAssertEqual(parts.map(\.text), ["old","new","still new","last"])
+        XCTAssertEqual(parts.map { $0.locator.title }, ["Old","New","New","Last"])
+        let continuation = try BookText.fragments(html: "<p>continued</p>", href: AnyURL(string: "b.xhtml")!, title: "resource", anchors: [:], logical: &logical)
+        XCTAssertEqual(continuation.first?.locator.locations.otherLocations["shudengChapter"]?.string, "a.xhtml#last")
+        let next = try BookText.fragments(html: "<p>new file chapter</p>", href: AnyURL(string: "c.xhtml")!, title: "resource", anchors: ["":"File chapter"], logical: &logical)
+        XCTAssertEqual(next.first?.locator.locations.otherLocations["shudengChapter"]?.string, "c.xhtml")
+        XCTAssertEqual(next.first?.locator.title, "File chapter")
+    }
+
+    @MainActor func testIssue11IndexVersionUpgradeOnlyRebuildsDerivedData() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("issue11-migration-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let business = ["library.json","reading-questions.json","ai-services.json"]
+        for file in business { try Data(("preserve-" + file).utf8).write(to: root.appendingPathComponent(file)) }
+        let url = root.appendingPathComponent("book-index.sqlite"), db = try IndexDatabase(url: url)
+        try db.execute("INSERT INTO preparations VALUES('book',2,1,1)")
+        try db.execute("INSERT INTO chapters VALUES('book',0,'old.xhtml','Old')")
+        try db.execute("INSERT INTO fragments VALUES(1,'book',0,0,'old','{}')")
+        try db.execute("INSERT INTO embedding_progress VALUES('book','old',1,1,1)")
+        try db.initialize("book", total: 1, contents: "[]", rebuild: false)
+        XCTAssertEqual(try db.rows("SELECT version,completed FROM preparations WHERE book_id='book'", []), [["3","0"]])
+        XCTAssertEqual(try db.rows("SELECT count(*) FROM fragments", [])[0][0], "0")
+        XCTAssertEqual(try db.rows("SELECT count(*) FROM embedding_progress", [])[0][0], "0")
+        for file in business { XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(file)), Data(("preserve-" + file).utf8)) }
+    }
+    @MainActor func testIssue11LanguageDecompositionDiagnostic() async throws {
+        // Diagnostic queries derived from the question's concepts, not the source answers.
+        // This is NOT evidence that a configured remote service produces these rewrites.
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Issue11Assessment")
+        let (library, book) = try await prepared("pride-and-prejudice", root: root)
+        let queries = [
+            "Elizabeth and Darcy first impressions of each other and reasons for disliking each other.",
+            "Elizabeth and Darcy criticism of each other, mistaken judgments and prejudice.",
+            "Elizabeth and Darcy learn new information that corrects their mistaken beliefs.",
+            "Elizabeth and Darcy change their behavior and decisions towards each other.",
+            "Elizabeth and Darcy admit their mistakes and explain how they changed.",
+            "Elizabeth and Darcy final relationship and their feelings towards each other's families."
+        ]
+        var reports: [[String: Any]] = []
+        for query in queries {
+            let result = try await library.preparation.index.chapterCandidates(scope: BookEvidenceScope(bookID: book.id), query: query)
+            reports.append(["query":query, "ranks":try JSONSerialization.jsonObject(with: JSONEncoder().encode(result.ranks)), "candidates":try JSONSerialization.jsonObject(with: JSONEncoder().encode(result.evidence))])
+        }
+        try attachment(reports, name: "issue11-language-diagnostic")
+    }
+
     @MainActor private func prepared(_ name: String, root: URL) async throws -> (LibraryStore, Book) {
         let library = try LibraryStore(root: root)
         let file = Bundle(for: Self.self).url(forResource: name, withExtension: "epub", subdirectory: "Fixtures")!

@@ -8,7 +8,13 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let window = UIWindow(frame: UIScreen.main.bounds)
         self.window = window
         do {
-            let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Shudeng")
+            var root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Shudeng")
+#if DEBUG
+            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil ||
+                ProcessInfo.processInfo.arguments.contains("--isolated-reading-test") {
+                root = FileManager.default.temporaryDirectory.appendingPathComponent("ShudengReadingTests")
+            }
+#endif
             let library = try LibraryStore(root: root)
             library.prepareBooks()
             let tabs = UITabBarController()

@@ -21,8 +21,259 @@ struct BookRetrieval {
     var evidence: [QuestionEvidence]
     var trace: RetrievalTrace
 }
+struct ChapterRank: Codable {
+    let fragmentID: Int
+    let chapter: String
+    let semanticRank: Int
+    let lexicalRank: Int?
+    let score: Float
+    let piece: Int
+    let offset: Int
+    let matchedText: String
+}
+struct ChapterRetrieval {
+    let evidence: [QuestionEvidence]
+    let ranks: [ChapterRank]
+    var groups: [[QuestionEvidence]] = []
+}
 
 extension BookIndex {
+    /// Local, chapter-stratified candidates. A source paragraph is never truncated at its head.
+    func chapterCandidates(scope: BookEvidenceScope, query: String) async throws -> ChapterRetrieval {
+        let db = try IndexDatabase(url: url)
+        guard try db.state(scope.bookID).semanticReady else { throw QuestionError.preparation }
+        let vector = try await SemanticEmbedding.shared.embed(query)
+        let rows = try db.rows("SELECT id,chapter,ordinal,locator,original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal", [scope.bookID])
+        let allowed = rows.filter { scope.permits(chapter: Int($0[1])!, ordinal: Int($0[2])!) }
+        let ids = Set(allowed.map { Int($0[0])! })
+        var groups: [String: [Int]] = [:], order: [String] = [], scores: [Int: Float] = [:]
+        for row in allowed {
+            guard let locator = try Locator(json: JSONValue(jsonString: row[3], warnings: nil), warnings: nil) else { throw IndexError.storage }
+            let key = locator.locations.otherLocations["shudengChapter"]?.string ?? locator.href.string
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(Int(row[0])!)
+        }
+        var matches: [Int: (piece: Int, offset: Int, text: String)] = [:]
+        let statement = try db.statement("SELECT fragment_id,vector,piece,offset,original FROM embeddings WHERE book_id=? AND model=?", [scope.bookID, SemanticEmbedding.version])
+        defer { sqlite3_finalize(statement) }
+        while true {
+            try Task.checkCancellation()
+            let step = sqlite3_step(statement)
+            if step == SQLITE_DONE { break }
+            guard step == SQLITE_ROW, sqlite3_column_bytes(statement, 1) == 1536, let blob = sqlite3_column_blob(statement, 1) else { throw IndexError.storage }
+            let id = Int(sqlite3_column_int64(statement, 0))
+            guard ids.contains(id) else { continue }
+            var score: Float = 0
+            for i in vector.indices { score += vector[i] * blob.loadUnaligned(fromByteOffset: i * 4, as: Float.self) }
+            if score > scores[id, default: -.infinity] {
+                scores[id] = score
+                matches[id] = (Int(sqlite3_column_int(statement, 2)), Int(sqlite3_column_int(statement, 3)), String(cString: sqlite3_column_text(statement, 4)))
+            }
+        }
+        let originals = Dictionary(uniqueKeysWithValues: allowed.map { (Int($0[0])!, $0[4]) })
+        let terms = QuestionPlan.keywords(query)
+        var result: [QuestionEvidence] = []
+        var ranks: [ChapterRank] = []
+        for key in order {
+            let members = groups[key]!
+            let semantic = members.sorted { scores[$0, default: -.infinity] == scores[$1, default: -.infinity] ? $0 < $1 : scores[$0, default: -.infinity] > scores[$1, default: -.infinity] }
+            let lexical = members.sorted {
+                func hits(_ id: Int) -> Int { terms.filter { originals[id]!.localizedCaseInsensitiveContains($0) }.count }
+                return hits($0) == hits($1) ? $0 < $1 : hits($0) > hits($1)
+            }.filter { id in terms.contains { originals[id]!.localizedCaseInsensitiveContains($0) } }
+            var fusion: [Int: Double] = [:]
+            for list in [semantic, lexical] {
+                for (rank, id) in list.enumerated() { fusion[id, default: 0] += 1 / Double(61 + rank) }
+            }
+            let ranked = members.sorted { fusion[$0, default: 0] == fusion[$1, default: 0] ? $0 < $1 : fusion[$0, default: 0] > fusion[$1, default: 0] }
+            for (rank, id) in semantic.enumerated() {
+                if let match = matches[id] {
+                    ranks.append(ChapterRank(fragmentID: id, chapter: key, semanticRank: rank + 1,
+                                             lexicalRank: lexical.firstIndex(of: id).map { $0 + 1 }, score: scores[id]!,
+                                             piece: match.piece, offset: match.offset, matchedText: match.text))
+                }
+            }
+            var chosen = Set(ranked.prefix(2))
+            for id in Array(chosen) {
+                guard let position = members.firstIndex(of: id) else { continue }
+                for neighbor in max(0, position - 1)...min(members.count - 1, position + 1) { chosen.insert(members[neighbor]) }
+            }
+            for id in members where chosen.contains(id) {
+                if let evidence = try db.evidence(id: id, scope: scope) { result.append(evidence) }
+            }
+        }
+        return ChapterRetrieval(evidence: result, ranks: ranks)
+    }
+
+    /// Four query facets share one vector scan; source positions remain local.
+    func chapterWindows(scope: BookEvidenceScope, queries: [String], wholeBook: Bool) async throws -> ChapterRetrieval {
+        guard !queries.isEmpty, queries.count <= 4 else { throw QuestionError.coverage }
+        let db = try IndexDatabase(url: url)
+        guard try db.state(scope.bookID).semanticReady else { throw QuestionError.preparation }
+        var vectors: [[Float]] = []
+        for query in queries { vectors.append(try await SemanticEmbedding.shared.embed(query)) }
+        let rows = try db.rows("SELECT id,chapter,ordinal,locator,original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal", [scope.bookID])
+            .filter { scope.permits(chapter: Int($0[1])!, ordinal: Int($0[2])!) }
+        let sources = Dictionary(uniqueKeysWithValues: rows.map { (Int($0[0])!, $0) })
+        var chapters: [String: [Int]] = [:], chapterOrder: [String] = []
+        for row in rows {
+            guard let locator = try Locator(json: JSONValue(jsonString: row[3], warnings: nil), warnings: nil) else { throw IndexError.storage }
+            let chapter = locator.locations.otherLocations["shudengChapter"]?.string ?? locator.href.string
+            if chapters[chapter] == nil { chapterOrder.append(chapter) }
+            chapters[chapter, default: []].append(Int(row[0])!)
+        }
+        struct Match { let score: Float; let piece: Int; let offset: Int; let text: String }
+        var matches = Array(repeating: [Int: Match](), count: queries.count)
+        let statement = try db.statement("SELECT fragment_id,vector,piece,offset,original FROM embeddings WHERE book_id=? AND model=?", [scope.bookID, SemanticEmbedding.version])
+        defer { sqlite3_finalize(statement) }
+        while true {
+            try Task.checkCancellation()
+            let step = sqlite3_step(statement)
+            if step == SQLITE_DONE { break }
+            guard step == SQLITE_ROW, sqlite3_column_bytes(statement, 1) == 1536, let blob = sqlite3_column_blob(statement, 1) else { throw IndexError.storage }
+            let id = Int(sqlite3_column_int64(statement, 0))
+            guard sources[id] != nil else { continue }
+            for q in vectors.indices {
+                var score: Float = 0
+                for i in vectors[q].indices { score += vectors[q][i] * blob.loadUnaligned(fromByteOffset: i * 4, as: Float.self) }
+                guard score.isFinite else { throw IndexError.storage }
+                if score > (matches[q][id]?.score ?? -.infinity) {
+                    matches[q][id] = Match(score: score, piece: Int(sqlite3_column_int(statement, 2)), offset: Int(sqlite3_column_int(statement, 3)), text: String(cString: sqlite3_column_text(statement, 4)))
+                }
+            }
+        }
+        // Compare ranks within each query; cosine magnitudes across facets are not comparable.
+        var globalRanks: [[Int: Int]] = []
+        for q in queries.indices {
+            let ordered = matches[q].keys.sorted { matches[q][$0]!.score > matches[q][$1]!.score }
+            globalRanks.append(Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($0.element, $0.offset) }))
+        }
+        struct Candidate { let id: Int; let chapter: String; let match: Match; let score: Float; let query: Int }
+        var candidates: [Candidate] = [], ranks: [ChapterRank] = []
+        for chapter in chapterOrder {
+            let members = chapters[chapter]!
+            var choices: [[Candidate]] = []
+            for q in queries.indices {
+                let ranked = members.sorted { (matches[q][$0]?.score ?? -.infinity) > (matches[q][$1]?.score ?? -.infinity) }
+                let terms = QuestionPlan.keywords(queries[q])
+                let lexical = members.sorted { a, b in
+                    let left = terms.filter { sources[a]![4].localizedCaseInsensitiveContains($0) }.count
+                    let right = terms.filter { sources[b]![4].localizedCaseInsensitiveContains($0) }.count
+                    return left == right ? a < b : left > right
+                }.filter { id in terms.contains { sources[id]![4].localizedCaseInsensitiveContains($0) } }
+                var fusion: [Int: Double] = [:]
+                for list in [ranked, lexical] {
+                    for (rank, id) in list.enumerated() { fusion[id, default: 0] += 1 / Double(61 + rank) }
+                }
+                let hybrid = members.sorted { fusion[$0, default: 0] == fusion[$1, default: 0] ? $0 < $1 : fusion[$0, default: 0] > fusion[$1, default: 0] }
+                for (rank, id) in ranked.enumerated() {
+                    guard let match = matches[q][id] else { continue }
+                    ranks.append(ChapterRank(fragmentID: id, chapter: chapter, semanticRank: rank + 1, lexicalRank: lexical.firstIndex(of: id).map { $0 + 1 }, score: match.score, piece: match.piece, offset: match.offset, matchedText: match.text))
+                }
+                choices.append(hybrid.prefix(2).compactMap { id in
+                    matches[q][id].map { Candidate(id: id, chapter: chapter, match: $0, score: 1 / Float(61 + globalRanks[q][id, default: rows.count]), query: q) }
+                })
+            }
+            // Two anchors per facet, interleaved by rank; retain the role rather than
+            // truncating all roles by one query's larger absolute cosine value.
+            var chapterSeen = Set<String>()
+            for rank in 0..<2 {
+                for role in choices where role.indices.contains(rank) {
+                    let candidate = role[rank]
+                    if chapterSeen.insert("\(candidate.id):\(candidate.match.offset)").inserted { candidates.append(candidate) }
+                }
+            }
+        }
+        candidates.sort { $0.score == $1.score ? $0.id < $1.id : $0.score > $1.score }
+        var seen = Set<String>(), selected: [QuestionEvidence] = [], groups: [[QuestionEvidence]] = []
+        var usedChapters = Set<String>()
+        @discardableResult func append(_ id: Int, offset: Int?, text: String?) throws -> QuestionEvidence? {
+            guard let row = sources[id] else { return nil }
+            let source = row[4] as NSString
+            var range = NSRange(location: 0, length: source.length)
+            if row[4].utf8.count > 1800 {
+                guard let start = offset, let text else { return nil }
+                let length = min(text.utf16.count, source.length - start)
+                range = NSRange(location: start, length: length)
+                var sentences: [NSRange] = []
+                row[4].enumerateSubstrings(in: row[4].startIndex..<row[4].endIndex, options: .bySentences) { _, subrange, _, _ in
+                    let sentence = NSRange(subrange, in: row[4])
+                    if NSIntersectionRange(sentence, range).length > 0 { sentences.append(sentence) }
+                }
+                if let first = sentences.first, let last = sentences.last {
+                    let sentenceRange = NSUnionRange(first, last)
+                    if source.substring(with: sentenceRange).utf8.count <= 1800 { range = sentenceRange }
+                }
+                range = source.rangeOfComposedCharacterSequences(for: range)
+                while source.substring(with: range).utf8.count > 1800 && range.length > 0 {
+                    let last = source.rangeOfComposedCharacterSequence(at: NSMaxRange(range) - 1)
+                    range.length = last.location - range.location
+                }
+            }
+            let key = "\(id):\(range.location):\(range.length)"
+            guard let value = try db.evidence(id: id, scope: scope, range: range) else { return nil }
+            if seen.insert(key).inserted { selected.append(value) }
+            return value
+        }
+        // First pass gives each relevant chapter a chance before second anchors.
+        let first = candidates.filter { usedChapters.insert($0.chapter).inserted }
+        let ordered = wholeBook ? first + candidates.filter { candidate in !first.contains { $0.id == candidate.id && $0.match.offset == candidate.match.offset } } : candidates
+        for candidate in ordered {
+            guard let allMembers = chapters[candidate.chapter] else { continue }
+            func parent(_ id: Int) throws -> String {
+                guard let location = try Locator(json: JSONValue(jsonString: sources[id]![3], warnings: nil), warnings: nil) else { throw IndexError.storage }
+                return (location.locations.cssSelector ?? "").split(separator: ">").dropLast().joined(separator: ">")
+            }
+            let container = try parent(candidate.id)
+            // Sibling prose paragraphs exclude embedded illustration/copyright blocks.
+            let members = try allMembers.filter { try parent($0) == container }
+            guard let position = members.firstIndex(of: candidate.id) else { continue }
+            let original = sources[candidate.id]![4].trimmingCharacters(in: .whitespacesAndNewlines)
+            // Expand a dialogue in source order, bounded to four nearby paragraphs per side.
+            let dialogue = original.hasPrefix("“") || original.hasPrefix("\"") || original.hasPrefix("「")
+            let distance = dialogue ? 4 : 1
+            var group: [QuestionEvidence] = []
+            for neighbor in max(0, position - distance)...min(members.count - 1, position + distance) {
+                let id = members[neighbor]
+                let match = id == candidate.id ? candidate.match : matches[candidate.query][id]
+                if let value = try append(id, offset: match?.offset, text: match?.text) { group.append(value) }
+            }
+            if !group.isEmpty { groups.append(group) }
+        }
+        if wholeBook {
+            var grouped: [String: [QuestionEvidence]] = [:], order: [String] = []
+            for evidence in selected {
+                let location = try evidence.location()
+                let key = location.locations.otherLocations["shudengChapter"]?.string ?? location.href.string
+                if grouped[key] == nil { order.append(key) }
+                grouped[key, default: []].append(evidence)
+            }
+            // Round-robin source windows: one chapter cannot consume the entire budget.
+            selected = []
+            for position in 0..<(grouped.values.map(\.count).max() ?? 0) {
+                for key in order where grouped[key]!.indices.contains(position) { selected.append(grouped[key]![position]) }
+            }
+        }
+        return ChapterRetrieval(evidence: selected, ranks: ranks, groups: groups)
+    }
+
+    func languageSample(bookID: String) throws -> String {
+        let db = try IndexDatabase(url: url)
+        return String(try db.rows("SELECT original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal LIMIT 6", [bookID]).map { $0[0] }.joined(separator: " ").prefix(500))
+    }
+
+    func localEvidence(scope: BookEvidenceScope, query: String) throws -> [QuestionEvidence] {
+        var result: [QuestionEvidence] = []
+        for term in QuestionPlan.keywords(query) {
+            for hit in try search(bookID: scope.bookID, query: term) {
+                let value = QuestionEvidence(locator: hit.locator, context: hit.locator.text.highlight)
+                if try permits([value], scope: scope), !result.contains(where: { $0.locatorJSON == value.locatorJSON }) { result.append(value) }
+                if result.count == 15 { return result }
+            }
+        }
+        return result
+    }
+
     func prepareVectors(bookID: String, embedding: SemanticEmbedding = .shared,
                         progress: @escaping @MainActor (BookPreparationState) async -> Void) async throws {
         let db = try IndexDatabase(url: url)
@@ -127,10 +378,14 @@ extension BookIndex {
 }
 
 extension IndexDatabase {
-    func evidence(id: Int, scope: BookEvidenceScope) throws -> QuestionEvidence? {
+    func evidence(id: Int, scope: BookEvidenceScope, range: NSRange? = nil) throws -> QuestionEvidence? {
         guard let row = try rows("SELECT chapter,ordinal,locator,original FROM fragments WHERE id=? AND book_id=?", [String(id), scope.bookID]).first,
               scope.permits(chapter: Int(row[0])!, ordinal: Int(row[1])!),
               var locator = try Locator(json: JSONValue(jsonString: row[2], warnings: nil), warnings: nil) else { return nil }
+        let original = row[3] as NSString
+        let span = range ?? NSRange(location: 0, length: original.length)
+        guard span.location >= 0, span.length > 0, NSMaxRange(span) <= original.length else { return nil }
+        let quote = original.substring(with: span)
         // Use the canonical fragment and its existing source mapping, not model-generated positions.
         if let nodes = locator.locations.otherLocations["shudengTextNodes"]?.array {
             func point(_ offset: Int, end: Bool) -> DOMRange.Point? {
@@ -142,12 +397,14 @@ extension IndexDatabase {
                 }
                 return nil
             }
-            let start = (locator.text.before ?? "").utf16.count
-            guard let a = point(start, end: false), let b = point(start + row[3].utf16.count, end: true) else { throw IndexError.source }
+            let start = (locator.text.before ?? "").utf16.count + span.location
+            guard let a = point(start, end: false), let b = point(start + span.length, end: true) else { throw IndexError.source }
             locator.locations.otherLocations["domRange"] = .object(DOMRange(start: a, end: b).jsonObject)
             locator.locations.otherLocations.removeValue(forKey: "shudengTextNodes")
         }
-        return QuestionEvidence(locator: locator, context: row[3])
+        locator.text = .init(after: original.substring(from: NSMaxRange(span)) + (locator.text.after ?? ""),
+                             before: (locator.text.before ?? "") + original.substring(to: span.location), highlight: quote)
+        return QuestionEvidence(locator: locator, context: quote)
     }
 }
 

@@ -27,7 +27,8 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "选文问答"
+        let free = library.questions.record(id)?.freeQuestion == true
+        title = free ? "问这本书" : "选文问答"
         view.backgroundColor = .systemBackground
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "关闭", style: .plain, target: self, action: #selector(closePanel))
         let scroll = UIScrollView(); scroll.keyboardDismissMode = .interactive; scroll.accessibilityIdentifier = "question-scroll"
@@ -35,6 +36,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         references.axis = .vertical; references.spacing = 12
         let collapse = UIButton(type: .system)
         collapse.setTitle("展开／收起提问选文", for: .normal)
+        collapse.isHidden = free
         collapse.addTarget(self, action: #selector(toggleQuote), for: .touchUpInside)
         quote.isHidden = true; quote.accessibilityIdentifier = "question-selection"
         for label in [quote, status, scope, answer] {
@@ -120,9 +122,11 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             let store = try AIConfigurationStore(root: library.root)
             guard let configuration = store.configurations.first(where: { $0.id == store.selectedID }) else { throw QuestionError.configuration }
             let ready = library.preparation.states[record.bookID]?.ready == true
-            let message = "问题、选文、附近原文" + (ready ? "和当前书关键词、本地语义检索命中及补齐的邻段原文（可能来自其他章节）" : "（当前资料未齐，仅可主动选择局部解释）") + "将交给“\(configuration.name)”（\(configuration.address)），可能产生费用。单次原文容量有限，实际材料和不足范围将记录在本对话。"
-            let alert = UIAlertController(title: ready ? "发送书内原文" : "资料尚未准备完整", message: message, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: ready ? "发送并查找书内依据" : "仅用选文和邻文解释", style: .default) { [weak self] _ in
+            let free = record.freeQuestion == true
+            let message = (free ? "问题与当前书内取材" : "问题、选文、附近原文") + (ready ? "和当前书关键词、本地语义检索命中及补齐的邻段原文（可能来自其他章节）" : "（当前资料未齐，仅可主动选择局部解释）") + "将交给“\(configuration.name)”（\(configuration.address)），可能产生费用。单次原文容量有限，实际材料和不足范围将记录在本对话。"
+            let extra = free && ready && QuestionPlan.wholeBook(record.question) ? "全书问题先发送问题与最多500字原文样本判断语言并拆解查询，再发送取材回答，共两次请求。" : ""
+            let alert = UIAlertController(title: ready ? "发送书内原文" : "资料尚未准备完整", message: message + extra, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: ready ? "发送并查找书内依据" : (free ? "仅用已准备资料解释" : "仅用选文和邻文解释"), style: .default) { [weak self] _ in
                 guard let self else { return }; self.library.questions.send(self.id, library: self.library, local: !ready)
             })
             alert.addAction(UIAlertAction(title: ready ? "取消" : "等待资料准备", style: .cancel))
@@ -134,7 +138,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     }
     private func open(_ evidence: QuestionEvidence) {
         let page = EvidenceController(values: [evidence]) { [weak self] in
-            guard let self, let record = self.library.questions.record(self.id), let target = try? evidence.location(), let origin = try? record.selection.location() else { return }
+            guard let self, let record = self.library.questions.record(self.id), let target = try? evidence.location(), let origin = try? record.origin() else { return }
             if let jump = self.jump { self.dismiss(animated: true) { jump(target, origin) } }
             else { self.openReader(record, target: target, origin: origin) }
         }

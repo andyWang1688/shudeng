@@ -22,6 +22,29 @@ final class QuestionTests: XCTestCase {
         var record = ReadingQuestion(book: book, selection: QuestionEvidence(locator: location), neighbors: [])
         record.question = "Why review?"; return record
     }
+    func testFreeQuestionDistinctIdentityOriginAndAtomicRetry() throws {
+        let book = Book(id: "book-only", title: "Book", author: "Author")
+        let origin = try question().selection.location()
+        var first = ReadingQuestion(book: book, origin: origin)
+        let second = ReadingQuestion(book: book, origin: origin)
+        XCTAssertNotEqual(first.id, second.id)
+        XCTAssertEqual(first.bookID, book.id); XCTAssertTrue(first.selection.quote.isEmpty)
+        XCTAssertEqual(first.selectionParts, []); XCTAssertEqual(try first.origin(), origin)
+        let store = QuestionStore(root: root, secrets: secrets)
+        XCTAssertTrue(store.save(first))
+        let file = root.appendingPathComponent("reading-questions.json"), backup = root.appendingPathComponent("before.json")
+        try FileManager.default.moveItem(at: file, to: backup)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+        first.answer = "Saved reply"; first.state = .complete; first.citations = [question().selection]
+        XCTAssertFalse(store.save(first)); XCTAssertTrue(store.unsaved(first.id))
+        try FileManager.default.removeItem(at: file); try FileManager.default.moveItem(at: backup, to: file)
+        store.retrySave(first.id); store.retrySave(first.id)
+        let restored = QuestionStore(root: root, secrets: secrets)
+        XCTAssertEqual(restored.records.count, 1)
+        XCTAssertEqual(restored.record(first.id)?.state, .complete)
+        XCTAssertEqual(try restored.record(first.id)?.origin(), origin)
+        XCTAssertEqual(restored.record(first.id)?.citations, first.citations)
+    }
     func testAtomicCompletionRealWriteFailureRetryAndRestart() throws {
         let store = QuestionStore(root: root, secrets: secrets)
         var record = question(); XCTAssertTrue(store.save(record))

@@ -104,6 +104,22 @@ actor BookIndex {
         let toc = try await publication.tableOfContents().get()
         try db.initialize(bookID, total: order.count, contents: try toc.jsonString(), rebuild: rebuild)
         var completed = try db.completed(bookID)
+        var logical: (key: String, title: String)?
+        if let previous = try db.rows("SELECT locator FROM fragments WHERE book_id=? ORDER BY chapter DESC,ordinal DESC LIMIT 1", [bookID]).first,
+           let locator = try Locator(json: JSONValue(jsonString: previous[0], warnings: nil), warnings: nil),
+           let key = locator.locations.otherLocations["shudengChapter"]?.string {
+            logical = (key, locator.title ?? "章节")
+        }
+        func anchors(_ links: [Link], href: AnyURL) -> [String: String] {
+            var values: [String: String] = [:]
+            for link in links {
+                if link.url().removingFragment() == href.removingFragment() {
+                    values[link.url().fragment ?? ""] = link.title ?? "章节"
+                }
+                values.merge(anchors(link.children, href: href)) { first, _ in first }
+            }
+            return values
+        }
         await progress(BookPreparationState(completed: completed, total: order.count, preparing: completed != order.count))
         func title(_ links: [Link], href: AnyURL) -> String? {
             for link in links {
@@ -119,7 +135,8 @@ actor BookIndex {
             let data = try await resource.read().get()
             guard let html = String(data: data, encoding: .utf8) else { throw IndexError.source }
             let chapterTitle = title(toc, href: link.url()) ?? link.title ?? "第\(completed + 1)章"
-            let fragments = try BookText.fragments(html: html, href: link.url(), title: chapterTitle)
+            let fragments = try BookText.fragments(html: html, href: link.url(), title: chapterTitle,
+                                                  anchors: anchors(toc, href: link.url()), logical: &logical)
             try Task.checkCancellation()
             // No suspension: chapter, original text, FTS and checkpoint commit together.
             try db.commit(bookID, chapter: completed, href: link.href, title: chapterTitle, fragments: fragments)
@@ -153,15 +170,25 @@ enum BookText {
         return node.getChildNodes().map(raw).joined()
     }
     static func fragments(html: String, href: AnyURL, title: String) throws -> [BookFragment] {
+        var logical: (key: String, title: String)?
+        return try fragments(html: html, href: href, title: title, anchors: [:], logical: &logical)
+    }
+    static func fragments(html: String, href: AnyURL, title: String, anchors: [String: String],
+                          logical: inout (key: String, title: String)?) throws -> [BookFragment] {
+        if let label = anchors[""] { logical = (href.removingFragment().string, label) }
         let document = try SwiftSoup.parse(html)
         guard let body = document.body() else { throw IndexError.source }
         var result: [BookFragment] = []
         func hidden(_ element: Element) -> Bool {
-            excluded.contains(element.tagName()) || element.hasAttr("hidden") || (try? element.attr("aria-hidden")) == "true"
+            let style = ((try? element.attr("style")) ?? "").lowercased().filter { !$0.isWhitespace }
+            return excluded.contains(element.tagName()) || element.hasAttr("hidden") || (try? element.attr("aria-hidden")) == "true" ||
+                style.contains("display:none") || style.contains("visibility:hidden") || style.contains("visibility:collapse")
         }
         func hasBoundary(_ node: Node) -> Bool {
             guard let element = node as? Element else { return false }
-            return blocks.contains(element.tagName()) || hidden(element) || element.getChildNodes().contains(where: hasBoundary)
+            return blocks.contains(element.tagName()) || hidden(element) ||
+                (try? element.attr("id")).flatMap { $0.isEmpty ? nil : anchors[$0] } != nil ||
+                element.getChildNodes().contains(where: hasBoundary)
         }
         func selector(_ element: Element) -> String {
             var path: [String] = []
@@ -177,6 +204,10 @@ enum BookText {
         }
         func visit(_ element: Element) {
             guard !hidden(element) else { return }
+            // Update only on entering a visible target, after the preceding run was flushed.
+            if let name = try? element.attr("id"), !name.isEmpty, let label = anchors[name] {
+                logical = (href.removingFragment().string + "#" + name, label)
+            }
             let whole = raw(element) as NSString
             var textNodes: [JSONValue] = []
             var nodeOffset = 0
@@ -197,8 +228,10 @@ enum BookText {
             var run = ""
             func flush() {
                 guard !run.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { run = ""; return }
-                let locator = Locator(href: href, mediaType: .xhtml, title: title,
-                    locations: .init(otherLocations: ["cssSelector": .string(selector(element)), "shudengTextNodes": .array(textNodes)]),
+                var locations: [String: JSONValue] = ["cssSelector": .string(selector(element)), "shudengTextNodes": .array(textNodes)]
+                if let logical { locations["shudengChapter"] = .string(logical.key) }
+                let locator = Locator(href: href, mediaType: .xhtml, title: logical?.title ?? title,
+                    locations: .init(otherLocations: locations),
                     text: .init(after: whole.substring(from: runStart + (run as NSString).length), before: whole.substring(to: runStart), highlight: run))
                 result.append(BookFragment(text: run, locator: locator))
                 run = ""
@@ -285,7 +318,7 @@ final class IndexDatabase {
     func initialize(_ book: String, total: Int, contents: String, rebuild: Bool) throws {
         let old = try rows("SELECT version,total FROM preparations WHERE book_id=?", [book]).first
         try transaction {
-            if rebuild || (old != nil && old != ["2", String(total)]) {
+            if rebuild || (old != nil && old != ["3", String(total)]) {
                 try execute("DELETE FROM embeddings WHERE book_id=?", [book])
                 try execute("DELETE FROM embedding_progress WHERE book_id=?", [book])
                 try execute("DELETE FROM fragment_terms WHERE book_id=?", [book])
@@ -294,7 +327,7 @@ final class IndexDatabase {
                 try execute("DELETE FROM preparations WHERE book_id=?", [book])
                 try execute("DELETE FROM contents WHERE book_id=?", [book])
             }
-            try execute("INSERT OR IGNORE INTO preparations(book_id,version,total) VALUES(?,2,?)", [book, String(total)])
+            try execute("INSERT OR IGNORE INTO preparations(book_id,version,total) VALUES(?,3,?)", [book, String(total)])
             try execute("INSERT OR REPLACE INTO contents VALUES(?,?)", [book, contents])
         }
     }
