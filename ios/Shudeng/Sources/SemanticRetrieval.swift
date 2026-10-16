@@ -106,8 +106,9 @@ extension BookIndex {
     }
 
     /// Four query facets share one vector scan; source positions remain local.
-    func chapterWindows(scope: BookEvidenceScope, queries: [String], wholeBook: Bool) async throws -> ChapterRetrieval {
+    func chapterWindows(scope: BookEvidenceScope, queries: [String], wholeBook: Bool, originalQuery: String? = nil) async throws -> ChapterRetrieval {
         guard !queries.isEmpty, queries.count <= 4 else { throw QuestionError.coverage }
+        let queries = queries + (originalQuery.map { [$0] } ?? [])
         let db = try IndexDatabase(url: url)
         guard try db.state(scope.bookID).semanticReady else { throw QuestionError.preparation }
         var vectors: [[Float]] = []
@@ -124,6 +125,7 @@ extension BookIndex {
         }
         struct Match { let score: Float; let piece: Int; let offset: Int; let text: String }
         var matches = Array(repeating: [Int: Match](), count: queries.count)
+        var pieceMatches = Array(repeating: [Int: [Match]](), count: queries.count)
         let statement = try db.statement("SELECT fragment_id,vector,piece,offset,original FROM embeddings WHERE book_id=? AND model=?", [scope.bookID, SemanticEmbedding.version])
         defer { sqlite3_finalize(statement) }
         while true {
@@ -137,9 +139,11 @@ extension BookIndex {
                 var score: Float = 0
                 for i in vectors[q].indices { score += vectors[q][i] * blob.loadUnaligned(fromByteOffset: i * 4, as: Float.self) }
                 guard score.isFinite else { throw IndexError.storage }
-                if score > (matches[q][id]?.score ?? -.infinity) {
-                    matches[q][id] = Match(score: score, piece: Int(sqlite3_column_int(statement, 2)), offset: Int(sqlite3_column_int(statement, 3)), text: String(cString: sqlite3_column_text(statement, 4)))
-                }
+                let match = Match(score: score, piece: Int(sqlite3_column_int(statement, 2)), offset: Int(sqlite3_column_int(statement, 3)), text: String(cString: sqlite3_column_text(statement, 4)))
+                if score > (matches[q][id]?.score ?? -.infinity) { matches[q][id] = match }
+                var pieces = pieceMatches[q][id, default: []].filter { $0.piece != match.piece }
+                pieces.append(match)
+                pieceMatches[q][id] = Array(pieces.sorted { $0.score > $1.score }.prefix(3))
             }
         }
         // Compare ranks within each query; cosine magnitudes across facets are not comparable.
@@ -170,14 +174,16 @@ extension BookIndex {
                     guard let match = matches[q][id] else { continue }
                     ranks.append(ChapterRank(fragmentID: id, chapter: chapter, semanticRank: rank + 1, lexicalRank: lexical.firstIndex(of: id).map { $0 + 1 }, score: match.score, piece: match.piece, offset: match.offset, matchedText: match.text))
                 }
-                choices.append(hybrid.prefix(2).compactMap { id in
-                    matches[q][id].map { Candidate(id: id, chapter: chapter, match: $0, score: 1 / Float(61 + globalRanks[q][id, default: rows.count]), query: q) }
+                choices.append(hybrid.prefix(2).flatMap { id in
+                    pieceMatches[q][id, default: []].map { match in
+                        Candidate(id: id, chapter: chapter, match: match, score: 1 / Float(61 + globalRanks[q][id, default: rows.count]), query: q)
+                    }
                 })
             }
             // Two anchors per facet, interleaved by rank; retain the role rather than
             // truncating all roles by one query's larger absolute cosine value.
             var chapterSeen = Set<String>()
-            for rank in 0..<2 {
+            for rank in 0..<(choices.map(\.count).max() ?? 0) {
                 for role in choices where role.indices.contains(rank) {
                     let candidate = role[rank]
                     if chapterSeen.insert("\(candidate.id):\(candidate.match.offset)").inserted { candidates.append(candidate) }
@@ -190,26 +196,10 @@ extension BookIndex {
         @discardableResult func append(_ id: Int, offset: Int?, text: String?) throws -> QuestionEvidence? {
             guard let row = sources[id] else { return nil }
             let source = row[4] as NSString
-            var range = NSRange(location: 0, length: source.length)
-            if row[4].utf8.count > 1800 {
-                guard let start = offset, let text else { return nil }
-                let length = min(text.utf16.count, source.length - start)
-                range = NSRange(location: start, length: length)
-                var sentences: [NSRange] = []
-                row[4].enumerateSubstrings(in: row[4].startIndex..<row[4].endIndex, options: .bySentences) { _, subrange, _, _ in
-                    let sentence = NSRange(subrange, in: row[4])
-                    if NSIntersectionRange(sentence, range).length > 0 { sentences.append(sentence) }
-                }
-                if let first = sentences.first, let last = sentences.last {
-                    let sentenceRange = NSUnionRange(first, last)
-                    if source.substring(with: sentenceRange).utf8.count <= 1800 { range = sentenceRange }
-                }
-                range = source.rangeOfComposedCharacterSequences(for: range)
-                while source.substring(with: range).utf8.count > 1800 && range.length > 0 {
-                    let last = source.rangeOfComposedCharacterSequence(at: NSMaxRange(range) - 1)
-                    range.length = last.location - range.location
-                }
-            }
+            let start = min(max(offset ?? 0, 0), max(0, source.length - 1))
+            var range = NSRange(location: start, length: min(text?.utf16.count ?? 1600, source.length - start))
+            while source.substring(with: range).utf8.count > 1800 && range.length > 1 { range.length -= 1 }
+            range = source.rangeOfComposedCharacterSequences(for: range)
             let key = "\(id):\(range.location):\(range.length)"
             guard let value = try db.evidence(id: id, scope: scope, range: range) else { return nil }
             if seen.insert(key).inserted { selected.append(value) }
@@ -232,8 +222,27 @@ extension BookIndex {
             // Expand a dialogue in source order, bounded to four nearby paragraphs per side.
             let dialogue = original.hasPrefix("“") || original.hasPrefix("\"") || original.hasPrefix("「")
             let distance = dialogue ? 4 : 1
+            var lower = max(0, position - distance), upper = min(members.count - 1, position + distance)
+            func spoken(_ index: Int) -> Bool {
+                let text = sources[members[index]]![4].trimmingCharacters(in: .whitespacesAndNewlines)
+                return text.hasPrefix("“") || text.hasPrefix("\"") || text.hasPrefix("「")
+            }
+            // Preserve a continuous exchange, including a single intervening narration.
+            // Stop at a prose transition or the explicit local scene byte budget.
+            var sceneBytes = members[lower...upper].reduce(0) { $0 + sources[$1]![4].utf8.count }
+            for direction in [-1, 1] {
+                while true {
+                    let edge = direction < 0 ? lower : upper
+                    let next = edge + direction
+                    guard members.indices.contains(next), spoken(edge) || spoken(next) else { break }
+                    let bytes = sources[members[next]]![4].utf8.count
+                    guard sceneBytes + bytes <= 16000 else { break }
+                    sceneBytes += bytes
+                    if direction < 0 { lower = next } else { upper = next }
+                }
+            }
             var group: [QuestionEvidence] = []
-            for neighbor in max(0, position - distance)...min(members.count - 1, position + distance) {
+            for neighbor in lower...upper {
                 let id = members[neighbor]
                 let match = id == candidate.id ? candidate.match : matches[candidate.query][id]
                 if let value = try append(id, offset: match?.offset, text: match?.text) { group.append(value) }

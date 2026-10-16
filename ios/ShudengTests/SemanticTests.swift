@@ -28,7 +28,7 @@ extension SemanticTests {
             "What criticism did they express at the time, and how did they later explain its effect on their behavior?",
             "How did Elizabeth and Darcy's decisions and relationship with each other's families change by the end?"
         ]
-        let result = try await library.preparation.index.chapterWindows(scope: BookEvidenceScope(bookID: book.id), queries: queries, wholeBook: true)
+        let result = try await library.preparation.index.chapterWindows(scope: BookEvidenceScope(bookID: book.id), queries: queries, wholeBook: true, originalQuery: "概括全书中伊丽莎白与达西怎样逐步纠正对彼此的判断，哪些事件改变了他们的决定？")
         let origin = try XCTUnwrap(result.evidence.first).location()
         var record = ReadingQuestion(book: book, origin: origin)
         record.question = "概括全书中伊丽莎白与达西怎样逐步纠正对彼此的判断，哪些事件改变了他们的决定？"

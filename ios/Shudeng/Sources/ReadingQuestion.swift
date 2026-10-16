@@ -366,7 +366,7 @@ struct QuestionPlan {
                 }
                 trace = RetrievalTrace(keyword: results.flatMap { $0.trace.keyword }, semantic: results.flatMap { $0.trace.semantic }, anchors: results.flatMap { $0.trace.anchors }, expanded: results.flatMap { $0.trace.expanded })
             } else if record.freeQuestion == true, let queries {
-                let result = try await index.chapterWindows(scope: allowed, queries: queries, wholeBook: wholeBook(record.question))
+                let result = try await index.chapterWindows(scope: allowed, queries: queries, wholeBook: wholeBook(record.question), originalQuery: record.question)
                 optional = result.evidence
                 searchedChapters = Set(result.ranks.map(\.chapter)).sorted()
             } else {
