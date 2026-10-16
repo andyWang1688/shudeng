@@ -262,10 +262,18 @@ extension SemanticTests {
         defer { try? FileManager.default.removeItem(at: root) }
         func peakRSS() -> Int64 { var usage = rusage(); getrusage(RUSAGE_SELF, &usage); return Int64(usage.ru_maxrss) }
         let baselineRSS = peakRSS()
+        let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("SemanticModel")
+        if FileManager.default.fileExists(atPath: cache.path) { try FileManager.default.removeItem(at: cache) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cache.path))
+        print("I10_REPAIR_PROCESS pid=\(getpid()) uncached=true")
         let cold = Date()
         _ = try await SemanticEmbedding.shared.tokenIDs("Cold load measurement")
         let coldSeconds = Date().timeIntervalSince(cold)
         let afterColdRSS = peakRSS()
+        _ = try await SemanticEmbedding.shared.embed("Why does Elizabeth reject the first proposal?")
+        let uncachedFirstEmbeddingSeconds = Date().timeIntervalSince(cold)
+        let afterFirstInferenceRSS = peakRSS()
+        print("I10_MEMORY after-first-inference=\(afterFirstInferenceRSS)")
         print("I10_MEMORY baseline=\(baselineRSS) after-cold=\(afterColdRSS)")
         var gaps: [Double] = []
         let pulse = Task { @MainActor in
@@ -288,7 +296,9 @@ extension SemanticTests {
         let prose = try db.rows("SELECT original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal", [book.id]).map { $0[0] }.joined(separator: " ")
         let words = prose.split(whereSeparator: { $0.isWhitespace }).count
         var latencies: [Double] = []
-        for query in ["Why does Elizabeth reject the first proposal?", "What changes her opinion of Darcy?", "达西为什么帮助莉迪亚？", "What is the connection between wealth and marriage?", "How does prejudice affect the judgment of Elizabeth?"] {
+        let queries = ["Why does Elizabeth reject the first proposal?", "What changes her opinion of Darcy?", "达西为什么帮助莉迪亚？", "What is the connection between wealth and marriage?", "How does prejudice affect the judgment of Elizabeth?"]
+        for i in 0..<20 {
+            let query = queries[i % queries.count]
             let queryStart = Date()
             let result = try await library.preparation.index.retrieve(scope: BookEvidenceScope(bookID: book.id), query: query)
             latencies.append(Date().timeIntervalSince(queryStart))
@@ -296,9 +306,11 @@ extension SemanticTests {
         }
         var usage = rusage(); getrusage(RUSAGE_SELF, &usage)
         let rss = Int64(usage.ru_maxrss)
+        let p95 = latencies.sorted()[18]
         let peakGap = gaps.max() ?? 0
         XCTAssertLessThan(indexSeconds, 900)
         XCTAssertLessThan(coldSeconds, 5)
+        XCTAssertLessThan(uncachedFirstEmbeddingSeconds, 5)
         XCTAssertLessThan(latencies.sorted().last!, 2)
         XCTAssertLessThan(rss, 600 * 1024 * 1024)
         XCTAssertLessThan(peakGap, 0.1, "Main actor heartbeat while indexing")
@@ -307,7 +319,7 @@ extension SemanticTests {
         try await library.preparation.index.prepareVectors(bookID: book.id) { _ in }
         let resumeSeconds = Date().timeIntervalSince(resumeStart)
         XCTAssertEqual(try db.rows("SELECT cursor,completed,total FROM embedding_progress WHERE book_id=?", [book.id]), before)
-        try attachment(["bookID":book.id,"source":"https://www.gutenberg.org/ebooks/1342.epub.noimages","sha256":"e59e587472723023b21bf380b8327858e7540b25e57affa3a68935b291e370dc","license":"Project Gutenberg public domain text, Jane Austen died 1817; embedded license retained","word_count":words,"characters":stats[1],"reading_order_resources":chapters,"fragments":stats[0],"vector_rows":vectors[0],"vector_bytes":vectors[1],"vector_min_max_bytes":Array(vectors.suffix(2)),"cold_session_seconds":coldSeconds,"index_seconds":indexSeconds,"query_seconds":latencies,"peak_rss_bytes":rss,"baseline_rss_bytes":baselineRSS,"after_cold_rss_bytes":afterColdRSS,"after_index_rss_bytes":afterIndexRSS,"main_actor_20ms_heartbeat_max_seconds":peakGap,"no_work_resume_seconds":resumeSeconds,"platform":"iOS 26.5 simulator on Mac; not iPhone memory, speed, thermals or battery"],name:"long-book-performance")
+        try attachment(["bookID":book.id,"source":"https://www.gutenberg.org/ebooks/1342.epub.noimages","sha256":"e59e587472723023b21bf380b8327858e7540b25e57affa3a68935b291e370dc","license":"Project Gutenberg public domain text, Jane Austen died 1817; embedded license retained","word_count":words,"characters":stats[1],"reading_order_resources":chapters,"fragments":stats[0],"vector_rows":vectors[0],"vector_bytes":vectors[1],"vector_min_max_bytes":Array(vectors.suffix(2)),"pid":getpid(),"uncached":true,"uncached_load_and_first_embedding_seconds":uncachedFirstEmbeddingSeconds,"query_p95_seconds":p95,"after_first_inference_peak_rss_bytes":afterFirstInferenceRSS,"cold_session_seconds":coldSeconds,"index_seconds":indexSeconds,"query_seconds":latencies,"peak_rss_bytes":rss,"baseline_rss_bytes":baselineRSS,"after_cold_rss_bytes":afterColdRSS,"after_index_rss_bytes":afterIndexRSS,"main_actor_20ms_heartbeat_max_seconds":peakGap,"no_work_resume_seconds":resumeSeconds,"platform":"iOS 26.5 simulator on Mac; not iPhone memory, speed, thermals or battery"],name:"long-book-performance")
         print("I10_LONG words=\(words) fragments=\(stats[0]) vectors=\(vectors[0]) index=\(indexSeconds)s cold=\(coldSeconds)s query-max=\(latencies.max()!)s peak-rss=\(rss) main-gap=\(peakGap)s resume=\(resumeSeconds)s")
     }
 }

@@ -28,7 +28,6 @@ actor SemanticEmbedding {
         let session: ORTSession
         let tokenizer: any Tokenizer
         init(folder: URL) async throws {
-            tokenizer = try await AutoTokenizer.from(modelFolder: folder)
             let manager = FileManager.default
             let cache = try manager.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
                 .appendingPathComponent("SemanticModel", isDirectory: true)
@@ -60,6 +59,8 @@ actor SemanticEmbedding {
             try options.setGraphOptimizationLevel(.all)
             // CPU is the verified INT8 execution path; no unmeasured ANE claim.
             session = try ORTSession(env: env, modelPath: model.path, sessionOptions: options)
+            // Keep tokenizer allocations out of the session initialization peak.
+            tokenizer = try await AutoTokenizer.from(modelFolder: folder)
         }
     }
     private func model() async throws -> Model {
