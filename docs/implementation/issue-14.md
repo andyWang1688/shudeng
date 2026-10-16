@@ -1,4 +1,4 @@
-# #14 有限后台与中断恢复（WIP，60秒验收未达）
+# #14 有限后台与中断恢复（补验完成，待独立验收）
 
 基线 `18c9e2e833036a33fefbe65ed44c67dab1c2613e`。继承 #11 WIP，不修改自由提问、整书取材、范围和协议；不新增服务器、远端任务编号、BGTaskScheduler、后台 URLSession 或自动重发。
 
@@ -28,6 +28,22 @@ DEBUG 隔离启动使用独立 Keychain service `dev.shudeng.ai-services.isolate
 | 网络/注入过期/迟到结果 | 3个定向集成方法通过；真实HTTP断开保留问题、注入中断立即重试无重复且旧结果不覆盖；注入过期不替代上述真实系统过期证据。 |
 | 后台真实写失败 | 仅隔离问答文件替换为空目录，后台收到完整结果后真实原子写失败；前台显示保存失败和答案，恢复文件后重试保存成功；HTTP只有一次，UI方法通过。 |
 
-有限后台申请在进后台前约2.70—2.87秒发生；两个60秒请求均在后台开始HTTP，约26秒后expiration。未发现前台长时间等待耗尽配额的证据；未采集 backgroundTimeRemaining，不能补造。没有靠反复申请延长配额，也没有修改模拟器后台限制。60秒首条验收仍未达，因此只交WIP，不能关闭#14。真机/真实服务/最低iOS16均未验证。
+有限后台申请在进后台前约2.70—2.87秒发生；两个60秒请求均在后台开始HTTP，约26秒后expiration。未发现前台长时间等待耗尽配额的证据；未采集 backgroundTimeRemaining，不能补造。没有靠反复申请延长配额，也没有修改模拟器后台限制。原“60秒均在后台完成”目标未达；本次用户明确接受系统中断后可靠保存问题、标记未完成、允许主动重试的有限后台契约，原失败证据保留，不重跑矩阵。真机/真实服务/最低iOS16均未验证。
 
 实际命令、PID、绝对时间线、方法结果、xcresult与恢复记录见 `.scratch/delivery/issue-14.md`；截图、HTTP原始响应、故障前后文件、业务哈希及原始命令日志见 `.scratch/delivery/issue-14-evidence/`。只继承#9引用/Keychain/原子保存既有证据，不称重跑其全套。
+
+## 本次三项补验
+
+Fixed base `6b1ea3ca16fca6cfab11297ab9ef1ed8bac5ef8d`。唯一产品修复：LibraryStore 在启动时立即创建 QuestionStore，使已有的 load 恢复逻辑在书架态执行；此前 lazy 属性需要访问问答后才触发恢复。保留 ephemeral、拒绝重定向、TLS校验、90秒回答超时及现有检索/权限规则，不引入后台上传或远端恢复路线。
+
+仅QA9FA `9FAEC8B6-6E69-4E0B-A4D1-115C85C6D48E`：
+
+| 补验 | 结果与证据 |
+| --- | --- |
+| HTTP在途终止→书架态重启恢复→同UUID主动重试 | A0D247F7-0C99-4EB7-A9F7-AFBA0C4BE2A8；终止前服务已收请求，盘为generating；重启稳定后incomplete、空答案。精确历史行重试，UI选择bg-20，同UUID唯一、complete+答案+E1；26307 exit0，重试HTTP请求/响应各1。立即launch后读盘存在启动竞态，不作恢复保证。 |
+| 真实后台保存失败→仅重试保存→真实终止→离线重启回看 | B98186B6-C6E1-415D-B18A-FA87FA05E46A；后台收到完整响应后真实原子写失败，前台重试保存成功。fixture停止后真实终止/重启，答案、引用、complete可读且UUID唯一；78151/5555 exit0，整链HTTP请求/响应各1。 |
+| 关面板继续阅读→后台完成 | ED11CCBC-526E-4312-9C90-E46D5E4F38DF；滚动使S1-SECOND y456→1171，持久化Locator progression 0.745547→0.381679；随后Home，后台接收并提交complete+答案+E1，同UUID唯一；55011 exit0，HTTP请求/响应各1。 |
+
+最后构建与四个定向UI方法通过；首轮错误runner/环境变量、旧保存失败定位失败、章末向后滚动失败均保留，未计入通过。最终仅修测试定位、滚动方向和harness证据采集，产品未为测试放宽安全边界。四个方法验证的是上述隔离补验，不代表已完成主控独立产品验收。
+
+本次命令、绝对时间、HTTP原文、盘快照、截图及失败轮次索引见 [.scratch/delivery/issue-14-followup.md](../../.scratch/delivery/issue-14-followup.md)；聚合核验 `issue-14-followup-evidence/verified-final-summary.json`。QA9FA应用/fixture已停止，原隔离目录和显示设置已恢复，业务哈希差异=[]；A1、Small未操作。未push、未修改或关闭Issue，交主控独立验收。

@@ -87,7 +87,7 @@ final class LibraryStore {
     private(set) var books: [Book] = []
     let root: URL
     lazy var preparation = BookPreparation(root: root)
-    lazy var questions = QuestionStore(root: root)
+    let questions: QuestionStore
     private let fileManager = FileManager.default
     private let http = DefaultHTTPClient()
     private lazy var retriever = AssetRetriever(httpClient: http)
@@ -100,7 +100,9 @@ final class LibraryStore {
 
     init(root: URL) throws {
         self.root = root
-        try fileManager.createDirectory(at: files, withIntermediateDirectories: true)
+        let filesURL = root.appendingPathComponent("Books", isDirectory: true)
+        try fileManager.createDirectory(at: filesURL, withIntermediateDirectories: true)
+        questions = QuestionStore(root: root)
         if fileManager.fileExists(atPath: catalog.path) {
             books = try JSONDecoder().decode([Book].self, from: Data(contentsOf: catalog))
         }
