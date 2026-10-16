@@ -8,8 +8,23 @@ struct BookEvidenceScope: Codable {
     let bookID: String
     var throughChapter: Int = Int.max
     var throughOrdinal: Int = Int.max
+    // Explicit, possibly disjoint reading-order resources; nil preserves legacy scopes.
+    var chapters: [Int]? = nil
     func permits(chapter: Int, ordinal: Int) -> Bool {
-        chapter < throughChapter || (chapter == throughChapter && ordinal <= throughOrdinal)
+        (chapters == nil || chapters!.contains(chapter)) &&
+        (chapter < throughChapter || (chapter == throughChapter && ordinal <= throughOrdinal))
+    }
+    func contains(_ other: BookEvidenceScope) -> Bool {
+        guard bookID == other.bookID,
+              throughChapter > other.throughChapter || (throughChapter == other.throughChapter && throughOrdinal >= other.throughOrdinal) else { return false }
+        guard let chapters else { return true }
+        guard let previous = other.chapters else { return false }
+        return Set(previous).isSubset(of: Set(chapters))
+    }
+    var sql: (filter: String, bounds: [String]) {
+        let allowed = chapters.map { $0.isEmpty ? " AND 0" : " AND f.chapter IN (" + $0.map { _ in "?" }.joined(separator: ",") + ")" } ?? ""
+        return ("f.book_id=? AND (f.chapter<? OR (f.chapter=? AND f.ordinal<=?))" + allowed,
+                [bookID, String(throughChapter), String(throughChapter), String(throughOrdinal)] + (chapters ?? []).map(String.init))
     }
 }
 struct RetrievalTrace: Codable {
@@ -271,13 +286,14 @@ extension BookIndex {
         let db = try IndexDatabase(url: url)
         let scope = scope ?? BookEvidenceScope(bookID: bookID)
         guard scope.bookID == bookID else { throw QuestionError.scope }
-        return String(try db.rows("SELECT original FROM fragments WHERE book_id=? AND (chapter<? OR (chapter=? AND ordinal<=?)) ORDER BY chapter,ordinal LIMIT 6", [bookID, String(scope.throughChapter), String(scope.throughChapter), String(scope.throughOrdinal)]).map { $0[0] }.joined(separator: " ").prefix(500))
+        return String(try db.rows("SELECT original FROM fragments f WHERE " + scope.sql.filter + " ORDER BY chapter,ordinal LIMIT 6", scope.sql.bounds).map { $0[0] }.joined(separator: " ").prefix(500))
     }
 
     func localEvidence(scope: BookEvidenceScope, query: String) throws -> [QuestionEvidence] {
+        let db = try IndexDatabase(url: url)
         var result: [QuestionEvidence] = []
         for term in QuestionPlan.keywords(query) {
-            for hit in try search(bookID: scope.bookID, query: term) {
+            for hit in try db.search(scope.bookID, query: term, scope: scope) {
                 let value = QuestionEvidence(locator: hit.locator, context: hit.locator.text.highlight)
                 if try permits([value], scope: scope), !result.contains(where: { $0.locatorJSON == value.locatorJSON }) { result.append(value) }
                 if result.count == 15 { return result }
@@ -331,8 +347,7 @@ extension BookIndex {
         guard try db.state(scope.bookID).semanticReady else { throw QuestionError.preparation }
         let vector = try await SemanticEmbedding.shared.embed(query)
         try Task.checkCancellation()
-        let bounds = [scope.bookID, String(scope.throughChapter), String(scope.throughChapter), String(scope.throughOrdinal)]
-        let filter = "f.book_id=? AND (f.chapter<? OR (f.chapter=? AND f.ordinal<=?))"
+        let (filter, bounds) = scope.sql
         // Scan one vector at a time; do not materialize the entire book's vector matrix.
         let statement = try db.statement("SELECT e.fragment_id,e.vector FROM embeddings e JOIN fragments f ON f.id=e.fragment_id WHERE " + filter + " AND e.book_id=f.book_id AND e.model=?", bounds + [SemanticEmbedding.version])
         defer { sqlite3_finalize(statement) }

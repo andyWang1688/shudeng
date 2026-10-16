@@ -19,6 +19,8 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     private let materials = UIButton(type: .system)
     private let followUp = UIButton(type: .system)
     private let history = UIStackView()
+    private let range = UISegmentedControl(items: ["整书", "仅已读"])
+    private let rangeHelp = UILabel()
     private var observer: NSObjectProtocol?
     private var shownReferences: [QuestionEvidence] = []
     init(library: LibraryStore, id: UUID, jump: ((Locator, Locator) -> Void)? = nil) {
@@ -49,6 +51,11 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         scope.accessibilityIdentifier = "question-scope"
         answer.accessibilityIdentifier = "question-answer"
         scope.textColor = .secondaryLabel
+        range.accessibilityIdentifier = "question-reading-range"
+        range.addTarget(self, action: #selector(changeRange), for: .valueChanged)
+        rangeHelp.font = .preferredFont(forTextStyle: .footnote); rangeHelp.adjustsFontForContentSizeCategory = true
+        rangeHelp.numberOfLines = 0; rangeHelp.textColor = .secondaryLabel
+        rangeHelp.text = "仅已读只参考你在“目录与书签 → 已读范围”确认的章节，可能缺少后文解释。访问与翻页不会自动确认；历史超出范围时须新建问题。"
         input.font = .preferredFont(forTextStyle: .body); input.adjustsFontForContentSizeCategory = true
         input.backgroundColor = .secondarySystemBackground; input.layer.cornerRadius = 8
         input.accessibilityIdentifier = "question-input"; input.accessibilityLabel = "问题"
@@ -60,7 +67,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         materials.setTitle("查看本次实际发送材料", for: .normal); materials.addTarget(self, action: #selector(showMaterials), for: .touchUpInside)
         followUp.setTitle("继续追问", for: .normal); followUp.accessibilityIdentifier = "question-follow-up"
         followUp.addTarget(self, action: #selector(continueConversation), for: .touchUpInside)
-        for item in [history, collapse, quote, input, status, retry, send, cancel, scope, materials, answer, references, followUp] { stack.addArrangedSubview(item) }
+        for item in [history, collapse, quote, range, rangeHelp, input, status, retry, send, cancel, scope, materials, answer, references, followUp] { stack.addArrangedSubview(item) }
         for button in [collapse, send, cancel, retry, materials, followUp] {
             button.titleLabel?.font = .preferredFont(forTextStyle: .body); button.titleLabel?.adjustsFontForContentSizeCategory = true
             button.titleLabel?.numberOfLines = 0; button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
@@ -97,6 +104,8 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         }
         if !input.isFirstResponder { input.text = record.question }
         input.isEditable = record.state == .draft || record.state == .incomplete
+        range.selectedSegmentIndex = record.onlyRead == true ? 1 : 0
+        range.isEnabled = input.isEditable
         quote.text = (record.selectionParts ?? [record.selection]).map(\.quote).joined(separator: "\n")
         let unsaved = library.questions.unsaved(id)
         followUp.isHidden = record.state != .complete
@@ -128,6 +137,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         }
     }
     func textViewDidChange(_ textView: UITextView) { library.questions.edit(id, text: textView.text) }
+    @objc private func changeRange() { library.questions.setOnlyRead(id, value: range.selectedSegmentIndex == 1); refresh() }
     @objc private func continueConversation() {
         guard let record = library.questions.record(id), let next = library.questions.followUp(record.conversation) else { return }
         id = next; refresh(); input.becomeFirstResponder()
@@ -155,7 +165,8 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             let free = record.freeQuestion == true
             let message = (free ? "问题与当前书内取材" : "问题、选文、附近原文") + (ready ? "和当前书关键词、本地语义检索命中及补齐的邻段原文（可能来自其他章节）" : "（当前资料未齐，仅可主动选择局部解释）") + "将交给“\(configuration.name)”（\(configuration.address)），可能产生费用。单次原文容量有限，实际材料和不足范围将记录在本对话。"
             let extra = continuing ? "本次还会发送此前各轮问题与回答，先明确追问再重新查书，共两次请求；历史回答不作为原文依据。历史与原文均计入本地24KB预算，此上限不保证服务接受，容量不足会明确提示。" : free && ready && QuestionPlan.wholeBook(record.question) ? "全书问题先发送问题与最多500字原文样本判断语言并拆解查询，再发送取材回答，共两次请求。" : ""
-            let alert = UIAlertController(title: ready ? "发送书内原文" : "资料尚未准备完整", message: message + extra, preferredStyle: .alert)
+            let restriction = record.onlyRead == true ? "仅已读：仅发送明确确认已读章节内的原文，可能缺少后文解释；未读邻文将排除。没有已读资料或选文、历史越界时不发送，请确认已读范围或新建问题。" : "整书：允许参考未读内容。"
+            let alert = UIAlertController(title: ready ? "发送书内原文" : "资料尚未准备完整", message: restriction + message + extra, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: ready ? "发送并查找书内依据" : (free ? "仅用已准备资料解释" : "仅用选文和邻文解释"), style: .default) { [weak self] _ in
                 guard let self else { return }; self.library.questions.send(self.id, library: self.library, local: !ready)
             })

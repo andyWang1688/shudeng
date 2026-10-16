@@ -353,10 +353,12 @@ final class IndexDatabase {
             try execute("UPDATE preparations SET completed=? WHERE book_id=?", [String(chapter + 1), book])
         }
     }
-    func search(_ book: String, query: String) throws -> [BookSearchHit] {
+    func search(_ book: String, query: String, scope: BookEvidenceScope? = nil) throws -> [BookSearchHit] {
         let terms = BookText.tokens(query, query: true)
         guard !terms.isEmpty else { return [] }
-        let candidates = try rows("SELECT f.chapter,f.ordinal,f.original,f.locator FROM fragment_terms t JOIN fragments f ON f.id=t.rowid WHERE fragment_terms MATCH ? AND f.book_id=? ORDER BY f.chapter,f.ordinal", [terms, book])
+        let scope = scope ?? BookEvidenceScope(bookID: book)
+        guard scope.bookID == book else { throw QuestionError.scope }
+        let candidates = try rows("SELECT f.chapter,f.ordinal,f.original,f.locator FROM fragment_terms t JOIN fragments f ON f.id=t.rowid WHERE fragment_terms MATCH ? AND " + scope.sql.filter + " ORDER BY f.chapter,f.ordinal", [terms] + scope.sql.bounds)
         var hits: [BookSearchHit] = []
         for row in candidates {
             guard let base = try Locator(json: JSONValue(jsonString: row[3], warnings: nil), warnings: nil) else { throw IndexError.storage }

@@ -828,7 +828,9 @@ private final class BookNavigationController: UITableViewController {
         tabs.addTarget(self, action: #selector(refresh), for: .valueChanged)
         navigationItem.titleView = tabs
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: "完成", style: .done, target: self, action: #selector(done))
-        toolbarItems = [UIBarButtonItem(title: "书内搜索", style: .plain, target: self, action: #selector(openSearch))]
+        toolbarItems = [UIBarButtonItem(title: "书内搜索", style: .plain, target: self, action: #selector(openSearch)),
+                        UIBarButtonItem(systemItem: .flexibleSpace),
+                        UIBarButtonItem(title: "已读范围", style: .plain, target: self, action: #selector(openReadChapters))]
         navigationController?.setToolbarHidden(false, animated: false)
         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addBookmark))
         navigationItem.rightBarButtonItem?.accessibilityLabel = "添加书签"
@@ -848,6 +850,9 @@ private final class BookNavigationController: UITableViewController {
     @objc private func openSearch() {
         guard let book = library.books.first(where: { $0.id == bookID }) else { return }
         navigationController?.pushViewController(BookSearchController(library: library, book: book, navigate: navigate), animated: true)
+    }
+    @objc private func openReadChapters() {
+        navigationController?.pushViewController(ReadChaptersController(publication: publication, library: library, bookID: bookID), animated: true)
     }
     @objc private func done() { dismiss(animated: true) }
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? { feedback }
@@ -1014,6 +1019,79 @@ private final class ReadingSettingsController: UIViewController {
         settings.pageCurl = mode.selectedSegmentIndex == 2
         settings.dark = theme.selectedSegmentIndex == 1
         dismiss(animated: true) { [apply, settings] in apply(settings) }
+    }
+}
+
+@MainActor
+private final class ReadChaptersController: UITableViewController {
+    private let publication: Publication
+    private let library: LibraryStore
+    private let bookID: String
+    private var names: [String] = []
+    private var feedback: String?
+    init(publication: Publication, library: LibraryStore, bookID: String) {
+        self.publication = publication; self.library = library; self.bookID = bookID
+        super.init(style: .insetGrouped)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "已读范围"; tableView.accessibilityIdentifier = "read-chapters"
+        names = publication.readingOrder.enumerated().map { $0.element.title ?? "正文\($0.offset + 1)" }
+        Task {
+            if let contents = try? await publication.tableOfContents().get() {
+                func titles(_ links: [Link], href: AnyURL) -> [String] {
+                    links.flatMap { link in
+                        (link.url().removingFragment() == href ? [link.title ?? "未命名章节"] : []) + titles(link.children, href: href)
+                    }
+                }
+                names = publication.readingOrder.enumerated().map { index, link in
+                    let values = titles(contents, href: link.url().removingFragment())
+                    return values.isEmpty ? names[index] : values.joined(separator: "、")
+                }
+                tableView.reloadData()
+            }
+        }
+    }
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        "请明确确认已读章节；可跳章勾选，不包含之前未勾选的章节。"
+    }
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        (feedback.map { $0 + "\n" } ?? "") + "每项对应原书一个完整正文文件，可能包含多个目录小节；全部读过才确认。仅浏览、翻页、搜索、引用往返及内部预取不会改变已读范围。旧阅读进度不推算为已读；仅已读可能缺少后文解释。"
+    }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { names.count }
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        cell.textLabel?.text = names[indexPath.row]
+        let read = library.readScope(for: bookID).permits(chapter: indexPath.row, ordinal: 0)
+        cell.detailTextLabel?.text = read ? "已确认已读" : "未确认已读"
+        cell.isAccessibilityElement = true
+        cell.accessibilityLabel = names[indexPath.row] + "，" + (read ? "已确认已读" : "未确认已读")
+        for label in [cell.textLabel, cell.detailTextLabel] { label?.numberOfLines = 0; label?.adjustsFontForContentSizeCategory = true }
+        cell.accessoryType = read ? .checkmark : .none
+        cell.accessibilityIdentifier = "read-chapter-\(indexPath.row)"
+        return cell
+    }
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let chapter = indexPath.row
+        let read = library.readScope(for: bookID).permits(chapter: chapter, ordinal: 0)
+        let alert = UIAlertController(title: read ? "移出已读范围？" : "确认整项已读？",
+            message: names[chapter] + "\n包含此正文文件的全部内容及目录小节；确认后可用于仅已读问答。其他章节不受影响。", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: read ? "移出" : "确认已读", style: .default) { [weak self] _ in self?.save(chapter, read: !read) })
+        present(alert, animated: true)
+    }
+    private func save(_ chapter: Int, read: Bool) {
+        do {
+            try library.setChapterRead(chapter, read: read, for: bookID)
+            feedback = "已读范围已保存"; tableView.reloadData()
+        } catch {
+            let alert = UIAlertController(title: "已读范围保存失败", message: "此次变更未生效；仅已读仍使用上次已保存范围。", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+            alert.addAction(UIAlertAction(title: "重试保存", style: .default) { [weak self] _ in self?.save(chapter, read: read) })
+            present(alert, animated: true)
+        }
     }
 }
 

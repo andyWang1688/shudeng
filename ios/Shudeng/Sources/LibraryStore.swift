@@ -20,6 +20,7 @@ struct Book: Codable, Identifiable {
     var bookmarks: [Bookmark]?
     var notes: [BookNote]?
     var noteDrafts: [BookNote]?
+    var readChapters: [Int]?
 }
 
 struct BookNote: Codable, Identifiable {
@@ -170,6 +171,19 @@ final class LibraryStore {
         updated[index].locatorJSON = locator.description
         updated[index].readingSettings = settings
         do { try commit(updated) } catch { throw LibraryError.save }
+    }
+
+    // Only an explicit confirmation writes this; visiting a position never does.
+    func setChapterRead(_ chapter: Int, read: Bool, for id: String) throws {
+        guard chapter >= 0, let index = books.firstIndex(where: { $0.id == id }) else { throw LibraryError.missing }
+        var updated = books
+        var chapters = Set(updated[index].readChapters ?? [])
+        if read { chapters.insert(chapter) } else { chapters.remove(chapter) }
+        updated[index].readChapters = chapters.sorted()
+        do { try commit(updated) } catch { throw LibraryError.save }
+    }
+    func readScope(for id: String) -> BookEvidenceScope {
+        BookEvidenceScope(bookID: id, chapters: books.first(where: { $0.id == id })?.readChapters ?? [])
     }
 
     func saveBookmark(_ bookmark: Bookmark, for id: String) throws {

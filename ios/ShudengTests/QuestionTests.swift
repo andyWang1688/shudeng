@@ -128,6 +128,136 @@ extension QuestionTests {
         let attachment = XCTAttachment(data: try JSONEncoder().encode(store.records), uniformTypeIdentifier: "public.json")
         attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
     }
+    private func issue13Requests() async throws -> [[String: Any]] {
+        let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:18773/requests")!)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+    }
+    func testIssue13ReadPersistenceFailureRetryAndDisjointBooks() async throws {
+        let (library, book) = try await issue12Book()
+        let otherFile = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "original-fixture", withExtension: "epub", subdirectory: "Fixtures"))
+        let other = try await library.importBook(from: otherFile).book
+        await library.preparation.waitForCurrentWork()
+        XCTAssertEqual(library.readScope(for: book.id).chapters, [])
+        let location = Locator(href: AnyURL(string: "OEBPS/ch2.xhtml")!, mediaType: .xhtml)
+        try library.saveLocation(location, for: book.id)
+        XCTAssertEqual(library.readScope(for: book.id).chapters, [], "A far position does not mark earlier chapters read")
+        try library.setChapterRead(2, read: true, for: book.id)
+        try library.setChapterRead(0, read: true, for: book.id)
+        try library.setChapterRead(2, read: true, for: book.id)
+        XCTAssertEqual(library.readScope(for: book.id).chapters, [0, 2])
+        XCTAssertEqual(library.readScope(for: other.id).chapters, [])
+        let path = root.appendingPathComponent("library.json"), backup = root.appendingPathComponent("catalog-before-fault.json")
+        try FileManager.default.moveItem(at: path, to: backup)
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try library.setChapterRead(1, read: true, for: book.id))
+        XCTAssertEqual(library.readScope(for: book.id).chapters, [0, 2])
+        let committed = try JSONDecoder().decode([Book].self, from: Data(contentsOf: backup))
+        XCTAssertEqual(committed.first { $0.id == book.id }?.readChapters, [0, 2])
+        try FileManager.default.removeItem(at: path); try FileManager.default.moveItem(at: backup, to: path)
+        try library.setChapterRead(1, read: true, for: book.id)
+        try library.setChapterRead(0, read: false, for: book.id)
+        let restored = try LibraryStore(root: root)
+        XCTAssertEqual(restored.readScope(for: book.id).chapters, [1, 2])
+        XCTAssertEqual(restored.readScope(for: other.id).chapters, [])
+        let store = QuestionStore(root: root, secrets: secrets)
+        let draft = ReadingQuestion(book: book, origin: location); store.save(draft)
+        store.setOnlyRead(draft.id, value: true)
+        XCTAssertTrue(QuestionStore(root: root, secrets: secrets).record(draft.id)?.onlyRead == true)
+        let attachment = XCTAttachment(data: try Data(contentsOf: path), uniformTypeIdentifier: "public.json")
+        attachment.name = "issue13-persisted-read-chapters"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+    func testIssue13RealHTTPAllPathsAndHistoryRefusal() async throws {
+        let (library, book) = try await issue12Book()
+        let otherFile = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "semantic-other", withExtension: "epub", subdirectory: "Fixtures"))
+        let other = try await library.importBook(from: otherFile).book
+        await library.preparation.waitForCurrentWork()
+        try library.setChapterRead(0, read: true, for: other.id)
+        let db = try IndexDatabase(url: root.appendingPathComponent("book-index.sqlite"))
+        func source(_ phrase: String) throws -> QuestionEvidence {
+            let row = try XCTUnwrap(db.rows("SELECT locator FROM fragments WHERE book_id=? AND original LIKE ?", [book.id, "%" + phrase + "%"]).first)
+            return QuestionEvidence(locator: try XCTUnwrap(Locator(json: JSONValue(jsonString: row[0], warnings: nil), warnings: nil)))
+        }
+        let selectedSource = try source("初版规则规定所有停机指令")
+        let unread = try source("第七日发生电池漏液")
+        let settings = try AIConfigurationStore(root: root, secrets: secrets)
+        defer { for value in settings.configurations { try? settings.remove(value.id) } }
+        let store = QuestionStore(root: root, secrets: secrets)
+        var full = ReadingQuestion(book: book, selection: selectedSource, neighbors: [])
+        full.question = "I13-FULL 初版规则为什么改变？"
+        var configuration = AIConfiguration(name: "I13", format: .openAI, address: "http://127.0.0.1:18773/v1", model: "issue13")
+        try settings.save(configuration, newKey: "not-a-real-credential"); store.save(full)
+        store.send(full.id, library: library, local: false); try await issue12Wait(store, id: full.id)
+        XCTAssertEqual(store.record(full.id)?.state, .complete)
+        XCTAssertTrue(store.record(full.id)?.evidence.contains { $0.quote.contains("第七日发生电池漏液") } == true)
+        XCTAssertTrue(store.record(full.id)?.answer.contains("第七日发生电池漏液") == true)
+        try library.setChapterRead(0, read: true, for: book.id)
+        try library.setChapterRead(2, read: true, for: book.id)
+        let restricted = library.readScope(for: book.id)
+        let before = try await issue13Requests().count
+        let follow = try XCTUnwrap(store.followUp(full.id)); store.edit(follow, text: "I13-ZERO-HISTORY 为什么改口？")
+        store.setOnlyRead(follow, value: true)
+        var count = before
+        for format in AIFormat.allCases {
+            configuration.format = format; try settings.save(configuration, newKey: "")
+            store.send(follow, library: library, local: false); try await issue12Wait(store, id: follow)
+            XCTAssertEqual(store.record(follow)?.state, .incomplete); XCTAssertNotNil(store.record(follow)?.failure)
+            count = try await issue13Requests().count; XCTAssertEqual(count, before)
+        }
+        // Legacy answers with unknown provenance must also stay offline, even if their citations look safe.
+        var legacy = try XCTUnwrap(store.record(full.id)); legacy.evidenceScope = nil; legacy.citations = [selectedSource]
+        store.save(legacy); store.edit(follow, text: "I13-ZERO-LEGACY 为什么改口？")
+        store.send(follow, library: library, local: false); try await issue12Wait(store, id: follow)
+        XCTAssertEqual(store.record(follow)?.state, .incomplete)
+        count = try await issue13Requests().count; XCTAssertEqual(count, before)
+        for (name, selection, chapters) in [("I13-ZERO-SELECTION", unread, [0, 2]), ("I13-ZERO-EMPTY", selectedSource, [])] {
+            var bad = ReadingQuestion(book: book, selection: selection, neighbors: [])
+            bad.question = name; bad.onlyRead = true; store.save(bad)
+            store.send(bad.id, library: library, local: false, scope: BookEvidenceScope(bookID: book.id, chapters: chapters))
+            try await issue12Wait(store, id: bad.id)
+            XCTAssertEqual(store.record(bad.id)?.state, .incomplete)
+            count = try await issue13Requests().count; XCTAssertEqual(count, before)
+        }
+        for format in AIFormat.allCases {
+            configuration.format = format; try settings.save(configuration, newKey: "")
+            var selected = ReadingQuestion(book: book, selection: selectedSource, neighbors: [unread])
+            selected.question = "I13-SELECTED-" + format.rawValue + " 余辉延迟是什么？"; selected.onlyRead = true
+            store.save(selected); store.send(selected.id, library: library, local: false); try await issue12Wait(store, id: selected.id)
+            let saved = try XCTUnwrap(store.record(selected.id))
+            XCTAssertEqual(saved.state, .complete, saved.failure ?? "")
+            XCTAssertTrue(saved.notice.contains("可能缺少后文解释"))
+            let permitted = try await library.preparation.index.permits(saved.evidence, scope: restricted)
+            XCTAssertTrue(permitted); XCTAssertFalse(saved.evidence.contains { $0.quote == unread.quote })
+            let next = try XCTUnwrap(store.followUp(selected.id)); store.edit(next, text: "I13-FOLLOW-" + format.rawValue + " 那为什么这样？")
+            XCTAssertTrue(store.record(next)?.onlyRead == true)
+            store.send(next, library: library, local: false); try await issue12Wait(store, id: next)
+            XCTAssertEqual(store.record(next)?.state, .complete, store.record(next)?.failure ?? "")
+            var whole = ReadingQuestion(book: book, origin: try selectedSource.location())
+            whole.question = "I13-WHOLE-" + format.rawValue + " 全书停机规则有哪些联系？"; whole.onlyRead = true
+            store.save(whole); store.send(whole.id, library: library, local: false); try await issue12Wait(store, id: whole.id)
+            XCTAssertEqual(store.record(whole.id)?.state, .complete, store.record(whole.id)?.failure ?? "")
+            let wholePermitted = try await library.preparation.index.permits(try XCTUnwrap(store.record(whole.id)).evidence, scope: restricted)
+            XCTAssertTrue(wholePermitted)
+        }
+        var local = ReadingQuestion(book: book, selection: selectedSource, neighbors: [unread])
+        local.question = "I13-LOCAL selected"; local.onlyRead = true; store.save(local)
+        store.send(local.id, library: library, local: true); try await issue12Wait(store, id: local.id)
+        XCTAssertEqual(store.record(local.id)?.state, .complete)
+        var freeLocal = ReadingQuestion(book: book, origin: try selectedSource.location())
+        freeLocal.question = "I13-LOCAL-FREE 余辉"; freeLocal.onlyRead = true; store.save(freeLocal)
+        store.send(freeLocal.id, library: library, local: true); try await issue12Wait(store, id: freeLocal.id)
+        XCTAssertEqual(store.record(freeLocal.id)?.state, .complete)
+        let rows = try await issue13Requests()
+        XCTAssertGreaterThan(rows.filter { ($0["prompt"] as? String ?? "").contains("I13-") }.count, 8)
+        for row in rows where (row["prompt"] as? String ?? "").contains("I13-") && !(row["prompt"] as? String ?? "").contains("I13-FULL") {
+            let prompt = row["prompt"] as? String ?? ""
+            for phrase in ["第七日发生电池漏液", "事故后作者修订", "作者坚持保留原始记录", "杂记第1项", "余辉延迟仅有三分钟", "I13-ZERO"] { XCTAssertFalse(prompt.contains(phrase), phrase) }
+            if let material = row["material"] as? [String: Any] { XCTAssertEqual(material["bookID"] as? String, book.id) }
+        }
+        XCTAssertEqual(QuestionStore(root: root, secrets: secrets).record(full.id)?.answer, store.record(full.id)?.answer, "Full-book history remains offline")
+        try issue12Attachment("issue13-persisted-requests", store: store)
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+        attachment.name = "issue13-real-http"; attachment.lifetime = .keepAlways; add(attachment)
+    }
     private func issue12Book() async throws -> (LibraryStore, Book) {
         let library = try LibraryStore(root: root)
         let file = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "semantic-fixture", withExtension: "epub", subdirectory: "Fixtures"))

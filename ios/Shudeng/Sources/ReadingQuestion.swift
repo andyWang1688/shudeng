@@ -41,6 +41,7 @@ struct ReadingQuestion: Codable, Identifiable {
     var history: [QuestionHistoryTurn]?
     var retrievalQueries: [String]?
     var evidenceScope: BookEvidenceScope?
+    var onlyRead: Bool?
     let bookID: String
     let bookTitle: String
     let selection: QuestionEvidence
@@ -125,6 +126,7 @@ final class QuestionStore: NSObject {
         let first = conversation.first
         var next = ReadingQuestion(book: Book(id: first.bookID, title: first.bookTitle, author: ""), selection: first.selection, neighbors: first.neighbors)
         next.selectionParts = first.selectionParts; next.originJSON = first.originJSON; next.freeQuestion = first.freeQuestion
+        next.onlyRead = conversation.latest.onlyRead
         next.conversationID = id; next.turnIndex = (conversation.latest.turnIndex ?? 0) + 1
         // The same persisted draft is reopened; sending and saving keep this UUID.
         save(next)
@@ -231,6 +233,10 @@ final class QuestionStore: NSObject {
         guard var record = record(id), record.state == .draft || record.state == .incomplete else { return }
         record.question = text; record.updated = Date(); save(record)
     }
+    func setOnlyRead(_ id: UUID, value: Bool) {
+        guard var record = record(id), record.state == .draft || record.state == .incomplete else { return }
+        record.onlyRead = value; record.updated = Date(); save(record)
+    }
     func cancel(_ id: UUID) {
         trace("cancel", id: id)
         interrupt(id, reason: "已主动取消；保留已保存内容。")
@@ -238,6 +244,13 @@ final class QuestionStore: NSObject {
     func send(_ id: UUID, library: LibraryStore, local: Bool, scope: BookEvidenceScope? = nil) {
         guard jobs[id] == nil, !unsaved(id), var record = record(id), record.state != .complete,
               !record.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let scope: BookEvidenceScope? = {
+            guard record.onlyRead == true else { return scope }
+            let read = library.readScope(for: record.bookID)
+            guard var narrowed = scope else { return read }
+            narrowed.chapters = (read.chapters ?? []).filter { narrowed.permits(chapter: $0, ordinal: 0) }
+            return narrowed
+        }()
         record.state = .preparing; record.failure = nil; record.updated = Date()
         record.history = conversation(record.conversation)?.turns.filter { ($0.turnIndex ?? 0) < (record.turnIndex ?? 0) }.map {
             QuestionHistoryTurn(id: $0.id, question: $0.question, answer: $0.answer, state: $0.state)
@@ -260,16 +273,20 @@ final class QuestionStore: NSObject {
                 let key = try configurations.key(for: configuration)
                 let state = library.preparation.states[record.bookID] ?? BookPreparationState()
                 guard state.ready || local else { throw QuestionError.preparation }
+                if record.onlyRead == true, let scope {
+                    let sample = try await library.preparation.index.languageSample(bookID: record.bookID, scope: scope)
+                    guard !sample.isEmpty else { throw QuestionError.scope }
+                }
                 if let scope {
                     let historyTurns = conversation(record.conversation)?.turns.filter { ($0.turnIndex ?? 0) < (record.turnIndex ?? 0) } ?? []
                     // A previous answer may paraphrase its sources. Do not send answers produced
                     // under a wider (or legacy unknown) scope when the reader narrows the range.
                     for previous in historyTurns where !previous.answer.isEmpty {
                         let old = previous.evidenceScope ?? BookEvidenceScope(bookID: previous.bookID)
-                        guard old.bookID == scope.bookID, scope.permits(chapter: old.throughChapter, ordinal: old.throughOrdinal) else { throw QuestionError.scope }
+                        guard scope.contains(old) else { throw QuestionError.scope }
                     }
-                    let historyEvidence = historyTurns.flatMap { ($0.selectionParts ?? [$0.selection]) + $0.neighbors + $0.evidence + $0.citations }
-                    let permitted = try await library.preparation.index.permits((record.selectionParts ?? [record.selection]) + record.neighbors + historyEvidence, scope: scope)
+                    let historyEvidence = historyTurns.flatMap { ($0.selectionParts ?? [$0.selection]) + (record.onlyRead == true ? [] : $0.neighbors) + $0.evidence + $0.citations }
+                    let permitted = try await library.preparation.index.permits((record.selectionParts ?? [record.selection]) + (record.onlyRead == true ? [] : record.neighbors) + historyEvidence, scope: scope)
                     guard scope.bookID == record.bookID, permitted else { throw QuestionError.scope }
                 }
                 var queries: [String]?
@@ -345,7 +362,15 @@ struct QuestionPlan {
     let searchedChapters: [String]
     let omittedChapters: [String]
     static func make(_ record: ReadingQuestion, index: BookIndex, local: Bool, state: BookPreparationState, scope: BookEvidenceScope? = nil, queries: [String]? = nil) async throws -> QuestionPlan {
-        var required = (record.selectionParts ?? [record.selection]) + record.neighbors
+        var neighbors = record.neighbors
+        if record.onlyRead == true {
+            guard let scope else { throw QuestionError.scope }
+            neighbors = []
+            for value in record.neighbors {
+                if try await index.permits([value], scope: scope) { neighbors.append(value) }
+            }
+        }
+        var required = (record.selectionParts ?? [record.selection]) + neighbors
         if !local || scope != nil {
             let allowed = scope ?? BookEvidenceScope(bookID: record.bookID)
             guard allowed.bookID == record.bookID,
@@ -385,7 +410,8 @@ struct QuestionPlan {
         var selected = required
         let limit = record.freeQuestion == true && !local ? 24 : 15
         func notice(_ clipped: Bool) -> String {
-            (local ? (record.freeQuestion == true ? "读者主动选择局部解释，仅参考当前书已准备的关键词材料，不代表全书。" : "读者主动选择局部解释，仅发送选文与邻文。") : !(record.history ?? []).isEmpty ? "本次结合完整历史明确追问，并在允许范围内重新进行关键词与本地语义检索；历史回答不作为原文依据，不保证必要依据齐全。" : queries != nil ? "本次逐章比较原文，按问题取材；已查章节不等于依据充分，未判断所有必要命题已齐全。" : "本次参考选文、邻文和当前书关键词与本地语义命中；可能漏掉相关背景，不代表整书理解完成。") +
+            let range = record.onlyRead == true ? "仅已读：仅参考明确确认已读的章节，可能缺少后文解释；未读邻文不会发送。" : ""
+            return range + (local ? (record.freeQuestion == true ? "读者主动选择局部解释，仅参考当前书已准备的关键词材料，不代表全书。" : "读者主动选择局部解释，仅发送选文与邻文。") : !(record.history ?? []).isEmpty ? "本次结合完整历史明确追问，并在允许范围内重新进行关键词与本地语义检索；历史回答不作为原文依据，不保证必要依据齐全。" : queries != nil ? "本次逐章比较原文，按问题取材；已查章节不等于依据充分，未判断所有必要命题已齐全。" : "本次参考选文、邻文和当前书关键词与本地语义命中；可能漏掉相关背景，不代表整书理解完成。") +
             "资料已准备\(state.completed)/\(state.total)个资源。" + (clipped ? "部分检索材料超出\(limit)窗或上下文容量未发送；依据与上下文可能不足。" : "未命中相关材料时不能断言书内不存在依据。")
         }
         guard try prompt(record, evidence: selected, notice: notice(false)).utf8.count <= 23000 else { throw QuestionError.budget }
@@ -395,6 +421,7 @@ struct QuestionPlan {
             else { clipped = true }
         }
         for i in selected.indices { selected[i].id = "E\(i + 1)" }
+        if let scope, try await !index.permits(selected, scope: scope) { throw QuestionError.scope }
         let scope = notice(clipped) + "实际发送\(selected.count)段，\(selected.reduce(0) { $0 + $1.context.count })字；章节：" + Set(selected.map(\.chapter)).sorted().joined(separator: "、")
         let body = try prompt(record, evidence: selected, notice: scope)
         guard body.utf8.count <= 24000 else { throw QuestionError.budget }

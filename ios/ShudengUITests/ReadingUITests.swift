@@ -1,6 +1,91 @@
 import XCTest
 
 final class ReadingUITests: XCTestCase {
+    func testIssue13RangeNavigationAndRealHTTP() {
+        let app = issue12App()
+        questionService(app, format: "OpenAI", model: "ui13", address: "http://127.0.0.1:18773/v1")
+        let book = app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
+        expectation(for: NSPredicate { _, _ in (book.value as? String ?? "").contains("书内资料可用") }, evaluatedWith: app)
+        waitForExpectations(timeout: 60)
+        book.tap(); waitForBody(app)
+        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
+        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-0"].label.contains("未确认已读"))
+        for chapter in [2, 0] {
+            app.tables["read-chapters"].cells["read-chapter-" + String(chapter)].tap()
+            app.alerts.buttons["确认已读"].tap()
+            XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-" + String(chapter)].label.contains("已确认已读"))
+        }
+        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"))
+        evidence("issue13-disjoint-confirmed-range", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.tables["book-navigation"].cells.element(boundBy: 1).tap(); waitForBody(app)
+        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
+        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"), "Jumping to chapter 2 must not mark it read")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.tables["book-navigation"].cells.element(boundBy: 0).tap(); waitForBody(app)
+        settings(app, mode: "仿真", dark: false)
+        curlTurn(app, forward: true, cancel: true)
+        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
+        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"), "Curl prefetch and cancellation never grant access")
+        evidence("issue13-navigation-and-prefetch-no-read-growth", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap()
+        settings(app, mode: "滚动", dark: false)
+        app.buttons["reader-ask-book"].tap()
+        XCTAssertTrue(app.segmentedControls["question-reading-range"].buttons["整书"].isSelected)
+        app.segmentedControls["question-reading-range"].buttons["仅已读"].tap()
+        issue12Send("UI13-RESTRICTED 全书余辉与停机有哪些联系？", app: app)
+        XCTAssertTrue(app.staticTexts["question-scope"].label.contains("可能缺少后文解释"))
+        evidence("issue13-restricted-answer-and-notice", app)
+        let follow = app.buttons["question-follow-up"]; issue12Reach(follow, in: app); follow.tap()
+        XCTAssertTrue(app.segmentedControls["question-reading-range"].buttons["仅已读"].isSelected)
+        app.buttons["关闭"].tap(); app.buttons["书架"].tap()
+        app.collectionViews["library"].cells[bookID].tap(); waitForBody(app)
+        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
+        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-0"].label.contains("未确认已读"))
+        evidence("issue13-other-book-no-read-record", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap(); app.buttons["书架"].tap()
+    }
+    func testIssue13NativeSelectionAndReferenceRange() {
+        let app = issue12App()
+        app.tabBars.buttons["书架"].tap()
+        app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"].tap(); waitForBody(app)
+        searchBook(app, query: "第七日发生电池漏液", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
+        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
+        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"))
+        evidence("issue13-search-jump-no-read-growth", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap()
+        searchBook(app, query: "初版规则规定所有停机指令", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
+        let paragraph = app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "初版规则规定所有停机指令")).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 5)); paragraph.press(forDuration: 1.3); noteMenu("提问", in: app)
+        app.segmentedControls["question-reading-range"].buttons["仅已读"].tap()
+        issue12Send("UI13-NATIVE 这条停机规则是什么意思？", app: app)
+        evidence("issue13-native-selected-restricted-answer", app)
+        let reference = app.buttons["question-reference-0"]; issue12Reach(reference, in: app); reference.tap()
+        app.buttons["跳转原文"].tap(); waitForBody(app)
+        app.buttons["回提问处"].tap(); waitForBody(app)
+        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
+        for chapter in [0, 2] { XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-" + String(chapter)].label.contains("已确认已读")) }
+        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"))
+        evidence("issue13-reference-return-no-read-growth", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap(); app.buttons["书架"].tap()
+    }
+    func testIssue13RestartRangeAndOfflineHistory() {
+        let app = issue12App()
+        app.tabBars.buttons["书架"].tap()
+        app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"].tap(); waitForBody(app)
+        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
+        for chapter in [0, 2] { XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-" + String(chapter)].label.contains("已确认已读")) }
+        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"))
+        evidence("issue13-restart-range", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap(); app.buttons["书架"].tap()
+        app.tabBars.buttons["对话"].tap(); issue12Row("UI13-RESTRICTED", app: app).tap()
+        XCTAssertTrue(app.segmentedControls["question-reading-range"].buttons["仅已读"].isSelected)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "仅依据本次实际材料解释。")).firstMatch.exists)
+        evidence("issue13-offline-range-draft-and-history", app)
+        app.buttons["关闭"].tap()
+    }
     private func issue12App() -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["--isolated-reading-test"]
