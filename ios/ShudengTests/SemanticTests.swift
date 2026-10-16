@@ -16,8 +16,66 @@ final class SemanticTests: XCTestCase {
 
 import SQLite3
 import ReadiumShared
+import NaturalLanguage
 
 extension SemanticTests {
+    func testIssue11SentenceBoundarySoftLinesAbbreviationsAndPunctuation() async throws {
+        let english = "Mr. Darcy read the letter\nagain. He changed his mind! Why?"
+        let ranges = SourceSentenceUnit.ranges(english, language: .english)
+        let sentences = ranges.map { (english as NSString).substring(with: $0) }
+        XCTAssertEqual(sentences.count, 3)
+        XCTAssertTrue(sentences[0].contains("Mr. Darcy")); XCTAssertTrue(sentences[0].contains("\nagain."))
+        XCTAssertEqual(sentences.joined(), english)
+        let chinese = "他重新\n读信。她问：“为什么？”他回答！"
+        let cn = SourceSentenceUnit.ranges(chinese, language: .simplifiedChinese).map { (chinese as NSString).substring(with: $0) }
+        XCTAssertEqual(cn.joined(), chinese); XCTAssertTrue(cn[0].contains("重新\n读信。"))
+        let long = String(repeating: "the reader considers the evidence and its consequences ", count: 50) + "."
+        let longRanges = SourceSentenceUnit.ranges(long, language: .english)
+        XCTAssertEqual(longRanges, [NSRange(location: 0, length: (long as NSString).length)])
+        let pieces = try await SemanticEmbedding.shared.chunks(long)
+        XCTAssertGreaterThan(pieces.count, 1); XCTAssertEqual(pieces.map(\.text).joined(), long)
+        var offset = 0
+        for piece in pieces { XCTAssertEqual(piece.offset, offset); offset += piece.text.utf16.count }
+    }
+    @MainActor func testIssue11SentenceUnitsFrozenChineseAssessment() async throws {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Issue11Assessment")
+        let (library, book) = try await prepared("pride-and-prejudice", root: root)
+        let index = library.preparation.index, scope = BookEvidenceScope(bookID: book.id)
+        let derived = root.appendingPathComponent("sentence-units-v2.sqlite")
+        let units = try await index.sentenceUnits(scope: scope)
+        let source = try IndexDatabase(url: root.appendingPathComponent("book-index.sqlite"))
+        for row in try source.rows("SELECT id,original FROM fragments WHERE book_id=?", [book.id]) {
+            let fragments = units.filter { $0.fragmentID == Int(row[0])! }.sorted { $0.start < $1.start }
+            XCTAssertEqual(fragments.map { $0.evidence.quote }.joined(), row[1])
+            XCTAssertEqual(fragments.first?.start, 0)
+            for pair in zip(fragments, fragments.dropFirst()) { XCTAssertEqual(pair.0.start + pair.0.length, pair.1.start) }
+        }
+        try attachment(try JSONSerialization.jsonObject(with: JSONEncoder().encode(units)), name: "issue11-sentence-units")
+        print("I11_SENTENCE_UNITS count=\(units.count) bytes=\(units.reduce(0) { $0 + $1.evidence.quote.utf8.count })")
+        try await index.prepareSentenceUnitVectors(scope: scope, derivedURL: derived)
+        let inputs: [(String, String, Bool)] = [
+            ("whole", "概括全书中伊丽莎白与达西怎样逐步纠正对彼此的判断，哪些事件改变了他们的决定？", true),
+            ("local", "第3章舞会中，达西为何不与伊丽莎白跳舞？", false),
+            ("isolation", "盐桥计划花了多少钱？", false)
+        ]
+        for (name, question, whole) in inputs {
+            let result = try await index.assessSentenceUnits(scope: scope, query: question, derivedURL: derived, wholeBook: whole)
+            let final = Set(result.finalUnitIDs)
+            for group in result.groups {
+                XCTAssertTrue(result.selectedGroupIDs.contains(group.id) ? Set(group.unitIDs).isSubset(of: final) : Set(group.unitIDs).isDisjoint(with: final))
+            }
+            XCTAssertEqual(result.groups.count, result.selectedGroupIDs.count + result.omittedGroupIDs.count)
+            XCTAssertLessThanOrEqual(result.payload.utf8.count, 23000)
+            XCTAssertFalse(result.payload.contains("一百万元"))
+            try attachment(try JSONSerialization.jsonObject(with: JSONEncoder().encode(result)), name: "issue11-sentence-" + name)
+            print("I11_SENTENCE_RESULT \(name) candidates=\(result.candidateIDs.count) groups=\(result.groups.count) selected=\(result.selectedGroupIDs.count) bytes=\(result.payload.utf8.count)")
+        }
+        let restricted = BookEvidenceScope(bookID: book.id, throughChapter: 0, throughOrdinal: 1)
+        let narrow = try await index.sentenceUnits(scope: restricted)
+        let allowed = Set(narrow.map(\.id))
+        let narrowResult = try await index.assessSentenceUnits(scope: restricted, query: inputs[2].1, derivedURL: derived, wholeBook: false)
+        XCTAssertTrue(Set(narrowResult.finalUnitIDs).isSubset(of: allowed))
+    }
     @MainActor func testIssue11BoundedWindowsDiagnostic() async throws {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Issue11Assessment")
         let (library, book) = try await prepared("pride-and-prejudice", root: root)

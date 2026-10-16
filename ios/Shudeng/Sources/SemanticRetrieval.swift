@@ -1,6 +1,7 @@
 import Foundation
 import SQLite3
 import ReadiumShared
+import NaturalLanguage
 
 /// Scope is enforced before scoring and again for neighbor expansion.
 struct BookEvidenceScope: Codable {
@@ -457,5 +458,179 @@ extension BookIndex {
             if !found { return false }
         }
         return true
+    }
+}
+
+/// Offline structural assessment. Kept separate from the production question path.
+struct SourceSentenceUnit: Codable {
+    let id: String
+    let fragmentID: Int
+    let chapter: String
+    let start: Int
+    let length: Int
+    let evidence: QuestionEvidence
+    static func ranges(_ text: String, language: NLLanguage?) -> [NSRange] {
+        // EPUB source newlines often wrap a sentence; mask them without changing UTF-16 positions.
+        let masked = text.replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ")
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = masked
+        if let language { tokenizer.setLanguage(language) }
+        var ends: [Int] = []
+        tokenizer.enumerateTokens(in: masked.startIndex..<masked.endIndex) { range, _ in
+            ends.append(NSMaxRange(NSRange(range, in: masked))); return true
+        }
+        let length = (text as NSString).length
+        if ends.last != length { ends.append(length) }
+        var result: [NSRange] = [], start = 0
+        for end in ends where end > start { result.append(NSRange(location: start, length: end - start)); start = end }
+        return result
+    }
+}
+struct AtomicSourceGroup: Codable {
+    let id: String
+    let anchorIDs: [String]
+    let unitIDs: [String]
+}
+struct SentenceUnitAssessment: Codable {
+    let query: String
+    let units: [SourceSentenceUnit]
+    let candidateIDs: [String]
+    let groups: [AtomicSourceGroup]
+    let selectedGroupIDs: [String]
+    let omittedGroupIDs: [String]
+    let finalUnitIDs: [String]
+    let payload: String
+    let ranking: String
+}
+
+extension BookIndex {
+    /// Immutable units cover every original UTF-16 code unit once, including whitespace.
+    /// Model child chunks all point back to their complete parent sentence.
+    func sentenceUnits(scope: BookEvidenceScope) throws -> [SourceSentenceUnit] {
+        let db = try IndexDatabase(url: url)
+        let rows = try db.rows("SELECT id,chapter,ordinal,locator,original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal", [scope.bookID])
+        let language = NLLanguageRecognizer.dominantLanguage(for: rows.prefix(20).map { $0[4] }.joined(separator: " "))
+        var units: [SourceSentenceUnit] = []
+        for row in rows where scope.permits(chapter: Int(row[1])!, ordinal: Int(row[2])!) {
+            guard let location = try Locator(json: JSONValue(jsonString: row[3], warnings: nil), warnings: nil) else { throw IndexError.source }
+            let text = row[4], source = text as NSString
+            let chapter = location.locations.otherLocations["shudengChapter"]?.string ?? location.href.string
+            for range in SourceSentenceUnit.ranges(text, language: language) {
+                let start = range.location
+                guard let evidence = try db.evidence(id: Int(row[0])!, scope: scope, range: range) else { throw IndexError.source }
+                let id = scope.bookID + ":" + chapter + ":" + row[0] + ":" + String(start) + ":" + String(range.length)
+                units.append(SourceSentenceUnit(id: id, fragmentID: Int(row[0])!, chapter: chapter, start: start, length: range.length, evidence: evidence))
+            }
+        }
+        return units
+    }
+
+    /// Writes only the explicitly supplied isolated derived database, never the book index.
+    func prepareSentenceUnitVectors(scope: BookEvidenceScope, derivedURL: URL) async throws {
+        guard derivedURL.standardizedFileURL != url.standardizedFileURL else { throw IndexError.storage }
+        let units = try sentenceUnits(scope: scope)
+        let db = try IndexDatabase(url: derivedURL)
+        try db.execute("CREATE TABLE IF NOT EXISTS sentence_units(id TEXT PRIMARY KEY,book TEXT NOT NULL,source TEXT NOT NULL,model TEXT NOT NULL)")
+        try db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS sentence_terms USING fts5(id UNINDEXED,book UNINDEXED,terms)")
+        try db.execute("CREATE TABLE IF NOT EXISTS sentence_vectors(id TEXT NOT NULL,piece INTEGER NOT NULL,offset INTEGER NOT NULL,original TEXT NOT NULL,vector BLOB NOT NULL CHECK(length(vector)=1536),PRIMARY KEY(id,piece))")
+        for (position, unit) in units.enumerated() {
+            try Task.checkCancellation()
+            let previous = try db.rows("SELECT source,model FROM sentence_units WHERE id=?", [unit.id]).first
+            if previous == [unit.evidence.quote, SemanticEmbedding.version] { continue }
+            let pieces = try await SemanticEmbedding.shared.chunks(unit.evidence.quote)
+            var vectors: [[Float]] = []
+            for piece in pieces { vectors.append(try await SemanticEmbedding.shared.embed(piece.text)) }
+            try db.transaction {
+                try db.execute("DELETE FROM sentence_vectors WHERE id=?", [unit.id])
+                try db.execute("DELETE FROM sentence_terms WHERE id=?", [unit.id])
+                try db.execute("INSERT OR REPLACE INTO sentence_units VALUES(?,?,?,?)", [unit.id, scope.bookID, unit.evidence.quote, SemanticEmbedding.version])
+                try db.execute("INSERT INTO sentence_terms VALUES(?,?,?)", [unit.id, scope.bookID, BookText.tokens(unit.evidence.quote)])
+                for (i, piece) in pieces.enumerated() {
+                    let statement = try db.statement("INSERT INTO sentence_vectors VALUES(?,?,?,?,?)", [unit.id, String(i), String(piece.offset), piece.text])
+                    defer { sqlite3_finalize(statement) }
+                    let status = vectors[i].withUnsafeBytes { bytes in
+                        sqlite3_bind_blob(statement, 5, bytes.baseAddress, Int32(bytes.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                    }
+                    guard status == SQLITE_OK, sqlite3_step(statement) == SQLITE_DONE else { throw IndexError.storage }
+                }
+            }
+            if position % 500 == 0 { print("I11_SENTENCE_PREP \(position)/\(units.count)") }
+        }
+    }
+
+    func assessSentenceUnits(scope: BookEvidenceScope, query: String, derivedURL: URL, wholeBook: Bool) async throws -> SentenceUnitAssessment {
+        let units = try sentenceUnits(scope: scope)
+        let db = try IndexDatabase(url: derivedURL)
+        let allowed = Set(units.map(\.id))
+        let vector = try await SemanticEmbedding.shared.embed(query)
+        var semantic: [String: Float] = [:]
+        let statement = try db.statement("SELECT v.id,v.vector FROM sentence_vectors v JOIN sentence_units u ON u.id=v.id WHERE u.book=? AND u.model=?", [scope.bookID, SemanticEmbedding.version])
+        defer { sqlite3_finalize(statement) }
+        while true {
+            try Task.checkCancellation()
+            let step = sqlite3_step(statement)
+            if step == SQLITE_DONE { break }
+            guard step == SQLITE_ROW, let blob = sqlite3_column_blob(statement, 1), sqlite3_column_bytes(statement, 1) == 1536 else { throw IndexError.storage }
+            let id = String(cString: sqlite3_column_text(statement, 0))
+            guard allowed.contains(id) else { continue }
+            var score: Float = 0
+            for i in vector.indices { score += vector[i] * blob.loadUnaligned(fromByteOffset: i * 4, as: Float.self) }
+            guard score.isFinite else { throw IndexError.storage }
+            semantic[id] = max(semantic[id, default: -.infinity], score)
+        }
+        guard allowed.isSubset(of: Set(semantic.keys)) else { throw QuestionError.preparation }
+        var lexical: [String: Int] = [:]
+        let byID = Dictionary(uniqueKeysWithValues: units.map { ($0.id, $0) })
+        for term in QuestionPlan.keywords(query) {
+            let tokens = BookText.tokens(term, query: true)
+            guard !tokens.isEmpty else { continue }
+            for row in try db.rows("SELECT id FROM sentence_terms WHERE sentence_terms MATCH ? AND book=?", [tokens, scope.bookID]) {
+                if let unit = byID[row[0]], unit.evidence.quote.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]) != nil { lexical[row[0], default: 0] += 1 }
+            }
+        }
+        let chapters = Dictionary(grouping: units.indices, by: { units[$0].chapter })
+        var anchors: [Int] = [], relevance: [String: Double] = [:]
+        let sets = wholeBook ? chapters.values.map(Array.init) : [Array(units.indices)]
+        for members in sets {
+            let semanticOrder = members.sorted { semantic[units[$0].id]! == semantic[units[$1].id]! ? $0 < $1 : semantic[units[$0].id]! > semantic[units[$1].id]! }
+            let lexicalOrder = members.filter { lexical[units[$0].id] != nil }.sorted { lexical[units[$0].id]! == lexical[units[$1].id]! ? $0 < $1 : lexical[units[$0].id]! > lexical[units[$1].id]! }
+            var fusion: [Int: Double] = [:]
+            for list in [semanticOrder, lexicalOrder] {
+                for (rank, id) in list.enumerated() { fusion[id, default: 0] += 1 / Double(61 + rank) }
+            }
+            let ranked = members.sorted { fusion[$0, default: 0] == fusion[$1, default: 0] ? $0 < $1 : fusion[$0, default: 0] > fusion[$1, default: 0] }
+            anchors += ranked.prefix(wholeBook ? 2 : 5)
+            for id in ranked { relevance[units[id].id] = fusion[id] }
+        }
+        // Form source-contiguous groups; overlapping groups merge rather than duplicate/split.
+        var intervals: [(lower: Int, upper: Int, anchors: [String])] = []
+        for anchor in anchors.sorted() {
+            let lower = anchor > 0 && units[anchor - 1].chapter == units[anchor].chapter ? anchor - 1 : anchor
+            let upper = anchor + 1 < units.count && units[anchor + 1].chapter == units[anchor].chapter ? anchor + 1 : anchor
+            if let last = intervals.last, lower <= last.upper, units[lower].chapter == units[last.lower].chapter {
+                intervals[intervals.count - 1] = (last.lower, max(last.upper, upper), last.anchors + [units[anchor].id])
+            } else { intervals.append((lower, upper, [units[anchor].id])) }
+        }
+        let groups = intervals.enumerated().map { i, span in AtomicSourceGroup(id: "G\(i + 1)", anchorIDs: span.anchors, unitIDs: units[span.lower...span.upper].map(\.id)) }
+        let ordered = groups.sorted { a, b in
+            let left = a.anchorIDs.map { relevance[$0, default: 0] }.max() ?? 0
+            let right = b.anchorIDs.map { relevance[$0, default: 0] }.max() ?? 0
+            return left == right ? a.id < b.id : left > right
+        }
+        var selected: [AtomicSourceGroup] = [], omitted: [String] = []
+        func payload(_ groups: [AtomicSourceGroup]) throws -> String {
+            let ids = Set(groups.flatMap(\.unitIDs))
+            let material = units.filter { ids.contains($0.id) }.map { ["id": $0.id, "chapter": $0.evidence.chapter, "quote": $0.evidence.quote] }
+            let data = try JSONSerialization.data(withJSONObject: ["bookID": scope.bookID, "question": query, "evidence": material, "groups": groups.map { ["id": $0.id, "units": $0.unitIDs] }], options: [.sortedKeys])
+            return String(decoding: data, as: UTF8.self)
+        }
+        for group in ordered {
+            if try payload(selected + [group]).utf8.count <= 23000 { selected.append(group) }
+            else { omitted.append(group.id) }
+        }
+        let finalIDs = Set(selected.flatMap(\.unitIDs))
+        let evidence = units.filter { finalIDs.contains($0.id) }.map(\.evidence)
+        guard try permits(evidence, scope: scope) else { throw QuestionError.scope }
+        return SentenceUnitAssessment(query: query, units: units, candidateIDs: anchors.map { units[$0].id }, groups: groups, selectedGroupIDs: selected.map(\.id), omittedGroupIDs: omitted, finalUnitIDs: units.filter { finalIDs.contains($0.id) }.map(\.id), payload: try payload(selected), ranking: "Existing MiniLM cosine plus unit-level lexical RRF; no joint reranker, no translation")
     }
 }
