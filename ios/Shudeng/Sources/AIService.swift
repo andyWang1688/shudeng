@@ -40,7 +40,12 @@ protocol AISecrets {
 }
 
 struct KeychainSecrets: AISecrets {
-    var service = "dev.shudeng.ai-services"
+    var service: String = {
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--isolated-reading-test") { return "dev.shudeng.ai-services.isolated-reading-test" }
+#endif
+        return "dev.shudeng.ai-services"
+    }()
     private func query(_ id: String? = nil) -> [String: Any] {
         var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
         if let id { q[kSecAttrAccount as String] = id }

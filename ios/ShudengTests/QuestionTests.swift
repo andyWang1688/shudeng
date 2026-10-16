@@ -176,3 +176,67 @@ extension QuestionTests {
         }
     }
 }
+
+extension QuestionTests {
+    private struct BackgroundTestSecrets: AISecrets {
+        func read(_ id: String) throws -> String { "not-a-real-credential" }
+        func write(_ value: String, id: String) throws {}
+        func remove(_ id: String) throws {}
+        func accounts() throws -> [String] { [] }
+    }
+    // Explicit fault injection tests the expiry branch, not actual OS expiration.
+    func testBackgroundInterruptionImmediateRetryAndLateResult() async throws {
+        let secrets = BackgroundTestSecrets(), library = try LibraryStore(root: root)
+        let configurations = try AIConfigurationStore(root: root, secrets: secrets)
+        var configuration = AIConfiguration(name: "BG14", format: .openAI, address: "http://127.0.0.1:18774/v1", model: "bg-4")
+        try configurations.save(configuration, newKey: "not-a-real-credential")
+        let store = QuestionStore(root: root, secrets: secrets), record = question()
+        XCTAssertTrue(store.save(record)); store.send(record.id, library: library, local: true)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        store.interruptAll(reason: "Injected expiry branch")
+        XCTAssertEqual(store.record(record.id)?.state, .incomplete)
+        XCTAssertEqual(store.record(record.id)?.answer, "")
+        XCTAssertEqual(QuestionStore(root: root, secrets: secrets).record(record.id)?.question, record.question)
+        configuration.model = "bg-1"; try configurations.save(configuration, newKey: "")
+        store.send(record.id, library: library, local: true)
+        store.send(record.id, library: library, local: true)
+        try await Task.sleep(nanoseconds: 5_000_000_000)
+        let restored = QuestionStore(root: root, secrets: secrets)
+        XCTAssertEqual(restored.records.count, 1)
+        XCTAssertEqual(restored.record(record.id)?.state, .complete)
+        XCTAssertEqual(restored.record(record.id)?.answer, "BG14-OpenAI-1")
+        XCTAssertEqual(restored.record(record.id)?.citations.first?.locatorJSON, record.selection.locatorJSON)
+    }
+    func testBackgroundResponseRealSaveFailureRetryWithoutRequest() async throws {
+        let secrets = BackgroundTestSecrets(), library = try LibraryStore(root: root)
+        let configuration = AIConfiguration(name: "BG14", format: .anthropic, address: "http://127.0.0.1:18774/v1", model: "bg-2")
+        try AIConfigurationStore(root: root, secrets: secrets).save(configuration, newKey: "not-a-real-credential")
+        let store = QuestionStore(root: root, secrets: secrets), record = question()
+        XCTAssertTrue(store.save(record)); store.send(record.id, library: library, local: true)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let file = root.appendingPathComponent("reading-questions.json"), backup = root.appendingPathComponent("before-fault.json")
+        try FileManager.default.moveItem(at: file, to: backup)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        XCTAssertTrue(store.unsaved(record.id))
+        XCTAssertEqual(store.record(record.id)?.answer, "BG14-Anthropic-2")
+        XCTAssertEqual(try JSONDecoder().decode([ReadingQuestion].self, from: Data(contentsOf: backup)).first?.state, .generating)
+        try FileManager.default.removeItem(at: file); try FileManager.default.moveItem(at: backup, to: file)
+        store.retrySave(record.id); store.retrySave(record.id)
+        let restored = QuestionStore(root: root, secrets: secrets)
+        XCTAssertEqual(restored.records.count, 1); XCTAssertEqual(restored.record(record.id)?.state, .complete)
+        XCTAssertEqual(restored.record(record.id)?.citations.first?.locatorJSON, record.selection.locatorJSON)
+        XCTAssertFalse(store.unsaved(record.id))
+    }
+    func testBackgroundNetworkInterruptionRetainsSubmittedQuestion() async throws {
+        let secrets = BackgroundTestSecrets(), library = try LibraryStore(root: root)
+        let configuration = AIConfiguration(name: "BG14", format: .openAI, address: "http://127.0.0.1:18774/v1", model: "disconnect")
+        try AIConfigurationStore(root: root, secrets: secrets).save(configuration, newKey: "not-a-real-credential")
+        let store = QuestionStore(root: root, secrets: secrets), record = question()
+        XCTAssertTrue(store.save(record)); store.send(record.id, library: library, local: true)
+        try await Task.sleep(nanoseconds: 4_000_000_000)
+        let restored = QuestionStore(root: root, secrets: secrets).record(record.id)
+        XCTAssertEqual(restored?.state, .incomplete); XCTAssertEqual(restored?.question, record.question)
+        XCTAssertEqual(restored?.answer, ""); XCTAssertTrue(restored?.citations.isEmpty == true)
+    }
+}

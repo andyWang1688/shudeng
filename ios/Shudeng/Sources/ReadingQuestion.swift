@@ -1,5 +1,6 @@
 import Foundation
 import ReadiumShared
+import UIKit
 
 struct QuestionEvidence: Codable, Equatable {
     var id: String
@@ -74,7 +75,7 @@ struct ReadingQuestion: Codable, Identifiable {
 
 /// One atomic revision includes the answer, references and completion state.
 @MainActor
-final class QuestionStore {
+final class QuestionStore: NSObject {
     static let changed = Notification.Name("ReadingQuestionsChanged")
     private let file: URL
     private let secrets: AISecrets
@@ -82,13 +83,65 @@ final class QuestionStore {
     private var pending: [UUID: ReadingQuestion] = [:]
     private(set) var loadFailed = false
     private var jobs: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
+    private var backgroundTask = UIBackgroundTaskIdentifier.invalid
+    private var backgroundToken: UUID?
     var records: [ReadingQuestion] {
         var values = committed.filter { pending[$0.id] == nil }
         values += pending.values
         return values.sorted { $0.updated > $1.updated }
     }
     init(root: URL, secrets: AISecrets = KeychainSecrets()) {
-        file = root.appendingPathComponent("reading-questions.json"); self.secrets = secrets; load()
+        file = root.appendingPathComponent("reading-questions.json"); self.secrets = secrets
+        super.init()
+        NotificationCenter.default.addObserver(self, selector: #selector(leavingForeground), name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(enteredBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(enteredForeground), name: UIApplication.didBecomeActiveNotification, object: nil)
+        load()
+    }
+    @objc private func leavingForeground() { trace("willResignActive"); if !jobs.isEmpty { beginBackgroundTime() } }
+    @objc private func enteredBackground() {
+        trace("didEnterBackground")
+        if !jobs.isEmpty && backgroundTask == .invalid { interruptAll(reason: "系统未提供后台时间，请主动重试。") }
+    }
+    @objc private func enteredForeground() { trace("didBecomeActive"); endBackgroundTime() }
+    private func beginBackgroundTime() {
+        guard backgroundTask == .invalid else { return }
+        let token = UUID(); backgroundToken = token
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Reading question") { [weak self] in
+            guard let self, self.backgroundToken == token else { return }
+            self.trace("systemExpiration")
+            self.interruptAll(reason: "系统后台时间已结束，回答未完成，请主动重试。")
+        }
+        trace(backgroundTask == .invalid ? "backgroundDenied" : "backgroundBegin")
+    }
+    private func endBackgroundTime() {
+        let task = backgroundTask
+        backgroundTask = .invalid; backgroundToken = nil
+        if task != .invalid { UIApplication.shared.endBackgroundTask(task); trace("backgroundEnd") }
+    }
+    func interruptAll(reason: String) {
+        for id in Array(jobs.keys) { interrupt(id, reason: reason) }
+        endBackgroundTime()
+    }
+    private func interrupt(_ id: UUID, reason: String) {
+        jobs[id]?.task.cancel(); jobs[id] = nil
+        guard var record = record(id), record.state == .preparing || record.state == .generating else { return }
+        record.state = .incomplete; record.failure = reason; save(record)
+        if jobs.isEmpty { endBackgroundTime() }
+    }
+    // Only isolated DEBUG runs write diagnostics; no question text, credentials or headers.
+    private func trace(_ event: String, id: UUID? = nil, token: UUID? = nil) {
+#if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("--isolated-reading-test") || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil else { return }
+        let row: [String: Any] = ["time": Date().timeIntervalSince1970, "event": event,
+            "applicationState": UIApplication.shared.applicationState.rawValue, "id": id?.uuidString ?? "",
+            "token": token?.uuidString ?? "", "jobs": jobs.count]
+        let url = file.deletingLastPathComponent().appendingPathComponent("question-lifecycle.jsonl")
+        guard var data = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]) else { return }
+        data.append(10)
+        if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+        if let handle = try? FileHandle(forWritingTo: url) { defer { try? handle.close() }; _ = try? handle.seekToEnd(); try? handle.write(contentsOf: data) }
+#endif
     }
     func load() {
         do {
@@ -107,8 +160,8 @@ final class QuestionStore {
         var next = committed.filter { $0.id != record.id }; next.append(record)
         do {
             try JSONEncoder().encode(next).write(to: file, options: .atomic)
-            committed = next; pending.removeValue(forKey: record.id); notify(); return true
-        } catch { pending[record.id] = record; notify(); return false }
+            committed = next; pending.removeValue(forKey: record.id); trace("committed-" + record.state.rawValue, id: record.id); notify(); return true
+        } catch { pending[record.id] = record; trace("saveFailed", id: record.id); notify(); return false }
     }
     func retrySave(_ id: UUID) { if let record = pending[id] { save(record) } }
     func edit(_ id: UUID, text: String) {
@@ -116,9 +169,8 @@ final class QuestionStore {
         record.question = text; record.updated = Date(); save(record)
     }
     func cancel(_ id: UUID) {
-        jobs[id]?.task.cancel(); jobs[id] = nil
-        guard var record = record(id), record.state == .preparing || record.state == .generating else { return }
-        record.state = .incomplete; record.failure = "已主动取消；保留已保存内容。"; save(record)
+        trace("cancel", id: id)
+        interrupt(id, reason: "已主动取消；保留已保存内容。")
     }
     func send(_ id: UUID, library: LibraryStore, local: Bool) {
         guard jobs[id] == nil, !unsaved(id), var record = record(id), record.state != .complete,
@@ -128,8 +180,13 @@ final class QuestionStore {
             record.state = .incomplete; record.failure = "请求准备尚未保存，未发送；请重试保存。"; save(record); return
         }
         let token = UUID()
+        beginBackgroundTime()
         let task = Task {
-            defer { if jobs[id]?.token == token { jobs[id] = nil }; notify() }
+            defer {
+                if jobs[id]?.token == token { jobs[id] = nil }
+                if jobs.isEmpty { endBackgroundTime() }
+                trace("finished", id: id, token: token); notify()
+            }
             do {
                 let configurations = try AIConfigurationStore(root: library.root, secrets: secrets)
                 guard let configuration = configurations.configurations.first(where: { $0.id == configurations.selectedID }) else { throw QuestionError.configuration }
@@ -142,6 +199,7 @@ final class QuestionStore {
                     let decomposition = try await AIConnection().text(configuration, key: key, prompt: QuestionPlan.decompositionPrompt(record.question, languageSample: sample), maxTokens: 600, timeout: 30)
                     queries = try QuestionPlan.decodeQueries(decomposition)
                 }
+                try Task.checkCancellation()
                 let plan = try await QuestionPlan.make(record, index: library.preparation.index, local: local, state: state, queries: queries)
                 try Task.checkCancellation()
                 record.evidence = plan.evidence; record.notice = plan.notice; record.retrievalTrace = plan.trace
@@ -151,8 +209,11 @@ final class QuestionStore {
                 guard save(record) else {
                     record.state = .incomplete; record.failure = "发送材料尚未保存，未发送；请重试保存。"; save(record); return
                 }
+                trace("request", id: id, token: token)
                 let text = try await AIConnection().text(configuration, key: key, prompt: plan.prompt, maxTokens: 1600, timeout: 90)
                 try Task.checkCancellation()
+                guard jobs[id]?.token == token else { return }
+                trace("received", id: id, token: token)
                 let result = QuestionPlan.validate(text, evidence: plan.evidence)
                 record.answer = result.answer; record.citations = result.citations
                 if !result.warning.isEmpty { record.notice += "\n" + result.warning }
@@ -160,13 +221,16 @@ final class QuestionStore {
             } catch is CancellationError {
                 // cancel() has already persisted the unfinished state.
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, jobs[id]?.token == token else { return }
                 record.state = .incomplete
                 record.failure = (error as? QuestionError)?.errorDescription ?? (error as? AIError)?.errorDescription ?? "查找或生成失败，问题已保留，请主动重试。"
                 save(record)
             }
         }
         jobs[id] = (token, task)
+        if UIApplication.shared.applicationState == .background && backgroundTask == .invalid {
+            interrupt(id, reason: "系统未提供后台时间，请主动重试。")
+        }
     }
     private func notify() { NotificationCenter.default.post(name: Self.changed, object: self) }
 }

@@ -1,6 +1,65 @@
 import XCTest
 
 final class ReadingUITests: XCTestCase {
+    // The harness installs and launches with simctl --isolated-reading-test.
+    // Attach only: never fall back to launching the business application.
+    func testIssue14OpenAI20() throws { try backgroundQuestion(format: "OpenAI", delay: 20) }
+    func testIssue14OpenAI60() throws { try backgroundQuestion(format: "OpenAI", delay: 60) }
+    func testIssue14Anthropic20() throws { try backgroundQuestion(format: "Anthropic", delay: 20) }
+    func testIssue14Anthropic60() throws { try backgroundQuestion(format: "Anthropic", delay: 60) }
+    private func backgroundQuestion(format: String, delay: Int) throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--isolated-reading-test"]
+        XCTAssertNotEqual(app.state, .notRunning, "Explicit isolated simctl launch required")
+        if app.state != .runningForeground { app.activate() }
+        questionService(app, format: format, model: "bg-\(delay)", address: "http://127.0.0.1:18774/v1")
+        questionSelection(app)
+        sendSelectedQuestion(app, text: "BG14-\(format)-\(delay) 解释这段话")
+        app.buttons["关闭"].tap()
+        let before = app.webViews.firstMatch.screenshot()
+        let shot = XCTAttachment(screenshot: before); shot.name = "issue14-before-reading"; shot.lifetime = .keepAlways; add(shot)
+        app.swipeUp()
+        evidence("issue14-after-reading-\(format)-\(delay)", app)
+        print("BG14 home \(format) \(delay) \(Date().timeIntervalSince1970)")
+        XCUIDevice.shared.press(.home)
+        // Do not query/activate the app while awaiting the background response.
+        Thread.sleep(forTimeInterval: TimeInterval(delay + 3))
+        print("BG14 return \(format) \(delay) \(Date().timeIntervalSince1970)")
+        print("BG14 observed app state \(app.state.rawValue)")
+        XCTAssertNotEqual(app.state, .notRunning, "Use explicit simctl isolated restart and offline verification if the OS terminated the app")
+        app.activate()
+        app.buttons["书架"].tap()
+        if !app.tabBars.firstMatch.waitForExistence(timeout: 3) { app.buttons["书架"].tap() }
+        app.tabBars.buttons["对话"].tap()
+        app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "BG14-\(format)-\(delay)")).firstMatch.tap()
+        XCTAssertEqual(app.staticTexts["question-status"].label, "回答已保存")
+        XCTAssertEqual(app.staticTexts["question-answer"].label, "BG14-\(format)-\(delay)")
+        evidence("issue14-background-saved-\(format)-\(delay)", app)
+        app.buttons["关闭"].tap(); app.tabBars.buttons["书架"].tap()
+    }
+    func testIssue14OfflineRestart() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--isolated-reading-test"]
+        XCTAssertEqual(app.state, .runningForeground)
+        app.tabBars.buttons["对话"].tap()
+        for format in ["OpenAI", "Anthropic"] {
+            for delay in [20, 60] {
+                let name = "BG14-\(format)-\(delay)"
+                let row = app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", name))
+                XCTAssertEqual(row.count, 1); row.firstMatch.tap()
+                if delay == 20 {
+                    XCTAssertEqual(app.staticTexts["question-status"].label, "回答已保存")
+                    XCTAssertEqual(app.staticTexts["question-answer"].label, name)
+                } else {
+                    XCTAssertTrue(app.staticTexts["question-status"].label.contains("系统后台时间已结束"))
+                    XCTAssertFalse(app.staticTexts["question-answer"].exists)
+                }
+                evidence("issue14-offline-" + name, app); app.buttons["关闭"].tap()
+            }
+        }
+    }
     func testIssue15SmallDarkLargeControls() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -1825,5 +1884,56 @@ extension ReadingUITests {
         app.buttons["question-send"].tap(); app.alerts.buttons["发送并查找书内依据"].tap(); questionSaved(app)
         app.scrollViews["question-scroll"].swipeUp(); XCTAssertTrue(app.buttons["question-reference-0"].isHittable)
         evidence("issue9-small-large-text-saved-answer", app)
+    }
+}
+
+extension ReadingUITests {
+    func testIssue14BackgroundWriteFailure() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--isolated-reading-test"]
+        XCTAssertEqual(app.state, .runningForeground)
+        questionService(app, format: "OpenAI", model: "bg-20", address: "http://127.0.0.1:18774/v1")
+        questionSelection(app); sendSelectedQuestion(app, text: "BG14-write-failure")
+        app.buttons["关闭"].tap(); XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 24)
+        XCTAssertNotEqual(app.state, .notRunning); app.activate()
+        // After resuming, iOS 26 can report the old sheet's transformed AX frame.
+        // Main simulator portrait toolbar, independently captured in screenshots.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.10)).tap()
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 5))
+        app.tabBars.buttons["对话"].tap()
+        app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'BG14-write-failure'")).firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["question-status"].label.contains("保存失败"))
+        XCTAssertEqual(app.staticTexts["question-answer"].label, "BG14-OpenAI-20")
+        evidence("issue14-real-background-save-failure", app)
+        app.buttons["重试保存"].tap(); questionSaved(app)
+        evidence("issue14-background-save-retried", app)
+        app.buttons["关闭"].tap(); app.tabBars.buttons["书架"].tap()
+    }
+    func testIssue14StartInterruptedRequest() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--isolated-reading-test"]
+        XCTAssertEqual(app.state, .runningForeground)
+        questionService(app, format: "OpenAI", model: "bg-20", address: "http://127.0.0.1:18774/v1")
+        questionSelection(app); sendSelectedQuestion(app, text: "BG14-terminate-retry")
+        XCTAssertTrue(app.staticTexts["question-status"].label.contains("正在"))
+        app.buttons["关闭"].tap(); XCUIDevice.shared.press(.home)
+        print("BG14 TERMINATE NOW \(Date().timeIntervalSince1970)")
+    }
+    func testIssue14InterruptedRestartAndActiveRetry() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--isolated-reading-test"]
+        XCTAssertEqual(app.state, .runningForeground)
+        app.tabBars.buttons["对话"].tap()
+        let rows = app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'BG14-terminate-retry'"))
+        XCTAssertEqual(rows.count, 1); rows.firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["question-status"].label.contains("上次生成已中断"))
+        XCTAssertFalse(app.staticTexts["question-answer"].exists)
+        evidence("issue14-terminated-restart-incomplete", app)
+        app.buttons["question-send"].tap(); app.alerts.buttons["发送并查找书内依据"].tap()
+        let saved = NSPredicate { _, _ in app.staticTexts["question-status"].label == "回答已保存" }
+        expectation(for: saved, evaluatedWith: app); waitForExpectations(timeout: 30)
+        evidence("issue14-active-new-request-same-record", app)
+        app.buttons["关闭"].tap(); XCTAssertEqual(rows.count, 1)
     }
 }
