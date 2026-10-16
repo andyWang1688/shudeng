@@ -1,6 +1,154 @@
 import XCTest
 
 final class ReadingUITests: XCTestCase {
+    func testIssue15SmallDarkLargeControls() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--isolated-reading-test"]
+        app.launch()
+        let shelf = app.collectionViews["library"]
+        XCTAssertTrue(shelf.waitForExistence(timeout: 10))
+        evidence("issue15-small-dark-large-grid", app)
+        func query(_ value: String) {
+            let field = app.searchFields["library-search"]
+            if !field.isHittable { shelf.swipeDown() }
+            field.tap()
+            if field.buttons.firstMatch.exists { field.buttons.firstMatch.tap() }
+            if !value.isEmpty { field.typeText(value) }
+            let key = app.keyboards.buttons["搜索"].exists ? app.keyboards.buttons["搜索"] : app.keyboards.buttons["search"]
+            if key.exists { key.tap() }
+        }
+        func closeSearch() {
+            let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel", "Close", "关闭"])).firstMatch
+            if close.exists { close.tap() }
+        }
+        query("original fixture")
+        XCTAssertTrue(shelf.cells[searchBookID].exists)
+        XCTAssertEqual(shelf.cells.count, 1)
+        evidence("issue15-small-author", app)
+        query("zz_no_book_15")
+        XCTAssertTrue(app.staticTexts["没有找到匹配的书籍"].exists)
+        evidence("issue15-small-no-results", app)
+        query(""); closeSearch()
+        app.navigationBars.buttons["排序"].tap()
+        evidence("issue15-small-sort-menu", app)
+        app.buttons["书名"].tap()
+        query("内核验证")
+        let target = shelf.cells["book-5fd14a548f5915f58215966cdeed5c6f548b9c9ed0fd97d261597ae6c8f49026"]
+        XCTAssertTrue(target.exists)
+        XCTAssertLessThanOrEqual(target.frame.maxX, app.frame.width)
+        evidence("issue15-small-title", app)
+        // Scroll through the tall card so author, action and preparation are visible.
+        shelf.swipeUp()
+        evidence("issue15-small-card-details", app)
+        if !target.isHittable { shelf.swipeDown() }
+        target.tap(); waitForBody(app)
+        XCTAssertTrue(visibleMarkers(app).contains("C2-P10"))
+        evidence("issue15-small-resume", app)
+        app.buttons["书架"].tap()
+        query(""); closeSearch()
+        app.navigationBars.buttons["排序"].tap()
+        app.buttons["导入顺序"].tap()
+        app.navigationBars.buttons["导入"].tap()
+        evidence("issue15-small-import", app)
+        let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel", "Close", "关闭"])).firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 5), app.debugDescription)
+        close.tap()
+        XCTAssertTrue(shelf.waitForExistence(timeout: 5))
+        evidence("issue15-small-returned", app)
+        print("ISSUE15 small dark AX5 search clear empty sort resume import return passed")
+        app.terminate()
+    }
+    // Seeded only in DEBUG's ShudengReadingTests directory by the issue-15 verifier.
+    func testIssue15ShelfSearchSortAndResume() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--isolated-reading-test"]
+        app.launch()
+        let a = "book-5fd14a548f5915f58215966cdeed5c6f548b9c9ed0fd97d261597ae6c8f49026"
+        let b = "book-a4d0c9451607e189d1ea7b25d9c0d5f8bb9369ecdb55696be1be527043ef5582"
+        let c = searchBookID
+        let shelf = app.collectionViews["library"]
+        XCTAssertTrue(shelf.waitForExistence(timeout: 10))
+        func ids() -> [String] { shelf.cells.allElementsBoundByIndex.map(\.identifier) }
+        func query(_ text: String) {
+            let field = app.searchFields["library-search"]
+            field.tap()
+            if field.buttons.firstMatch.exists { field.buttons.firstMatch.tap() }
+            if !text.isEmpty { field.typeText(text) }
+            if app.keyboards.buttons["search"].exists { app.keyboards.buttons["search"].tap() }
+            else if app.keyboards.buttons["搜索"].exists { app.keyboards.buttons["搜索"].tap() }
+        }
+        func cancelSearch() {
+            let cancel = app.buttons["取消"].exists ? app.buttons["取消"] : (app.buttons["Cancel"].exists ? app.buttons["Cancel"] : app.buttons["Close"])
+            if cancel.exists { cancel.tap() }
+        }
+        func sort(_ name: String) {
+            cancelSearch()
+            app.navigationBars.buttons["排序"].tap()
+            app.buttons[name].tap()
+        }
+        XCTAssertEqual(ids(), [b, c, a])
+        evidence("issue15-grid-import-order", app)
+        print("ISSUE15 initial frames=\(shelf.cells.allElementsBoundByIndex.map { $0.frame })")
+        for card in shelf.cells.allElementsBoundByIndex {
+            XCTAssertGreaterThanOrEqual(card.frame.minX, 0)
+            XCTAssertLessThanOrEqual(card.frame.maxX, app.frame.width)
+        }
+        if ProcessInfo.processInfo.environment["SHUDENG_SHELF_LARGE"] != "1" {
+            XCTAssertEqual(shelf.cells[b].frame.minY, shelf.cells[c].frame.minY, accuracy: 1)
+            XCTAssertGreaterThan(shelf.cells[c].frame.minX, shelf.cells[b].frame.maxX)
+        }
+        for (term, expected) in [("内核验证", [b, a]), ("validation", [b, a]), ("original fixture", [c]), ("SEARCH-FIXTURE", [c])] {
+            query(term)
+            XCTAssertEqual(ids(), expected)
+            evidence("issue15-query-\(term)", app)
+        }
+        query("zz_no_book_15")
+        XCTAssertEqual(ids(), [])
+        XCTAssertTrue(app.staticTexts["没有找到匹配的书籍"].exists)
+        evidence("issue15-no-results", app)
+        query(""); cancelSearch()
+        XCTAssertEqual(ids(), [b, c, a])
+        sort("书名")
+        let titleOrder = ids()
+        XCTAssertEqual(Set(titleOrder), Set([a, b, c]))
+        XCTAssertLessThan(try XCTUnwrap(titleOrder.firstIndex(of: a)), try XCTUnwrap(titleOrder.firstIndex(of: b)))
+        query("validation")
+        XCTAssertEqual(ids(), [a, b])
+        query(""); cancelSearch()
+        XCTAssertEqual(ids(), titleOrder)
+        evidence("issue15-title-order", app)
+        sort("导入顺序")
+        XCTAssertEqual(ids(), [b, c, a])
+        // Filtering changes A from original index 2 to display index 1.
+        for (id, marker) in [(a, "C2-P10"), (b, "C1-P25")] {
+            query("validation")
+            let card = shelf.cells[id]
+            if !card.isHittable { shelf.swipeUp() }
+            card.tap()
+            waitForBody(app)
+            XCTAssertTrue(visibleMarkers(app).contains(marker), "Expected \(id) at \(marker), saw \(visibleMarkers(app))")
+            evidence("issue15-resume-\(marker)", app)
+            app.buttons["书架"].tap()
+            app.terminate(); app.launch()
+            XCTAssertTrue(shelf.waitForExistence(timeout: 10))
+            query("validation")
+            if !shelf.cells[id].isHittable { shelf.swipeUp() }
+            shelf.cells[id].tap(); waitForBody(app)
+            XCTAssertTrue(visibleMarkers(app).contains(marker))
+            evidence("issue15-restart-\(marker)", app)
+            app.buttons["书架"].tap()
+        }
+        cancelSearch()
+        app.navigationBars.buttons["导入"].tap()
+        evidence("issue15-import-accessible", app)
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel", "Close", "关闭"])).firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5), app.debugDescription)
+        cancel.tap()
+        print("ISSUE15 search=4 no-results=true clear=true titleOrder=\(titleOrder) importOrder=\([b,c,a]) resume=A:C2-P10,B:C1-P25 restart=true")
+        app.terminate()
+    }
     private let searchBookID = "book-3c78bfd8640c246c6a6efa49667f89b3f7819721b22c9b9682281d79c97183c3"
     private let searchOtherID = "book-ad52254cb4e46c6077c7bbe4f1c1822100a98ae6916fd87cb071930b8bd45a98"
     private let searchLongID = "book-4aa9213d7e01875d35c2bd6f4409c5e902c9b57a5ce7c4ea8c03e8e888396ce8"
@@ -80,7 +228,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "分页", dark: false, font: 100)
         contents("第1章", in: app)
@@ -113,7 +261,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertEqual(visibleMarkers(app), forward)
         evidence("curl-before-restart", app)
         app.terminate(); app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         XCTAssertEqual(visibleMarkers(app), forward)
         evidence("curl-restored", app)
@@ -129,7 +277,7 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         choose("curl-failure.epub", in: app)
         app.alerts.buttons["知道了"].tap()
-        app.tables["library"].cells[failedBook].tap()
+        app.collectionViews["library"].cells[failedBook].tap()
         waitForBody(app)
         settings(app, mode: "仿真", dark: false, font: 100, wait: false)
         // The original scripted fixture refuses scrollBy: go accepts the request
@@ -146,7 +294,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertFalse(markers.isEmpty)
         evidence("curl-failure-native-recovered", app)
         app.terminate(); app.launch()
-        app.tables["library"].cells[failedBook].tap()
+        app.collectionViews["library"].cells[failedBook].tap()
         waitForBody(app)
         XCTAssertEqual(visibleMarkers(app), markers)
         app.buttons["阅读设置"].tap()
@@ -160,7 +308,7 @@ final class ReadingUITests: XCTestCase {
         let app = XCUIApplication()
         XCUIDevice.shared.orientation = .portrait
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "分页", dark: false, font: 100)
         contents("第1章", in: app)
@@ -178,7 +326,7 @@ final class ReadingUITests: XCTestCase {
         print("CAPTURE_CURL_INITIAL_LANDSCAPE_NOW")
         Thread.sleep(forTimeInterval: 3)
         app.terminate(); app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         assertVisibleChapterStart(app)
         evidence("curl-busy-rotation-landscape-restart", app)
@@ -199,7 +347,7 @@ final class ReadingUITests: XCTestCase {
         let app = XCUIApplication()
         XCUIDevice.shared.orientation = .portrait
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "仿真", dark: false, font: 100)
         contents("第1章", in: app)
@@ -218,7 +366,7 @@ final class ReadingUITests: XCTestCase {
         print("CAPTURE_CURL_TARGET_LANDSCAPE_NOW")
         Thread.sleep(forTimeInterval: 3)
         app.terminate(); app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         XCTAssertTrue(visibleMarkers(app).contains("C1-P03"))
         evidence("curl-completed-turn-landscape-restart", app)
@@ -236,7 +384,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "仿真", dark: true, font: 150)
         contents("第2章", in: app)
@@ -271,7 +419,7 @@ final class ReadingUITests: XCTestCase {
             evidence("curl-timeline-" + name, app)
         }
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "仿真", dark: false, font: 100)
         contents("第1章", in: app)
@@ -289,7 +437,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "仿真", dark: false, font: 100)
         contents("第1章", in: app)
@@ -302,13 +450,13 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["正在准备翻页…"].exists)
         evidence("curl-exit-while-preparing", app)
         app.buttons["书架"].tap()
-        XCTAssertTrue(app.tables["library"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.collectionViews["library"].waitForExistence(timeout: 5))
         // Opening another tab keeps the old reader offscreen while pending
         // Readium callbacks drain; no hidden reader may restart or save.
         app.tabBars.buttons["我的"].tap()
         evidence("curl-left-reader", app)
         app.terminate(); app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         XCTAssertTrue(visibleMarkers(app).contains("C1-P01"))
         evidence("curl-exit-restart-kept-committed-page", app)
@@ -318,7 +466,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[navigationBookID].tap()
+        app.collectionViews["library"].cells[navigationBookID].tap()
         waitForBody(app)
         settings(app, mode: "仿真", dark: false, font: 100)
         clearBookmarks(app)
@@ -374,7 +522,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "分页", dark: false, font: 100)
         clearBookmarks(app)
@@ -400,7 +548,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(visibleMarkers(app).contains("C3-P01"))
         app.terminate()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         app.buttons["目录与书签"].tap()
         app.segmentedControls.buttons["书签"].tap()
@@ -416,7 +564,7 @@ final class ReadingUITests: XCTestCase {
         app.buttons["完成"].tap()
         app.terminate()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         app.buttons["目录与书签"].tap()
         app.segmentedControls.buttons["书签"].tap()
@@ -442,11 +590,11 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        if !app.tables["library"].cells[navigationBookID].exists {
+        if !app.collectionViews["library"].cells[navigationBookID].exists {
             choose("navigation-fixture.epub", in: app)
             app.alerts.buttons["知道了"].tap()
         }
-        app.tables["library"].cells[navigationBookID].tap()
+        app.collectionViews["library"].cells[navigationBookID].tap()
         waitForBody(app)
         settings(app, mode: "滚动", dark: false, font: 100)
         clearBookmarks(app)
@@ -472,7 +620,7 @@ final class ReadingUITests: XCTestCase {
         evidence("chapter2-bookmark-200-dark-pagination", app)
         app.terminate()
         app.launch()
-        app.tables["library"].cells[navigationBookID].tap()
+        app.collectionViews["library"].cells[navigationBookID].tap()
         waitForBody(app)
         evidence("chapter2-bookmark-200-restart", app)
         contents("第3章", in: app)
@@ -485,7 +633,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["阅读位置已保存"].exists)
         app.terminate()
         app.launch()
-        app.tables["library"].cells[navigationBookID].tap()
+        app.collectionViews["library"].cells[navigationBookID].tap()
         waitForBody(app)
         let chapter = app.webViews.staticTexts["第3章：原创验证文本"].firstMatch
         XCTAssertTrue(chapter.exists)
@@ -507,7 +655,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         XCTAssertTrue(app.buttons["重试保存"].waitForExistence(timeout: 15))
         app.buttons["目录与书签"].tap()
         app.buttons["添加书签"].tap()
@@ -527,7 +675,7 @@ final class ReadingUITests: XCTestCase {
         app.buttons["完成"].tap()
         app.terminate()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         app.buttons["目录与书签"].tap()
         app.segmentedControls.buttons["书签"].tap()
@@ -539,7 +687,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         XCTAssertTrue(app.buttons["重试保存"].waitForExistence(timeout: 15))
         app.buttons["目录与书签"].tap()
         app.segmentedControls.buttons["书签"].tap()
@@ -560,7 +708,7 @@ final class ReadingUITests: XCTestCase {
         app.buttons["完成"].tap()
         app.terminate()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         app.buttons["目录与书签"].tap()
         app.segmentedControls.buttons["书签"].tap()
@@ -571,7 +719,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "滚动", dark: true, font: 200)
         contents("第2章", in: app)
@@ -593,11 +741,11 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        if !app.tables["library"].cells[bookID].exists {
+        if !app.collectionViews["library"].cells[bookID].exists {
             choose("original-fixture.epub", in: app)
             app.alerts.buttons["知道了"].tap()
         }
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "分页", dark: false, font: 100)
         app.swipeLeft()
@@ -618,7 +766,7 @@ final class ReadingUITests: XCTestCase {
         evidence("scrolled-before-restart-" + scrolled, app)
         app.terminate()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         if scrolled != "within-long-paragraph" { XCTAssertTrue(visibleMarkers(app).contains(scrolled)) }
         evidence("scrolled-after-restart-" + scrolled, app)
@@ -636,7 +784,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForText(app)
         settings(app, mode: "分页", dark: false, font: 100)
         let marker = try XCTUnwrap(visibleMarkers(app).first)
@@ -645,7 +793,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(visibleMarkers(app).contains(marker))
         app.terminate()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForText(app)
         XCTAssertTrue(visibleMarkers(app).contains(marker))
         evidence("theme-only-restored-" + marker, app)
@@ -662,7 +810,7 @@ final class ReadingUITests: XCTestCase {
         choose("plain-long.epub", in: app)
         app.alerts.buttons["知道了"].tap()
         let plainID = "book-0b0d797950600fe3afc64cfb074b97bf923a88277a1957628aee785ee4d20b18"
-        app.tables["library"].cells[plainID].tap()
+        app.collectionViews["library"].cells[plainID].tap()
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 20))
         for _ in 0..<3 { app.swipeLeft() }
         evidence("plain-paragraph-before", app)
@@ -672,7 +820,7 @@ final class ReadingUITests: XCTestCase {
         evidence("plain-paragraph-200-scroll", app)
         app.terminate()
         app.launch()
-        app.tables["library"].cells[plainID].tap()
+        app.collectionViews["library"].cells[plainID].tap()
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.webViews.staticTexts.firstMatch.waitForExistence(timeout: 15))
         evidence("plain-paragraph-restored", app)
@@ -685,7 +833,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         XCTAssertTrue(app.buttons["重试保存"].waitForExistence(timeout: 15))
         settings(app, mode: "滚动", dark: true, font: 175, wait: false)
         XCTAssertTrue(app.buttons["重试保存"].waitForExistence(timeout: 15))
@@ -701,7 +849,7 @@ final class ReadingUITests: XCTestCase {
         evidence("settings-retry-saved-" + marker, app)
         app.terminate()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForText(app)
         XCTAssertTrue(visibleMarkers(app).contains(marker))
         app.buttons["阅读设置"].tap()
@@ -717,7 +865,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         XCTAssertTrue(app.buttons["重试保存"].waitForExistence(timeout: 15))
         settings(app, mode: "仿真", dark: true, font: 150, wait: false)
         XCTAssertTrue(app.buttons["重试保存"].waitForExistence(timeout: 15))
@@ -733,7 +881,7 @@ final class ReadingUITests: XCTestCase {
         evidence("curl-settings-retry-saved-" + marker, app)
         app.terminate()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForText(app)
         XCTAssertTrue(visibleMarkers(app).contains(marker))
         app.buttons["阅读设置"].tap()
@@ -749,7 +897,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "仿真", dark: true, font: 200)
         contents("第2章", in: app)
@@ -765,7 +913,7 @@ final class ReadingUITests: XCTestCase {
         app.buttons["取消"].tap()
         settings(app, mode: "分页", dark: false, font: 100)
         app.buttons["书架"].tap()
-        XCTAssertTrue(app.tables["library"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.collectionViews["library"].waitForExistence(timeout: 5))
     }
 
     func testSmallScreenLargeTextControls() throws {
@@ -773,7 +921,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "滚动", dark: true, font: 200, wait: false)
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 20))
@@ -788,7 +936,7 @@ final class ReadingUITests: XCTestCase {
         app.buttons["取消"].tap()
         settings(app, mode: "分页", dark: false, font: 100)
         app.buttons["书架"].tap()
-        XCTAssertTrue(app.tables["library"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.collectionViews["library"].waitForExistence(timeout: 5))
     }
     func testRealPickerTurnsAndRestart() throws {
         continueAfterFailure = false
@@ -796,12 +944,12 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         choose("original-fixture.epub", in: app)
         app.alerts.buttons["知道了"].tap()
-        let count = app.tables["library"].cells.count
+        let count = app.collectionViews["library"].cells.count
         choose("original-fixture.epub", in: app)
         XCTAssertTrue(app.alerts["书籍已在书架"].exists)
         app.alerts.buttons["知道了"].tap()
-        XCTAssertEqual(app.tables["library"].cells.count, count)
-        app.tables["library"].cells[bookID].tap()
+        XCTAssertEqual(app.collectionViews["library"].cells.count, count)
+        app.collectionViews["library"].cells[bookID].tap()
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 15))
         let before = visibleMarker(app)
         for _ in 0..<3 { app.swipeLeft() }
@@ -815,7 +963,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].exists)
         app.terminate()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 15))
         XCTAssertEqual(visibleMarker(app), marker)
         evidence("restored-" + marker, app)
@@ -825,13 +973,13 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        let count = app.tables["library"].cells.count
+        let count = app.collectionViews["library"].cells.count
         for name in ["corrupted.epub", "fixed-layout.epub", "missing-chapter.epub", "unsupported"] {
             choose(name, in: app)
             XCTAssertTrue(app.alerts["导入失败"].exists)
             evidence("rejected-" + name, app)
             app.alerts.buttons["知道了"].tap()
-            XCTAssertEqual(app.tables["library"].cells.count, count)
+            XCTAssertEqual(app.collectionViews["library"].cells.count, count)
         }
     }
     func testStorageFailureAndRetry() throws {
@@ -841,7 +989,7 @@ final class ReadingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         XCTAssertTrue(app.buttons["重试保存"].waitForExistence(timeout: 15))
         XCTAssertFalse(app.staticTexts["阅读位置已保存"].exists)
         evidence("storage-failure-visible", app)
@@ -893,7 +1041,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[navigationBookID].tap()
+        app.collectionViews["library"].cells[navigationBookID].tap()
         waitForBody(app)
         settings(app, mode: "分页", dark: false, font: 100)
         contents("第1章末", in: app)
@@ -967,7 +1115,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[navigationBookID].tap()
+        app.collectionViews["library"].cells[navigationBookID].tap()
         waitForBody(app)
         settings(app, mode: "滚动", dark: false, font: 100)
         contents("第2章", in: app)
@@ -1023,7 +1171,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[bookID].tap()
+        app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
         settings(app, mode: "分页", dark: false, font: 100)
         contents("第2章", in: app)
@@ -1081,7 +1229,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[navigationBookID].tap()
+        app.collectionViews["library"].cells[navigationBookID].tap()
         waitForBody(app)
         settings(app, mode: "分页", dark: false, font: 100)
         contents("第1章末", in: app)
@@ -1132,7 +1280,7 @@ extension ReadingUITests {
         let app = XCUIApplication()
         app.launch()
         for (chapter, paragraph, name) in [(2, 10, "N6-R2"), (3, 20, "N6-R3")] {
-            app.tables["library"].cells[navigationBookID].tap()
+            app.collectionViews["library"].cells[navigationBookID].tap()
             waitForBody(app)
             settings(app, mode: "滚动", dark: false, font: 100)
             contents("第\(chapter)章", in: app)
@@ -1191,7 +1339,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[searchBookID].tap()
+        app.collectionViews["library"].cells[searchBookID].tap()
         if app.alerts["翻页准备失败"].waitForExistence(timeout: 1) { app.alerts.buttons["使用分页"].tap() }
         waitForBody(app)
         settings(app, mode: "仿真", dark: true, font: 150)
@@ -1206,7 +1354,7 @@ extension ReadingUITests {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.buttons["完成"].tap()
         app.buttons["书架"].tap()
-        app.tables["library"].cells[searchOtherID].tap()
+        app.collectionViews["library"].cells[searchOtherID].tap()
         waitForBody(app)
         searchBook(app, query: "S1-SECOND", count: 0)
         searchQuery(app, query: "OTHER-ONLY", count: 2)
@@ -1214,7 +1362,7 @@ extension ReadingUITests {
         app.tables["book-search-results"].cells.element(boundBy: 1).tap()
         waitForBody(app)
         app.terminate(); app.launch()
-        app.tables["library"].cells[searchBookID].tap()
+        app.collectionViews["library"].cells[searchBookID].tap()
         waitForBody(app)
         searchBook(app, query: "重复句出现位置", count: 3)
         searchHit(app, containing: "S1-SECOND")
@@ -1227,7 +1375,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[searchBookID].tap()
+        app.collectionViews["library"].cells[searchBookID].tap()
         waitForBody(app)
         searchBook(app, query: "S1-SECOND", count: 1)
         print("I8_INJECT_INDEX_FAULT")
@@ -1255,7 +1403,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[searchBookID].tap()
+        app.collectionViews["library"].cells[searchBookID].tap()
         waitForBody(app)
         contents("搜索第2章", in: app)
         waitForBody(app)
@@ -1280,7 +1428,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
-        app.tables["library"].cells[searchBookID].tap()
+        app.collectionViews["library"].cells[searchBookID].tap()
         waitForBody(app)
         searchBook(app, query: "CAFE", count: 1)
         app.tables["book-search-results"].cells.firstMatch.tap()
@@ -1324,7 +1472,7 @@ extension ReadingUITests {
             choose(name, in: app)
             app.alerts.buttons["知道了"].tap()
         }
-        app.tables["library"].cells[searchBookID].tap()
+        app.collectionViews["library"].cells[searchBookID].tap()
         waitForBody(app)
         settings(app, mode: "分页", dark: false, font: 100)
         searchBook(app, query: "the same sentence", count: 3)
@@ -1364,7 +1512,7 @@ extension ReadingUITests {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.buttons["完成"].tap()
         app.buttons["书架"].tap()
-        app.tables["library"].cells[searchOtherID].tap()
+        app.collectionViews["library"].cells[searchOtherID].tap()
         waitForBody(app)
         searchBook(app, query: "S1-SECOND", count: 0)
         searchQuery(app, query: "OTHER-ONLY", count: 2)
@@ -1373,7 +1521,7 @@ extension ReadingUITests {
         waitForBody(app)
         app.terminate()
         app.launch()
-        app.tables["library"].cells[searchBookID].tap()
+        app.collectionViews["library"].cells[searchBookID].tap()
         waitForBody(app)
         searchBook(app, query: "重复句出现位置", count: 3)
         searchHit(app, containing: "S1-SECOND")
@@ -1388,7 +1536,7 @@ extension ReadingUITests {
         app.launch()
         choose("search-long.epub", in: app)
         app.alerts.buttons["知道了"].tap()
-        let row = app.tables["library"].cells[searchLongID]
+        let row = app.collectionViews["library"].cells[searchLongID]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         XCTAssertTrue((row.value as? String ?? "").contains("正在准备"))
         evidence("search-long-preparing-does-not-block-shelf", app)
@@ -1401,11 +1549,11 @@ extension ReadingUITests {
         // The sidecar snapshots committed SQLite after termination, before startup resumes.
         Thread.sleep(forTimeInterval: 3)
         app.launch()
-        let ready = NSPredicate { _, _ in (app.tables["library"].cells[self.searchLongID].value as? String ?? "").contains("书内资料可用") }
+        let ready = NSPredicate { _, _ in (app.collectionViews["library"].cells[self.searchLongID].value as? String ?? "").contains("书内资料可用") }
         expectation(for: ready, evaluatedWith: app)
         waitForExpectations(timeout: 180)
         evidence("search-long-resumed-all-chapters-committed", app)
-        app.tables["library"].cells[searchLongID].tap()
+        app.collectionViews["library"].cells[searchLongID].tap()
         waitForBody(app)
         searchBook(app, query: "L40-P500", count: 1)
         app.tables["book-search-results"].cells.firstMatch.tap()
@@ -1433,7 +1581,7 @@ extension ReadingUITests {
         app.tabBars.buttons["书架"].tap()
     }
     private func questionSelection(_ app: XCUIApplication) {
-        app.tables["library"].cells[searchBookID].tap()
+        app.collectionViews["library"].cells[searchBookID].tap()
         if app.alerts["翻页准备失败"].waitForExistence(timeout: 3) { app.alerts.buttons["使用分页"].tap() }
         waitForBody(app)
         settings(app, mode: "滚动", dark: false, font: 100)
@@ -1462,7 +1610,7 @@ extension ReadingUITests {
     func testSemanticBackgroundCitationActualHTTPJumpAndReturn() throws {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launch()
-        let book = app.tables["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
+        let book = app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
         if !book.exists {
             choose("A-semantic.epub", in: app)
             app.alerts.buttons["知道了"].tap()
@@ -1588,7 +1736,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launch()
         questionService(app, format: "OpenAI")
-        app.tables["library"].cells[searchBookID].tap(); waitForBody(app)
+        app.collectionViews["library"].cells[searchBookID].tap(); waitForBody(app)
         settings(app, mode: "滚动", dark: false, font: 100)
         searchBook(app, query: "后续可见", count: 1)
         app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
@@ -1610,7 +1758,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launch()
         questionService(app, format: "OpenAI")
-        app.tables["library"].cells[searchBookID].tap(); waitForBody(app)
+        app.collectionViews["library"].cells[searchBookID].tap(); waitForBody(app)
         settings(app, mode: "滚动", dark: false, font: 100)
         searchBook(app, query: "S1-SECOND", count: 1)
         app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
@@ -1634,8 +1782,8 @@ extension ReadingUITests {
         print("I9_RESTORE_PREPARATION_FAULT")
         Thread.sleep(forTimeInterval: 3)
         app.terminate(); app.launch()
-        XCTAssertTrue(app.tables["library"].cells[searchBookID].waitForExistence(timeout: 5))
-        let cell = app.tables["library"].cells[searchBookID]
+        XCTAssertTrue(app.collectionViews["library"].cells[searchBookID].waitForExistence(timeout: 5))
+        let cell = app.collectionViews["library"].cells[searchBookID]
         expectation(for: NSPredicate { _, _ in (cell.value as? String ?? "").contains("书内资料可用") }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
     }
@@ -1646,7 +1794,7 @@ extension ReadingUITests {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launch()
         questionService(app, format: "OpenAI", model: "jump-second")
-        app.tables["library"].cells[searchBookID].tap(); waitForBody(app)
+        app.collectionViews["library"].cells[searchBookID].tap(); waitForBody(app)
         settings(app, mode: "滚动", dark: false, font: 100)
         searchBook(app, query: "后续可见", count: 1)
         app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)

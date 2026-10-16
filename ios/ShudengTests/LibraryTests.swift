@@ -5,6 +5,21 @@ import ReadiumShared
 
 @MainActor
 final class LibraryTests: XCTestCase {
+    func testShelfSearchAndStableOrder() {
+        let books = [Book(id: "b", title: "同名书", author: "作者乙"),
+                     Book(id: "c", title: "Alpha 2", author: "Shudeng original fixture"),
+                     Book(id: "a", title: "同名书", author: "作者甲")]
+        XCTAssertEqual(ShelfOrder.imported.books(books, matching: "  ").map(\.id), ["b", "c", "a"])
+        XCTAssertEqual(ShelfOrder.imported.books(books, matching: " ALPHA ").map(\.id), ["c"])
+        XCTAssertEqual(ShelfOrder.imported.books(books, matching: "ORIGINAL FIXTURE").map(\.id), ["c"])
+        XCTAssertEqual(ShelfOrder.imported.books(books, matching: "作者甲").map(\.id), ["a"])
+        XCTAssertTrue(ShelfOrder.title.books(books, matching: "missing").isEmpty)
+        XCTAssertEqual(ShelfOrder.title.books(books, matching: "同名").map(\.id), ["a", "b"])
+        XCTAssertEqual(ShelfOrder.title.books(books.reversed(), matching: "同名").map(\.id), ["a", "b"])
+        let english = [Book(id: "2", title: "Book 10", author: ""), Book(id: "1", title: "Book 2", author: "")]
+        XCTAssertEqual(ShelfOrder.title.books(english, matching: "").map(\.id), ["1", "2"])
+        XCTAssertEqual(books.map(\.id), ["b", "c", "a"])
+    }
     var root: URL!
     override func setUp() async throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
