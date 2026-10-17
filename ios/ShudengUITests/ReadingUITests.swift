@@ -2189,3 +2189,89 @@ extension ReadingUITests {
         app.buttons["关闭"].tap(); XCTAssertEqual(rows.count, 1)
     }
 }
+
+extension ReadingUITests {
+    private var removalA: String { "book-91596d461eec70d5167646cb4ac2c8cd3802fe74ae9eecd0825856593e4526f3" }
+    private var removalB: String { "book-ad52254cb4e46c6077c7bbe4f1c1822100a98ae6916fd87cb071930b8bd45a98" }
+    private func removalMenu(_ app: XCUIApplication, delete: Bool) {
+        let book = app.collectionViews["library"].cells[removalA]
+        XCTAssertTrue(book.waitForExistence(timeout: 10)); book.press(forDuration: 1.3)
+        let action = delete ? "连同记录彻底删除" : "移除原书，保留记录"
+        XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5)); app.buttons[action].tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
+    }
+    func testIssue16RemoveOriginalKeepRecords() {
+        let app = issue12App()
+        removalMenu(app, delete: false)
+        evidence("issue16-default-removal-disclosure", app)
+        app.alerts.buttons["移除原书，保留记录"].tap()
+        expectation(for: NSPredicate { _, _ in !app.collectionViews["library"].cells[self.removalA].exists }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        XCTAssertTrue(app.collectionViews["library"].cells[removalB].exists)
+        app.buttons["已移除"].tap()
+        XCTAssertTrue(app.collectionViews["library"].cells[removalA].exists)
+        evidence("issue16-removed-record-management", app)
+        app.buttons["返回书架"].tap()
+    }
+    func testIssue16OfflineRestartNotesAndCitations() {
+        let app = issue12App()
+        XCTAssertFalse(app.collectionViews["library"].cells[removalA].exists)
+        app.tabBars.buttons["笔记"].tap()
+        let note = app.tables["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", "A retained draft")).firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 5)); note.tap()
+        XCTAssertEqual(app.textViews["note-body"].value as? String, "A retained draft")
+        XCTAssertTrue((app.textViews["note-quote"].value as? String ?? "").contains("盐桥"))
+        evidence("issue16-offline-retained-note-draft-quote", app)
+        app.buttons["返回原文"].tap()
+        XCTAssertTrue(app.alerts["无法返回原文"].waitForExistence(timeout: 5))
+        evidence("issue16-note-original-unavailable", app); app.alerts.buttons["知道了"].tap()
+        app.tabBars.buttons["对话"].tap()
+        let row = app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal 91596")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        XCTAssertTrue(app.staticTexts["question-answer"].label.contains("Saved answer"))
+        XCTAssertFalse(app.buttons["question-follow-up"].isEnabled)
+        let reference = app.buttons["question-reference-0"]; issue12Reach(reference, in: app); reference.tap()
+        app.buttons["跳转原文"].tap()
+        XCTAssertTrue(app.alerts["原文不可用"].waitForExistence(timeout: 5))
+        evidence("issue16-offline-answer-citation-unavailable", app)
+        app.alerts.buttons["知道了"].tap(); app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["关闭"].tap()
+        app.tabBars.buttons["书架"].tap()
+    }
+    func testIssue16PickerRestoreAndCancelDeletion() {
+        let app = issue12App()
+        app.buttons["导入"].tap()
+        let folder = app.cells["Issue16Acceptance, Folder"]
+        if !folder.waitForExistence(timeout: 3) {
+            let browse = app.buttons.matching(identifier: "浏览").firstMatch
+            XCTAssertTrue(browse.waitForExistence(timeout: 5)); browse.tap()
+            if !folder.waitForExistence(timeout: 2) {
+                let back = app.navigationBars.buttons["BackButton"]
+                if back.exists { back.tap() }
+                let local = app.cells["DOC.sidebar.item.我的iPhone"]
+                if local.waitForExistence(timeout: 3) { local.tap() }
+            }
+        }
+        XCTAssertTrue(folder.waitForExistence(timeout: 5)); folder.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
+        let file = app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "semantic-other.epub,")).firstMatch
+        XCTAssertTrue(file.waitForExistence(timeout: 5)); file.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 10)); evidence("issue16-identical-file-restored", app)
+        app.alerts.buttons["知道了"].tap()
+        XCTAssertTrue(app.collectionViews["library"].cells[removalA].exists)
+        removalMenu(app, delete: true)
+        evidence("issue16-destructive-explicit-confirmation", app); app.alerts.buttons["取消"].tap()
+        XCTAssertTrue(app.collectionViews["library"].cells[removalA].exists)
+    }
+    func testIssue16ConfirmDeletion() {
+        let app = issue12App()
+        removalMenu(app, delete: true); app.alerts.buttons["确认彻底删除"].tap()
+        expectation(for: NSPredicate { _, _ in !app.collectionViews["library"].cells[self.removalA].exists }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        XCTAssertTrue(app.collectionViews["library"].cells[removalB].exists)
+        app.tabBars.buttons["笔记"].tap()
+        XCTAssertFalse(app.tables["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", "A retained draft")).firstMatch.exists)
+        app.tabBars.buttons["对话"].tap()
+        XCTAssertFalse(app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal 91596")).firstMatch.exists)
+        XCTAssertTrue(app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal ad522")).firstMatch.exists)
+        evidence("issue16-target-deleted-other-book-retained", app)
+    }
+}

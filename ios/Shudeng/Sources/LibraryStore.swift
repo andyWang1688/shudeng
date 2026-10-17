@@ -21,6 +21,13 @@ struct Book: Codable, Identifiable {
     var notes: [BookNote]?
     var noteDrafts: [BookNote]?
     var readChapters: [Int]?
+    var recordIdentity: UUID?
+    var removal: BookRemoval?
+}
+
+enum BookRemoval: String, Codable {
+    case removing, removed, deleting
+    var pending: Bool { self != .removed }
 }
 
 struct BookNote: Codable, Identifiable {
@@ -70,7 +77,7 @@ struct ImportedBook {
 }
 
 enum LibraryError: LocalizedError {
-    case unsupported, invalid, save, missing, invalidLocation
+    case unsupported, invalid, save, missing, invalidLocation, busy
     var errorDescription: String? {
         switch self {
         case .unsupported: return "仅支持未加密的可重排 EPUB，暂不支持 PDF 或固定版式。"
@@ -78,16 +85,20 @@ enum LibraryError: LocalizedError {
         case .save: return "保存失败，请检查设备储存空间后重试。"
         case .missing: return "原文文件不可用，请重新导入相同文件。"
         case .invalidLocation: return "已保存的阅读位置无法读取，未覆盖原记录。"
+        case .busy: return "此书的操作尚未完成，请重试原操作后再导入。"
         }
     }
 }
 
 @MainActor
 final class LibraryStore {
+    static let changed = Notification.Name("LibraryChanged")
     private(set) var books: [Book] = []
     let root: URL
     lazy var preparation = BookPreparation(root: root)
     let questions: QuestionStore
+    private var operations: Set<String> = []
+    private var revisions: [String: UUID] = [:]
     private let fileManager = FileManager.default
     private let http = DefaultHTTPClient()
     private lazy var retriever = AssetRetriever(httpClient: http)
@@ -98,14 +109,19 @@ final class LibraryStore {
     private var catalog: URL { root.appendingPathComponent("library.json") }
     private var files: URL { root.appendingPathComponent("Books", isDirectory: true) }
 
-    init(root: URL) throws {
+    init(root: URL, secrets: AISecrets = KeychainSecrets()) throws {
         self.root = root
         let filesURL = root.appendingPathComponent("Books", isDirectory: true)
         try fileManager.createDirectory(at: filesURL, withIntermediateDirectories: true)
-        questions = QuestionStore(root: root)
+        questions = QuestionStore(root: root, secrets: secrets)
         if fileManager.fileExists(atPath: catalog.path) {
             books = try JSONDecoder().decode([Book].self, from: Data(contentsOf: catalog))
         }
+        questions.canSave = { [weak self] record in
+            guard let book = self?.books.first(where: { $0.id == record.bookID }), book.removal != .deleting else { return false }
+            return book.recordIdentity == record.bookIdentity
+        }
+        questions.canGenerate = { [weak self] id in self?.sourceAvailable(for: id) == true }
     }
 
     func importBook(from source: URL) async throws -> ImportedBook {
@@ -119,10 +135,15 @@ final class LibraryStore {
         do { try fileManager.copyItem(at: source, to: staged) }
         catch { throw LibraryError.save }
         let id = try Self.digest(staged)
+        guard !operations.contains(id), books.first(where: { $0.id == id })?.removal?.pending != true else { throw LibraryError.busy }
+        operations.insert(id)
+        defer { operations.remove(id) }
         let publication = try await validatedPublication(at: staged)
         let existing = books.first { $0.id == id }
-        let book = existing ?? Book(id: id, title: publication.metadata.title ?? source.deletingPathExtension().lastPathComponent,
+        var book = existing ?? Book(id: id, title: publication.metadata.title ?? source.deletingPathExtension().lastPathComponent,
                                    author: publication.metadata.authors.map { $0.name }.joined(separator: "、"))
+        if existing == nil { book.recordIdentity = UUID() }
+        book.removal = nil
         let destination = fileURL(for: book)
         let existed = fileManager.fileExists(atPath: destination.path)
         do {
@@ -131,9 +152,8 @@ final class LibraryStore {
             } else {
                 try fileManager.moveItem(at: staged, to: destination)
             }
-            if existing == nil {
-                let updated = books + [book]
-                try commit(updated)
+            if existing == nil || existing?.removal != nil {
+                try commit(books.filter { $0.id != id } + [book])
             }
         } catch {
             if !existed { try? fileManager.removeItem(at: destination) }
@@ -144,14 +164,69 @@ final class LibraryStore {
     }
 
     func prepareBooks() {
-        for book in books { preparation.start(book, file: fileURL(for: book)) }
+        Task {
+            await recoverRemovals()
+            for book in books where sourceAvailable(for: book.id) { preparation.start(book, file: fileURL(for: book)) }
+        }
+    }
+
+    func recoverRemovals() async {
+        for book in books where book.removal?.pending == true {
+            do { try await removeBook(book.id, deleteRecords: book.removal == .deleting) }
+            catch { NotificationCenter.default.post(name: Self.changed, object: self) }
+        }
+    }
+
+    func sourceAvailable(for id: String) -> Bool {
+        guard let book = books.first(where: { $0.id == id }), book.removal == nil else { return false }
+        return fileManager.fileExists(atPath: fileURL(for: book).path)
+    }
+
+    func revision(for id: String) -> UUID {
+        if let revision = revisions[id] { return revision }
+        let revision = UUID(); revisions[id] = revision; return revision
+    }
+    func checkRevision(_ revision: UUID, for id: String) throws {
+        guard revision == self.revision(for: id),
+              let book = books.first(where: { $0.id == id }), book.removal?.pending != true else { throw LibraryError.missing }
+    }
+
+    func removeBook(_ id: String, deleteRecords: Bool = false) async throws {
+        guard !operations.contains(id), let position = books.firstIndex(where: { $0.id == id }) else { throw LibraryError.busy }
+        operations.insert(id)
+        defer { operations.remove(id) }
+        let intent: BookRemoval = deleteRecords ? .deleting : .removing
+        guard books[position].removal != .deleting || deleteRecords else { throw LibraryError.busy }
+        if books[position].removal != intent {
+            var updated = books; updated[position].removal = intent
+            try commit(updated) // Persist intent before any destructive work.
+        }
+        revisions[id] = UUID()
+        questions.stop(bookID: id, preservingRecords: !deleteRecords)
+        await preparation.stop(bookID: id)
+        if !deleteRecords {
+            for record in questions.records where record.bookID == id && questions.unsaved(record.id) {
+                guard questions.save(record) else { throw LibraryError.save }
+            }
+        }
+        try await preparation.index.remove(bookID: id)
+        let file = fileURL(for: books.first { $0.id == id }!)
+        if fileManager.fileExists(atPath: file.path) { try fileManager.removeItem(at: file) }
+        if deleteRecords { try questions.remove(bookID: id) }
+        var updated = books
+        if deleteRecords { updated.removeAll { $0.id == id } }
+        else if let index = updated.firstIndex(where: { $0.id == id }) { updated[index].removal = .removed }
+        try commit(updated)
     }
 
     func fileURL(for book: Book) -> URL { files.appendingPathComponent(book.id + ".epub") }
 
     func open(_ book: Book) async throws -> Publication {
-        guard fileManager.fileExists(atPath: fileURL(for: book).path) else { throw LibraryError.missing }
-        return try await validatedPublication(at: fileURL(for: book))
+        let revision = revision(for: book.id)
+        guard sourceAvailable(for: book.id), books.first(where: { $0.id == book.id })?.recordIdentity == book.recordIdentity else { throw LibraryError.missing }
+        let publication = try await validatedPublication(at: fileURL(for: book))
+        guard revision == self.revision(for: book.id), sourceAvailable(for: book.id) else { throw LibraryError.missing }
+        return publication
     }
 
     func location(for id: String) throws -> Locator? {
@@ -214,6 +289,7 @@ final class LibraryStore {
         let data = try JSONEncoder().encode(updated)
         try data.write(to: catalog, options: .atomic)
         books = updated // Publish success only after the atomic rename succeeds.
+        NotificationCenter.default.post(name: Self.changed, object: self)
     }
 
     func saveNote(_ note: BookNote, for id: String, draft: Bool = false, highlightOnly: Bool = false) throws {

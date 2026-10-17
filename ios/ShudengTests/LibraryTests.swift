@@ -342,3 +342,241 @@ extension LibraryTests {
         XCTAssertNil(saved.locatorJSON) // Notes never replace daily reading progress.
     }
 }
+
+extension LibraryTests {
+    private var removalTables: [String] { ["embeddings", "embedding_progress", "fragment_terms", "fragments", "chapters", "preparations", "contents"] }
+    private func removalSnapshot(_ name: String, library: LibraryStore) throws {
+        var files: [String: String] = [:]
+        for name in ["library.json", "reading-questions.json"] {
+            files[name] = try String(contentsOf: root.appendingPathComponent(name), encoding: .utf8)
+        }
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: files, options: [.sortedKeys]), uniformTypeIdentifier: "public.json")
+        attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+    }
+    private func removalBooks() async throws -> (LibraryStore, Book, Book, BookNote) {
+        let library = try LibraryStore(root: root)
+        let a = try await library.importBook(from: fixture("semantic-other")).book
+        let b = try await library.importBook(from: fixture("search-other")).book
+        await library.preparation.waitForCurrentWork()
+        let hits = try await library.preparation.index.search(bookID: a.id, query: "盐桥")
+        let locator = try XCTUnwrap(hits.first?.locator)
+        let note = BookNote(locator: locator, body: "A retained note")
+        try library.saveNote(note, for: a.id)
+        var draft = note; draft.body = "A retained draft"; try library.saveNote(draft, for: a.id, draft: true)
+        try library.saveBookmark(Bookmark(locator: locator), for: a.id)
+        try library.saveLocation(locator, for: a.id)
+        for book in [a, b] {
+            let ownHits = try await library.preparation.index.search(bookID: book.id, query: book.id == a.id ? "盐桥" : "搜索")
+            var record = ReadingQuestion(book: book, selection: QuestionEvidence(locator: try XCTUnwrap(ownHits.first?.locator)), neighbors: [])
+            record.question = "Removal \(book.id)"; record.answer = "Saved answer"; record.citations = [record.selection]; record.state = .complete
+            XCTAssertTrue(library.questions.save(record))
+        }
+        return (library, a, b, note)
+    }
+    func testIssue16RemovalRestartRestoreAndDeleteIsolation() async throws {
+        let (library, a, b, note) = try await removalBooks()
+        let index = root.appendingPathComponent("book-index.sqlite")
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let bRows = try removalTables.map { try indexRows(index, "SELECT * FROM \($0) WHERE book_id='\(b.id)'") }
+        let bBook = try encoder.encode(library.books.first { $0.id == b.id }!)
+        let bRecords = try encoder.encode(library.questions.records.filter { $0.bookID == b.id })
+        let oldRecord = try XCTUnwrap(library.questions.records.first { $0.bookID == a.id })
+        let oldRevision = library.revision(for: a.id)
+        try removalSnapshot("issue16-before", library: library)
+        try await library.removeBook(a.id)
+        XCTAssertFalse(library.sourceAvailable(for: a.id))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: library.fileURL(for: a).path))
+        for table in removalTables { XCTAssertEqual(try indexRows(index, "SELECT count(*) FROM \(table) WHERE book_id='\(a.id)'")[0][0], "0") }
+        let reopened = try LibraryStore(root: root)
+        XCTAssertEqual(reopened.books.first { $0.id == a.id }?.notes?.first?.id, note.id)
+        XCTAssertEqual(reopened.books.first { $0.id == a.id }?.noteDrafts?.first?.body, "A retained draft")
+        XCTAssertEqual(reopened.questions.record(oldRecord.id)?.answer, oldRecord.answer)
+        XCTAssertEqual(reopened.questions.record(oldRecord.id)?.citations, oldRecord.citations)
+        XCTAssertNil(reopened.questions.followUp(oldRecord.conversation))
+        do { _ = try await reopened.open(a); XCTFail("Removed original cannot open") } catch { }
+        try removalSnapshot("issue16-removed-restarted", library: reopened)
+        let restored = try await library.importBook(from: fixture("semantic-other"))
+        XCTAssertEqual(restored.book.id, a.id); XCTAssertTrue(restored.isDuplicate)
+        XCTAssertEqual(library.books.first { $0.id == a.id }?.notes?.first?.id, note.id)
+        XCTAssertThrowsError(try library.checkRevision(oldRevision, for: a.id))
+        await library.preparation.waitForCurrentWork()
+        _ = try await library.open(restored.book)
+        try await library.removeBook(a.id, deleteRecords: true)
+        XCTAssertFalse(library.questions.save(oldRecord))
+        let fresh = try await library.importBook(from: fixture("semantic-other")).book
+        XCTAssertNotEqual(fresh.recordIdentity, a.recordIdentity)
+        XCTAssertFalse(library.questions.save(oldRecord), "Old result cannot resurrect even after identical-file import")
+        XCTAssertNil(library.books.first { $0.id == a.id }?.notes)
+        await library.preparation.waitForCurrentWork()
+        try await library.removeBook(a.id, deleteRecords: true)
+        let deleted = try LibraryStore(root: root)
+        XCTAssertNil(deleted.books.first { $0.id == a.id }); XCTAssertNil(deleted.questions.record(oldRecord.id))
+        XCTAssertEqual(try encoder.encode(deleted.books.first { $0.id == b.id }!), bBook)
+        XCTAssertEqual(try encoder.encode(deleted.questions.records.filter { $0.bookID == b.id }), bRecords)
+        XCTAssertEqual(try removalTables.map { try indexRows(index, "SELECT * FROM \($0) WHERE book_id='\(b.id)'") }, bRows)
+        try removalSnapshot("issue16-deleted-restarted-other-book-intact", library: deleted)
+    }
+    func testIssue16RealFailuresRetryAndStartupRecovery() async throws {
+        let (library, a, b, _) = try await removalBooks()
+        let fm = FileManager.default, catalog = root.appendingPathComponent("library.json"), backup = root.appendingPathComponent("catalog-before.json")
+        try fm.moveItem(at: catalog, to: backup); try fm.createDirectory(at: catalog, withIntermediateDirectories: false)
+        do { try await library.removeBook(a.id); XCTFail("Actual catalog write must fail") } catch { }
+        XCTAssertTrue(library.sourceAvailable(for: a.id))
+        try fm.removeItem(at: catalog); try fm.moveItem(at: backup, to: catalog)
+        let index = root.appendingPathComponent("book-index.sqlite")
+        try indexExecute(index, "CREATE TRIGGER removal_fault BEFORE DELETE ON chapters WHEN old.book_id='\(a.id)' BEGIN SELECT RAISE(ABORT,'actual-delete-failure'); END")
+        let aRows = try removalTables.map { try indexRows(index, "SELECT * FROM \($0) WHERE book_id='\(a.id)'") }
+        do { try await library.removeBook(a.id); XCTFail("Actual SQLite delete must fail") } catch { }
+        XCTAssertEqual(library.books.first { $0.id == a.id }?.removal, .removing)
+        XCTAssertEqual(try removalTables.map { try indexRows(index, "SELECT * FROM \($0) WHERE book_id='\(a.id)'") }, aRows)
+        do { _ = try await library.importBook(from: fixture("semantic-other")); XCTFail("Pending removal cannot reimport") } catch { }
+        try removalSnapshot("issue16-sqlite-rollback-pending", library: library)
+        try indexExecute(index, "DROP TRIGGER removal_fault")
+        let restarted = try LibraryStore(root: root); await restarted.recoverRemovals()
+        XCTAssertEqual(restarted.books.first { $0.id == a.id }?.removal, .removed)
+        let path = root.appendingPathComponent("reading-questions.json"), before = root.appendingPathComponent("questions-before.json")
+        try fm.moveItem(at: path, to: before); try fm.createDirectory(at: path, withIntermediateDirectories: false)
+        do { try await restarted.removeBook(a.id, deleteRecords: true); XCTFail("Actual questions write must fail") } catch { }
+        XCTAssertEqual(restarted.books.first { $0.id == a.id }?.removal, .deleting)
+        XCTAssertTrue(restarted.questions.records.contains { $0.bookID == a.id })
+        try fm.removeItem(at: path); try fm.moveItem(at: before, to: path)
+        let recovered = try LibraryStore(root: root); await recovered.recoverRemovals()
+        XCTAssertNil(recovered.books.first { $0.id == a.id }); XCTAssertFalse(recovered.questions.records.contains { $0.bookID == a.id })
+        XCTAssertTrue(recovered.sourceAvailable(for: b.id))
+        try removalSnapshot("issue16-real-failures-recovered", library: recovered)
+    }
+    func testIssue16PreparationCancellationAndSameTitleDistinctBytes() async throws {
+        let library = try LibraryStore(root: root)
+        let book = try await library.importBook(from: fixture("search-long")).book
+        let revision = library.revision(for: book.id)
+        for _ in 0..<500 where (library.preparation.states[book.id]?.completed ?? 0) == 0 { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertGreaterThan(library.preparation.states[book.id]?.completed ?? 0, 0)
+        try await library.removeBook(book.id, deleteRecords: true)
+        await library.preparation.waitForCurrentWork()
+        XCTAssertNil(library.preparation.states[book.id])
+        let index = root.appendingPathComponent("book-index.sqlite")
+        if FileManager.default.fileExists(atPath: index.path) {
+            for table in removalTables { XCTAssertEqual(try indexRows(index, "SELECT count(*) FROM \(table) WHERE book_id='\(book.id)'")[0][0], "0") }
+        }
+        let a = try await library.importBook(from: fixture("semantic-other")).book
+        let otherBytes = root.appendingPathComponent("same-title.epub")
+        var data = try Data(contentsOf: fixture("semantic-other")); data.append(contentsOf: [32, 32])
+        try data.write(to: otherBytes)
+        let c = try await library.importBook(from: otherBytes).book
+        XCTAssertEqual(a.title, c.title); XCTAssertNotEqual(a.id, c.id)
+        XCTAssertThrowsError(try library.checkRevision(revision, for: book.id))
+        await library.preparation.waitForCurrentWork()
+        var question = ReadingQuestion(book: a, origin: Locator(href: AnyURL(string: "chapter.xhtml")!, mediaType: .xhtml))
+        question.question = "Missing source zero HTTP"
+        XCTAssertTrue(library.questions.save(question))
+        try FileManager.default.removeItem(at: library.fileURL(for: a))
+        library.questions.send(question.id, library: library, local: true)
+        XCTAssertEqual(library.questions.record(question.id)?.state, .draft)
+        XCTAssertEqual(library.questions.record(question.id)?.failure, LibraryError.missing.errorDescription)
+        try removalSnapshot("issue16-preparation-and-distinct-same-title", library: library)
+    }
+}
+
+extension LibraryTests {
+    func testIssue16DelayedHTTPRemovalDeleteAndOtherBookCompletion() async throws {
+        let secrets = KeychainSecrets(service: "dev.shudeng.tests.removal." + UUID().uuidString)
+        defer { for id in (try? secrets.accounts()) ?? [] { try? secrets.remove(id) } }
+        let library = try LibraryStore(root: root, secrets: secrets)
+        let a = try await library.importBook(from: fixture("semantic-other")).book
+        let b = try await library.importBook(from: fixture("search-other")).book
+        await library.preparation.waitForCurrentWork()
+        let configurations = try AIConfigurationStore(root: root, secrets: secrets)
+        let configuration = AIConfiguration(name: "Issue16 controlled", format: .openAI, address: "http://127.0.0.1:18776/v1", model: "slow")
+        try configurations.save(configuration, newKey: "not-a-real-credential"); try configurations.select(configuration.id)
+        func record(_ book: Book, marker: String) throws -> ReadingQuestion {
+            let json = try indexRows(root.appendingPathComponent("book-index.sqlite"), "SELECT locator FROM fragments WHERE book_id='\(book.id)' LIMIT 1")[0][0]
+            let locator = try XCTUnwrap(Locator(json: JSONValue(jsonString: json, warnings: nil), warnings: nil))
+            var result = ReadingQuestion(book: book, selection: QuestionEvidence(locator: locator), neighbors: [])
+            result.question = marker; return result
+        }
+        let first = try record(a, marker: "REMOVE16-A-retain"), other = try record(b, marker: "REMOVE16-B-survives")
+        XCTAssertTrue(library.questions.save(first)); XCTAssertTrue(library.questions.save(other))
+        library.questions.send(first.id, library: library, local: true)
+        library.questions.send(other.id, library: library, local: true)
+        for _ in 0..<100 where library.questions.record(first.id)?.state != .generating { try await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(library.questions.record(first.id)?.state, .generating)
+        try await Task.sleep(nanoseconds: 250_000_000)
+        try await library.removeBook(a.id)
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        XCTAssertEqual(library.questions.record(first.id)?.state, .incomplete)
+        XCTAssertTrue(library.questions.record(first.id)?.answer.isEmpty == true)
+        XCTAssertEqual(library.questions.record(other.id)?.state, .complete)
+        XCTAssertTrue(library.questions.record(other.id)?.answer.contains("REMOVE16-B-survives") == true)
+        XCTAssertEqual(QuestionStore(root: root, secrets: secrets).record(first.id)?.state, .incomplete)
+        try removalSnapshot("issue16-delayed-retain-and-other-complete", library: library)
+        let restored = try await library.importBook(from: fixture("semantic-other")).book
+        await library.preparation.waitForCurrentWork()
+        let deleting = try record(restored, marker: "REMOVE16-A-delete")
+        XCTAssertTrue(library.questions.save(deleting)); library.questions.send(deleting.id, library: library, local: true)
+        for _ in 0..<100 where library.questions.record(deleting.id)?.state != .generating { try await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(library.questions.record(deleting.id)?.state, .generating)
+        try await Task.sleep(nanoseconds: 250_000_000)
+        try await library.removeBook(a.id, deleteRecords: true)
+        _ = try await library.importBook(from: fixture("semantic-other"))
+        await library.preparation.waitForCurrentWork()
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        XCTAssertNil(library.questions.record(deleting.id)); XCTAssertFalse(library.questions.save(deleting))
+        XCTAssertNil(QuestionStore(root: root, secrets: secrets).record(first.id))
+        XCTAssertEqual(library.questions.record(other.id)?.state, .complete)
+        try removalSnapshot("issue16-delayed-delete-reimport-no-resurrection", library: library)
+    }
+}
+
+extension LibraryTests {
+    func testIssue16OldBookmarkCaptureRejectedAfterSameFileReimport() async throws {
+        let (library, a, _, note) = try await removalBooks()
+        let revision = library.revision(for: a.id)
+        var continuation: CheckedContinuation<Bookmark, Never>?
+        let capture = Task { @MainActor in
+            let bookmark = await withCheckedContinuation { continuation = $0 }
+            try library.checkRevision(revision, for: a.id)
+            try library.saveBookmark(bookmark, for: a.id)
+        }
+        while continuation == nil { await Task.yield() }
+        try await library.removeBook(a.id, deleteRecords: true)
+        _ = try await library.importBook(from: fixture("semantic-other"))
+        continuation?.resume(returning: Bookmark(locator: try note.location()))
+        do { try await capture.value; XCTFail("Old asynchronous capture must be rejected") } catch { }
+        XCTAssertNil(library.books.first { $0.id == a.id }?.bookmarks)
+        await library.preparation.waitForCurrentWork()
+        XCTAssertNil(try LibraryStore(root: root).books.first { $0.id == a.id }?.bookmarks)
+        try removalSnapshot("issue16-old-bookmark-callback-rejected", library: library)
+    }
+}
+
+extension LibraryTests {
+    func testIssue16RealFileRemovalFailureAndVectorWorkCancellation() async throws {
+        let (library, a, b, _) = try await removalBooks()
+        let fm = FileManager.default, files = root.appendingPathComponent("Books")
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: files.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: files.path) }
+        do { try await library.removeBook(a.id); XCTFail("Read-only Books directory must reject file deletion") } catch { }
+        XCTAssertTrue(fm.fileExists(atPath: library.fileURL(for: a).path))
+        XCTAssertEqual(library.books.first { $0.id == a.id }?.removal, .removing)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: files.path)
+        try await library.removeBook(a.id)
+        XCTAssertFalse(fm.fileExists(atPath: library.fileURL(for: a).path))
+        XCTAssertTrue(library.sourceAvailable(for: b.id))
+        let long = try await library.importBook(from: fixture("original-fixture")).book
+        for _ in 0..<2000 {
+            let state = library.preparation.states[long.id] ?? BookPreparationState()
+            if state.vectorsCompleted > 0 && !state.semanticReady { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let before = try XCTUnwrap(library.preparation.states[long.id])
+        XCTAssertGreaterThan(before.vectorsCompleted, 0); XCTAssertFalse(before.semanticReady)
+        let state = XCTAttachment(string: "Actual vector progress before removal: \(before.vectorsCompleted)/\(before.vectorsTotal), chapters \(before.completed)/\(before.total)")
+        state.name = "issue16-in-flight-vector-work"; state.lifetime = .keepAlways; add(state)
+        try await library.removeBook(long.id, deleteRecords: true)
+        await library.preparation.waitForCurrentWork()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNil(library.preparation.states[long.id])
+        for table in removalTables { XCTAssertEqual(try indexRows(root.appendingPathComponent("book-index.sqlite"), "SELECT count(*) FROM \(table) WHERE book_id='\(long.id)'")[0][0], "0") }
+        try removalSnapshot("issue16-file-retry-and-vector-cancellation", library: library)
+    }
+}

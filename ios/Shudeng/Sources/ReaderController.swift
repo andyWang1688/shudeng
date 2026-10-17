@@ -6,6 +6,7 @@ import ReadiumNavigator
 final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private let book: Book
     private let library: LibraryStore
+    private let bookRevision: UUID
     private let publication: Publication
     private var navigator: EPUBNavigatorViewController
     private var settings: ReadingSettings
@@ -37,6 +38,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     init(book: Book, publication: Publication, library: LibraryStore, target: Locator? = nil) throws {
         self.book = book
         self.library = library
+        bookRevision = library.revision(for: book.id)
         self.publication = publication
         openingTarget = target
         settings = book.readingSettings ?? ReadingSettings()
@@ -301,6 +303,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private func persistPending() {
         guard !leaving, !changingBounds, !loading, !curlBusy, !navigating, !navigationFailed, let pendingLocation else { return }
         do {
+            try library.checkRevision(bookRevision, for: book.id)
             try library.saveReadingState(pendingLocation, settings: settings, for: book.id)
             saveFailed = false
             status.text = "阅读位置已保存"
@@ -390,6 +393,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
 
     private func navigate(to target: Locator) {
+        guard (try? library.checkRevision(bookRevision, for: book.id)) != nil, library.sourceAvailable(for: book.id) else { return }
         guard !loading, !navigating else { return }
         stopCurl()
         navigating = true
@@ -587,6 +591,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     @objc private func noteSelection() { captureSelection(writeNote: true) }
     @objc private func askSelection() { captureSelection(writeNote: false, question: true) }
     @objc private func askCurrentBook() {
+        guard (try? library.checkRevision(bookRevision, for: book.id)) != nil, library.sourceAvailable(for: book.id) else { return }
         guard !loading, !curlBusy, !navigating, !library.questions.loadFailed, let origin = navigator.currentLocation else { return }
         let record = ReadingQuestion(book: book, origin: origin)
         library.questions.save(record)
@@ -609,6 +614,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                       let highlight = anchor["highlight"] as? String, !highlight.isEmpty,
                       let range = anchor["domRange"] as? [String: Any] else { throw LibraryError.invalidLocation }
                 var locator = selection.locator
+                try library.checkRevision(bookRevision, for: book.id)
                 locator.locations.cssSelector = selector
                 locator.locations.otherLocations["domRange"] = try JSONValue(jsonString: String(data: JSONSerialization.data(withJSONObject: range), encoding: .utf8)!, warnings: nil)
                 locator.text = Locator.Text(after: anchor["after"] as? String, before: anchor["before"] as? String, highlight: highlight)
@@ -625,6 +631,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                         return QuestionEvidence(locator: nearby, context: row["quote"] as? String)
                     }
                     let parts = try selected.map(evidence)
+                    try library.checkRevision(bookRevision, for: book.id)
                     var record = ReadingQuestion(book: book, selection: parts[0], neighbors: try rows.map(evidence))
                     record.selectionParts = parts
                     library.questions.save(record)
@@ -657,6 +664,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     private func saveHighlight(_ note: BookNote) {
         do {
+            try library.checkRevision(bookRevision, for: book.id)
             try library.saveNote(note, for: book.id, highlightOnly: true)
             navigator.clearSelection()
             refreshHighlights()
@@ -800,6 +808,7 @@ private final class BookNavigationController: UITableViewController {
     private let publication: Publication
     private let library: LibraryStore
     private let bookID: String
+    private let bookRevision: UUID
     private let capture: () async throws -> Bookmark
     private let navigate: (Locator) -> Void
     private let tabs = UISegmentedControl(items: ["目录", "书签"])
@@ -813,6 +822,7 @@ private final class BookNavigationController: UITableViewController {
         self.publication = publication
         self.library = library
         self.bookID = bookID
+        bookRevision = library.revision(for: bookID)
         self.capture = capture
         self.navigate = navigate
         super.init(style: .insetGrouped)
@@ -902,12 +912,14 @@ private final class BookNavigationController: UITableViewController {
             defer { navigationItem.rightBarButtonItem?.isEnabled = true }
             do {
                 let bookmark = try await capture()
+                try library.checkRevision(bookRevision, for: bookID)
                 save(bookmark)
             } catch { showFailure(title: "无法添加书签", message: "当前没有可确认的原文位置，请返回正文后重试。", retry: nil) }
         }
     }
     private func save(_ bookmark: Bookmark) {
         do {
+            try library.checkRevision(bookRevision, for: bookID)
             try library.saveBookmark(bookmark, for: bookID)
             tabs.selectedSegmentIndex = 1
             feedback = "书签已保存"
@@ -923,6 +935,7 @@ private final class BookNavigationController: UITableViewController {
     }
     private func remove(_ id: UUID) {
         do {
+            try library.checkRevision(bookRevision, for: bookID)
             try library.removeBookmark(id, for: bookID)
             feedback = "书签已移除"
             refresh()

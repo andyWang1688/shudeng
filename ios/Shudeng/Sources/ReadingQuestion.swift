@@ -43,6 +43,7 @@ struct ReadingQuestion: Codable, Identifiable {
     var evidenceScope: BookEvidenceScope?
     var onlyRead: Bool?
     let bookID: String
+    var bookIdentity: UUID?
     let bookTitle: String
     let selection: QuestionEvidence
     var selectionParts: [QuestionEvidence]?
@@ -66,10 +67,12 @@ struct ReadingQuestion: Codable, Identifiable {
     var conversation: UUID { conversationID ?? id }
     init(book: Book, selection: QuestionEvidence, neighbors: [QuestionEvidence]) {
         id = UUID(); bookID = book.id; bookTitle = book.title
+        bookIdentity = book.recordIdentity
         self.selection = selection; self.neighbors = neighbors
     }
     init(book: Book, origin: Locator) {
         id = UUID(); bookID = book.id; bookTitle = book.title
+        bookIdentity = book.recordIdentity
         originJSON = origin.description; freeQuestion = true
         var empty = origin; empty.text = .init()
         selection = QuestionEvidence(locator: empty, context: ""); selectionParts = []; neighbors = []
@@ -100,6 +103,8 @@ struct ReadingConversation: Identifiable {
 /// One atomic revision includes the answer, references and completion state.
 @MainActor
 final class QuestionStore: NSObject {
+    var canSave: ((ReadingQuestion) -> Bool)?
+    var canGenerate: ((String) -> Bool)?
     static let changed = Notification.Name("ReadingQuestionsChanged")
     private let file: URL
     private let secrets: AISecrets
@@ -122,10 +127,12 @@ final class QuestionStore: NSObject {
     func conversation(_ id: UUID) -> ReadingConversation? { conversations.first { $0.id == id } }
     func followUp(_ id: UUID) -> UUID? {
         guard let conversation = conversation(id), conversation.latest.state == .complete,
+              canGenerate?(conversation.first.bookID) != false,
               !conversation.turns.contains(where: { unsaved($0.id) }) else { return nil }
         let first = conversation.first
         var next = ReadingQuestion(book: Book(id: first.bookID, title: first.bookTitle, author: ""), selection: first.selection, neighbors: first.neighbors)
         next.selectionParts = first.selectionParts; next.originJSON = first.originJSON; next.freeQuestion = first.freeQuestion
+        next.bookIdentity = first.bookIdentity
         next.onlyRead = conversation.latest.onlyRead
         next.conversationID = id; next.turnIndex = (conversation.latest.turnIndex ?? 0) + 1
         // The same persisted draft is reopened; sending and saving keep this UUID.
@@ -154,6 +161,20 @@ final class QuestionStore: NSObject {
             committed.removeAll { ids.contains($0.id) }; pending = pending.filter { !ids.contains($0.key) }
             notify(); return true
         } catch { notify(); return false }
+    }
+    func stop(bookID: String, preservingRecords: Bool) {
+        for record in records where record.bookID == bookID {
+            if preservingRecords { interrupt(record.id, reason: "原书已移除，回答未完成；重新导入相同文件后可主动重试。") }
+            else { jobs[record.id]?.task.cancel(); jobs[record.id] = nil }
+        }
+        if jobs.isEmpty { endBackgroundTime() }
+    }
+    func remove(bookID: String) throws {
+        guard !loadFailed else { throw LibraryError.save }
+        let next = committed.filter { $0.bookID != bookID }
+        try JSONEncoder().encode(next).write(to: file, options: .atomic)
+        committed = next; pending = pending.filter { $0.value.bookID != bookID }
+        notify()
     }
     init(root: URL, secrets: AISecrets = KeychainSecrets()) {
         file = root.appendingPathComponent("reading-questions.json"); self.secrets = secrets
@@ -221,7 +242,7 @@ final class QuestionStore: NSObject {
     func record(_ id: UUID) -> ReadingQuestion? { pending[id] ?? committed.first { $0.id == id } }
     func unsaved(_ id: UUID) -> Bool { pending[id] != nil }
     @discardableResult func save(_ record: ReadingQuestion) -> Bool {
-        guard !loadFailed else { return false }
+        guard !loadFailed, canSave?(record) != false else { return false }
         var next = committed.filter { $0.id != record.id }; next.append(record)
         do {
             try JSONEncoder().encode(next).write(to: file, options: .atomic)
@@ -244,6 +265,9 @@ final class QuestionStore: NSObject {
     func send(_ id: UUID, library: LibraryStore, local: Bool, scope: BookEvidenceScope? = nil) {
         guard jobs[id] == nil, !unsaved(id), var record = record(id), record.state != .complete,
               !record.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard library.sourceAvailable(for: record.bookID) else {
+            record.failure = LibraryError.missing.errorDescription; save(record); return
+        }
         let scope: BookEvidenceScope? = {
             guard record.onlyRead == true else { return scope }
             let read = library.readScope(for: record.bookID)
@@ -308,6 +332,7 @@ final class QuestionStore: NSObject {
                 record.retrievalQueries = queries
                 let plan = try await QuestionPlan.make(record, index: library.preparation.index, local: local, state: state, scope: scope, queries: queries)
                 try Task.checkCancellation()
+                guard jobs[id]?.token == token, library.sourceAvailable(for: record.bookID) else { return }
                 record.evidence = plan.evidence; record.notice = plan.notice; record.retrievalTrace = plan.trace
                 record.searchedChapters = plan.searchedChapters; record.omittedChapters = plan.omittedChapters
                 record.serviceName = configuration.name; record.model = configuration.model; record.format = configuration.format

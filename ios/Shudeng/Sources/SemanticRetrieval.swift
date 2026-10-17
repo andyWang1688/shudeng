@@ -304,6 +304,7 @@ extension BookIndex {
 
     func prepareVectors(bookID: String, embedding: SemanticEmbedding = .shared,
                         progress: @escaping @MainActor (BookPreparationState) async -> Void) async throws {
+        try Task.checkCancellation()
         let db = try IndexDatabase(url: url)
         let count = try db.rows("SELECT count(*) FROM fragments WHERE book_id=?", [bookID])[0][0]
         try db.transaction {

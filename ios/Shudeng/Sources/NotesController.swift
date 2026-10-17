@@ -78,6 +78,7 @@ final class NotesController: UITableViewController {
 final class NoteEditorController: UIViewController, UITextViewDelegate {
     private let library: LibraryStore
     private let bookID: String
+    private let bookRevision: UUID
     private var note: BookNote
     private let changed: () -> Void
     private let returnToText: (() -> Void)?
@@ -89,6 +90,7 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
 
     init(library: LibraryStore, bookID: String, note: BookNote, changed: @escaping () -> Void, returnToText: (() -> Void)? = nil) {
         self.library = library; self.bookID = bookID; self.changed = changed; self.returnToText = returnToText
+        bookRevision = library.revision(for: bookID)
         let draft = library.books.first { $0.id == bookID }?.noteDrafts?.first { $0.id == note.id }
         self.note = draft ?? note
         savedBody = (draft ?? note).body
@@ -184,6 +186,7 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
         autosave?.invalidate()
         note.body = body.text
         do {
+            try library.checkRevision(bookRevision, for: bookID)
             try library.saveNote(note, for: bookID, draft: true)
             savedBody = note.body; hasSavedDraft = true
             state.text = "草稿已保存，可继续编辑"; state.textColor = .secondaryLabel
@@ -201,6 +204,7 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
         autosave?.invalidate()
         note.body = body.text
         do {
+            try library.checkRevision(bookRevision, for: bookID)
             try library.saveNote(note, for: bookID)
             changed()
             dismiss(animated: true)

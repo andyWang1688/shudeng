@@ -109,14 +109,16 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         quote.text = (record.selectionParts ?? [record.selection]).map(\.quote).joined(separator: "\n")
         let unsaved = library.questions.unsaved(id)
         followUp.isHidden = record.state != .complete
-        followUp.isEnabled = !unsaved
+        let available = library.sourceAvailable(for: record.bookID)
+        followUp.isEnabled = !unsaved && available
         status.text = unsaved ? "保存失败：当前内容尚未保存，请重试保存；关闭应用可能丢失未存内容。" : record.state.label
         if let failure = record.failure { status.text! += "\n" + failure }
+        if !available { status.text! += "\n原书不可用，记录仍保留；重新导入相同文件后可返回原文并继续问答。" }
         status.textColor = unsaved || record.failure != nil ? .systemRed : .secondaryLabel
         let busy = record.state == .preparing || record.state == .generating
         send.isHidden = busy || record.state == .complete
         send.setTitle(record.state == .incomplete ? "重新请求（重新生成，不接续）" : "发送问题", for: .normal)
-        send.isEnabled = !unsaved && !record.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        send.isEnabled = available && !unsaved && !record.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         cancel.isHidden = !busy; retry.isHidden = !unsaved
         answer.text = record.answer; answer.isHidden = record.answer.isEmpty
         scope.text = record.notice.isEmpty ? "发送前会告知服务与原文范围；可能包括当前书其他章节。资料未齐时可等待或主动局部解释。" : record.notice
@@ -154,6 +156,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         input.resignFirstResponder()
         guard let record = library.questions.record(id) else { return }
         do {
+            guard library.sourceAvailable(for: record.bookID) else { throw LibraryError.missing }
             let store = try AIConfigurationStore(root: library.root)
             guard let configuration = store.configurations.first(where: { $0.id == store.selectedID }) else { throw QuestionError.configuration }
             let ready = library.preparation.states[record.bookID]?.ready == true

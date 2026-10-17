@@ -101,6 +101,9 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
     private let sortButton = UIBarButtonItem(title: "排序", image: UIImage(systemName: "arrow.up.arrow.down"))
     private var busy = false
     private var preparationObserver: NSObjectProtocol?
+    private var libraryObserver: NSObjectProtocol?
+    private var showingRemoved = false
+    private lazy var removedButton = UIBarButtonItem(title: "已移除", style: .plain, target: self, action: #selector(toggleRemoved))
     init(library: LibraryStore) {
         self.library = library
         let layout = UICollectionViewCompositionalLayout { _, environment in
@@ -117,12 +120,15 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
         super.init(collectionViewLayout: layout)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    deinit { if let preparationObserver { NotificationCenter.default.removeObserver(preparationObserver) } }
+    deinit {
+        if let preparationObserver { NotificationCenter.default.removeObserver(preparationObserver) }
+        if let libraryObserver { NotificationCenter.default.removeObserver(libraryObserver) }
+    }
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "书架"
         navigationController?.navigationBar.prefersLargeTitles = true
-        navigationItem.rightBarButtonItems = [importButton, sortButton]
+        navigationItem.rightBarButtonItems = [importButton, sortButton, removedButton]
         sortButton.accessibilityLabel = "排序"
         search.searchResultsUpdater = self
         search.obscuresBackgroundDuringPresentation = false
@@ -138,12 +144,17 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
         preparationObserver = NotificationCenter.default.addObserver(forName: BookPreparation.changed, object: library.preparation, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        libraryObserver = NotificationCenter.default.addObserver(forName: LibraryStore.changed, object: library, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
         refresh()
     }
     override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); refresh() }
     func updateSearchResults(for searchController: UISearchController) { refresh() }
     private func refresh() {
-        displayed = order.books(library.books, matching: search.searchBar.text ?? "")
+        displayed = order.books(library.books.filter { showingRemoved ? $0.removal != nil : $0.removal == nil }, matching: search.searchBar.text ?? "")
+        title = showingRemoved ? "已移除的书籍" : "书架"
+        removedButton.title = showingRemoved ? "返回书架" : "已移除"
         sortButton.menu = UIMenu(title: "排序", children: ShelfOrder.allCases.map { choice in
             UIAction(title: choice.rawValue, state: order == choice ? .on : .off) { [weak self] _ in
                 self?.order = choice
@@ -153,7 +164,7 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
         collectionView.reloadData()
         if displayed.isEmpty {
             let label = UILabel()
-            label.text = library.books.isEmpty ? "导入 EPUB，开始阅读" : "没有找到匹配的书籍"
+            label.text = showingRemoved ? "没有已移除的书籍" : library.books.isEmpty ? "导入 EPUB，开始阅读" : "没有找到匹配的书籍"
             label.font = .preferredFont(forTextStyle: .body)
             label.adjustsFontForContentSizeCategory = true
             label.numberOfLines = 0
@@ -161,6 +172,44 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
             label.textColor = .secondaryLabel
             collectionView.backgroundView = label
         } else { collectionView.backgroundView = nil }
+    }
+    @objc private func toggleRemoved() { showingRemoved.toggle(); refresh() }
+    override func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? {
+        let book = displayed[indexPath.item]
+        guard !busy else { return nil }
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            var actions: [UIAction] = []
+            if book.removal != .removed && book.removal != .deleting {
+                actions.append(UIAction(title: "移除原书，保留记录") { _ in self?.confirmRemoval(book.id, deleteRecords: false) })
+            }
+            actions.append(UIAction(title: "连同记录彻底删除", attributes: .destructive) { _ in self?.confirmRemoval(book.id, deleteRecords: true) })
+            return UIMenu(children: actions)
+        }
+    }
+    private func confirmRemoval(_ id: String, deleteRecords: Bool) {
+        guard !busy, let book = library.books.first(where: { $0.id == id }) else { return }
+        let title = deleteRecords ? "彻底删除这本书及记录？" : "移除原书？"
+        let text = deleteRecords ? "将删除《\(book.title)》的原书、笔记、草稿、对话与引用记录，无法撤销。其他书籍不受影响。" : "保留笔记、草稿、对话与引用文字；正在进行的准备和回答将取消。重新导入相同文件后可返回原文并继续问答。"
+        let alert = UIAlertController(title: title, message: text, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: deleteRecords ? "确认彻底删除" : "移除原书，保留记录", style: deleteRecords ? .destructive : .default) { [weak self] _ in
+            self?.performRemoval(id, deleteRecords: deleteRecords)
+        })
+        present(alert, animated: true)
+    }
+    private func performRemoval(_ id: String, deleteRecords: Bool) {
+        guard !busy else { return }
+        busy = true; importButton.isEnabled = false
+        Task {
+            defer { busy = false; importButton.isEnabled = true; refresh() }
+            do { try await library.removeBook(id, deleteRecords: deleteRecords) }
+            catch {
+                let alert = UIAlertController(title: "移除尚未完成", message: "\(error.localizedDescription) 已完成的清理不会撤销，请重试完成本次操作。", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "稍后重试", style: .cancel))
+                alert.addAction(UIAlertAction(title: "重试", style: .default) { [weak self] _ in self?.performRemoval(id, deleteRecords: deleteRecords) })
+                present(alert, animated: true)
+            }
+        }
     }
     @objc private func importFile() {
         guard !busy else { return }
@@ -179,8 +228,8 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
             defer { busy = false; importButton.isEnabled = true }
             do {
                 let result = try await library.importBook(from: url)
-                refresh()
-                message(title: result.isDuplicate ? "书籍已在书架" : "已加入书架", text: result.isDuplicate ? "复用已有书籍和阅读进度。" : result.book.title)
+                showingRemoved = false; refresh()
+                message(title: result.isDuplicate ? "书籍已在书架" : "已加入书架", text: result.isDuplicate ? "相同文件复用已有书籍、进度和记录；不同字节的同名文件按另一本书处理。" : result.book.title)
             } catch { message(title: "导入失败", text: error.localizedDescription) }
         }
     }
@@ -189,8 +238,9 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
         let book = displayed[indexPath.item]
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "book", for: indexPath) as! ShelfCell
         let state = library.preparation.states[book.id] ?? BookPreparationState()
-        cell.configure(book, preparation: state.message)
-        cell.accessibilityValue = state.message
+        let message = book.removal?.pending == true ? "移除尚未完成，点此重试" : book.removal == .removed ? "原书已移除，笔记与对话仍保留" : state.message
+        cell.configure(book, preparation: message)
+        cell.accessibilityValue = message
         cell.accessibilityIdentifier = "book-\(book.id)"
         return cell
     }
@@ -199,6 +249,10 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
         guard !busy else { return }
         let id = displayed[indexPath.item].id
         guard let book = library.books.first(where: { $0.id == id }) else { return }
+        if let removal = book.removal {
+            confirmRemoval(id, deleteRecords: removal != .removing)
+            return
+        }
         search.searchBar.resignFirstResponder()
         busy = true
         Task {
@@ -260,7 +314,7 @@ private final class ShelfCell: UICollectionViewCell {
     func configure(_ book: Book, preparation: String) {
         title.text = book.title
         author.text = book.author.isEmpty ? "作者未知" : book.author
-        action.text = book.locatorJSON == nil ? "开始阅读" : "继续阅读"
+        action.text = book.removal == nil ? (book.locatorJSON == nil ? "开始阅读" : "继续阅读") : "管理保留记录"
         self.preparation.text = preparation
         accessibilityLabel = [title.text, author.text, action.text].compactMap { $0 }.joined(separator: "，")
     }

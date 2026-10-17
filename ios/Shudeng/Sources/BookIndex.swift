@@ -36,36 +36,52 @@ final class BookPreparation {
     let index: BookIndex
     private(set) var states: [String: BookPreparationState] = [:]
     private var jobs: [String: Task<Void, Never>] = [:]
+    private var tokens: [String: UUID] = [:]
 
     init(root: URL) { index = BookIndex(url: root.appendingPathComponent("book-index.sqlite")) }
     func start(_ book: Book, file: URL, rebuild: Bool = false) {
+        guard book.removal == nil, FileManager.default.fileExists(atPath: file.path) else { return }
         guard jobs[book.id] == nil else { return }
         if !rebuild, states[book.id]?.ready == true { return }
         var state = states[book.id] ?? BookPreparationState()
         state.preparing = true; state.failure = nil
         states[book.id] = state
         notify()
+        let token = UUID(); tokens[book.id] = token
         jobs[book.id] = Task {
             do {
                 if var committed = try? await index.state(bookID: book.id) {
                     committed.preparing = true
-                    update(committed, for: book.id)
+                    if tokens[book.id] == token { update(committed, for: book.id) }
                 }
                 try await index.prepare(bookID: book.id, file: file, rebuild: rebuild) { state in
-                    self.update(state, for: book.id)
+                    if self.tokens[book.id] == token { self.update(state, for: book.id) }
                 }
-                try await index.prepareVectors(bookID: book.id) { state in self.update(state, for: book.id) }
+                try Task.checkCancellation()
+                try await index.prepareVectors(bookID: book.id) { state in
+                    if self.tokens[book.id] == token { self.update(state, for: book.id) }
+                }
             } catch is CancellationError {
                 // Startup resumes the committed chapter checkpoint.
             } catch {
+                guard tokens[book.id] == token else { return }
                 var state = states[book.id] ?? BookPreparationState()
                 state.failure = (error as? IndexError)?.errorDescription ?? (error as? EmbeddingError)?.errorDescription ?? "无法读取或保存资料，请检查文件与储存空间后重试"
                 state.preparing = false
                 states[book.id] = state
             }
-            jobs[book.id] = nil
+            guard tokens[book.id] == token else { return }
+            jobs[book.id] = nil; tokens[book.id] = nil
             notify()
         }
+    }
+    func stop(bookID: String) async {
+        let job = jobs[bookID]
+        tokens[bookID] = nil
+        job?.cancel()
+        await job?.value
+        jobs[bookID] = nil; states[bookID] = nil
+        notify()
     }
     /// Await owned tasks before an owner removes its storage (also used by integration teardown).
     func waitForCurrentWork() async {
@@ -92,6 +108,7 @@ actor BookIndex {
 
     func prepare(bookID: String, file: URL, rebuild: Bool = false,
                  progress: @escaping @MainActor (BookPreparationState) async -> Void) async throws {
+        try Task.checkCancellation()
         let db = try IndexDatabase(url: url)
         let http = DefaultHTTPClient()
         let retriever = AssetRetriever(httpClient: http)
@@ -102,6 +119,7 @@ actor BookIndex {
         let order = publication.readingOrder
         guard !order.isEmpty else { throw IndexError.source }
         let toc = try await publication.tableOfContents().get()
+        try Task.checkCancellation()
         try db.initialize(bookID, total: order.count, contents: try toc.jsonString(), rebuild: rebuild)
         var completed = try db.completed(bookID)
         var logical: (key: String, title: String)?
@@ -151,6 +169,15 @@ actor BookIndex {
         return try IndexDatabase(url: url).search(bookID, query: query)
     }
     func state(bookID: String) throws -> BookPreparationState { try IndexDatabase(url: url).state(bookID) }
+    func remove(bookID: String) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let db = try IndexDatabase(url: url)
+        try db.transaction {
+            for table in ["embeddings", "embedding_progress", "fragment_terms", "fragments", "chapters", "preparations", "contents"] {
+                try db.execute("DELETE FROM \(table) WHERE book_id=?", [bookID])
+            }
+        }
+    }
 }
 
 struct BookFragment {
