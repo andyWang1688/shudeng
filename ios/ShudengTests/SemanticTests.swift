@@ -19,6 +19,102 @@ import ReadiumShared
 import NaturalLanguage
 
 extension SemanticTests {
+    @MainActor func testIssue13ScopeFilterPrecedesLanguageAndCandidates() async throws {
+        let fixture = try scopedFragmentFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let scoped = try fixture.db.scopedFragments(scope: fixture.scope)
+        XCTAssertEqual(Set(scoped.map { Int($0[0])! }), fixture.allowedIDs)
+
+        let sample = try await fixture.index.languageSample(bookID: fixture.bookID, scope: fixture.scope)
+        XCTAssertEqual(sample, String(scoped.map { $0[4] }.joined(separator: " ").prefix(500)))
+        XCTAssertEqual(NLLanguageRecognizer.dominantLanguage(for: sample), .simplifiedChinese)
+        XCTAssertFalse(sample.contains("UNREAD-ENGLISH-SENTINEL"))
+        let unscoped = try fixture.db.rows("SELECT original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal", [fixture.bookID]).prefix(20).map { $0[0] }.joined(separator: " ")
+        XCTAssertEqual(NLLanguageRecognizer.dominantLanguage(for: unscoped), .english)
+
+        let units = try await fixture.index.sentenceUnits(scope: fixture.scope)
+        XCTAssertTrue(Set(units.map(\.fragmentID)).isSubset(of: fixture.allowedIDs))
+        XCTAssertFalse(units.contains { $0.fragmentID == fixture.unreadID })
+        let abbreviated = units.filter { $0.fragmentID == fixture.abbreviationID }
+        let chinese = SourceSentenceUnit.ranges(fixture.abbreviationText, language: .simplifiedChinese)
+        let english = SourceSentenceUnit.ranges(fixture.abbreviationText, language: .english)
+        XCTAssertEqual(abbreviated.map(\.evidence.quote), chinese.map { (fixture.abbreviationText as NSString).substring(with: $0) })
+        XCTAssertNotEqual(chinese.count, english.count)
+
+        let whole = BookEvidenceScope(bookID: fixture.bookID)
+        let wholeCandidates = try await fixture.index.chapterCandidates(scope: whole, query: "recorder backup battery")
+        XCTAssertTrue(wholeCandidates.ranks.contains { $0.fragmentID == fixture.unreadID })
+        let candidates = try await fixture.index.chapterCandidates(scope: fixture.scope, query: "recorder backup battery")
+        XCTAssertFalse(candidates.ranks.isEmpty)
+        XCTAssertTrue(candidates.ranks.allSatisfy { fixture.allowedIDs.contains($0.fragmentID) })
+        XCTAssertFalse(candidates.ranks.contains { $0.fragmentID == fixture.unreadID })
+        XCTAssertTrue(try candidates.evidence.allSatisfy { try $0.location().href.string == "allowed.xhtml" })
+
+        let wholeWindows = try await fixture.index.chapterWindows(scope: whole, queries: ["recorder backup battery"], wholeBook: true)
+        XCTAssertTrue(wholeWindows.ranks.contains { $0.fragmentID == fixture.unreadID })
+        let windows = try await fixture.index.chapterWindows(scope: fixture.scope, queries: ["recorder backup battery"], wholeBook: true)
+        XCTAssertFalse(windows.ranks.isEmpty)
+        XCTAssertTrue(windows.ranks.allSatisfy { fixture.allowedIDs.contains($0.fragmentID) })
+        XCTAssertFalse(windows.ranks.contains { $0.fragmentID == fixture.unreadID })
+        XCTAssertTrue(try windows.evidence.allSatisfy { try $0.location().href.string == "allowed.xhtml" })
+    }
+
+    @MainActor func testIssue13PermitsUsesScopedFragmentRows() async throws {
+        let fixture = try scopedFragmentFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let allowedID = try XCTUnwrap(fixture.allowedIDs.first)
+        let allowed = try XCTUnwrap(fixture.db.evidence(id: allowedID, scope: fixture.scope))
+        let unread = try XCTUnwrap(fixture.db.evidence(id: fixture.unreadID, scope: BookEvidenceScope(bookID: fixture.bookID)))
+        XCTAssertLessThan(fixture.unreadID, allowedID)
+        let allowsAllowed = try await fixture.index.permits([allowed], scope: fixture.scope)
+        let allowsUnreadFirst = try await fixture.index.permits([unread, allowed], scope: fixture.scope)
+        let allowsUnreadLast = try await fixture.index.permits([allowed, unread], scope: fixture.scope)
+        let allowsUnread = try await fixture.index.permits([unread], scope: fixture.scope)
+        XCTAssertTrue(allowsAllowed)
+        XCTAssertFalse(allowsUnreadFirst)
+        XCTAssertFalse(allowsUnreadLast)
+        XCTAssertFalse(allowsUnread)
+        XCTAssertEqual(Set(try fixture.db.scopedFragments(scope: fixture.scope).map { Int($0[0])! }), fixture.allowedIDs)
+    }
+
+    private func scopedFragmentFixture() throws -> (root: URL, db: IndexDatabase, index: BookIndex, bookID: String, scope: BookEvidenceScope, unreadID: Int, allowedIDs: Set<Int>, abbreviationID: Int, abbreviationText: String) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("issue13-scope-first-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let db = try IndexDatabase(url: root.appendingPathComponent("book-index.sqlite"))
+        let bookID = "issue13-scope-first"
+        try db.initialize(bookID, total: 2, contents: "[]", rebuild: false)
+        let sentinel = "I13-UNREAD-ENGLISH-SENTINEL. " + String(repeating: "Unread English sentinel describes a recorder with backup battery power. ", count: 20)
+        var logical: (key: String, title: String)?
+        let unread = try BookText.fragments(html: "<p id='u'>\(sentinel)</p>", href: AnyURL(string: "unread.xhtml")!, title: "Unread", anchors: [:], logical: &logical)
+        try db.commit(bookID, chapter: 0, href: "unread.xhtml", title: "Unread", fragments: unread)
+        let abbreviation = "Dr. Smith 观察读数。他记录结果。"
+        let chinese = String(repeating: "主供电切断后，记录器和计时器继续由独立的备用电池工作，温度仪停止。", count: 3)
+        let english = "The recorder draws power from an independent backup cell and the timer keeps working."
+        logical = nil
+        let allowed = try BookText.fragments(html: "<p id='a'>\(abbreviation)</p><p id='b'>\(chinese)</p><p id='c'>\(english)</p>", href: AnyURL(string: "allowed.xhtml")!, title: "Allowed", anchors: [:], logical: &logical)
+        try db.commit(bookID, chapter: 1, href: "allowed.xhtml", title: "Allowed", fragments: allowed)
+        let rows = try db.rows("SELECT id,chapter,original FROM fragments WHERE book_id=? ORDER BY id", [bookID])
+        let unreadID = Int(rows.first { $0[1] == "0" }![0])!
+        let allowedRows = rows.filter { $0[1] == "1" }
+        // 384 Float32 values become the 1536-byte BLOB required by embeddings.vector.
+        let vector = [Float](repeating: 0.01, count: SemanticEmbedding.dimension)
+        for row in rows {
+            let statement = try db.statement("INSERT INTO embeddings(book_id,model,fragment_id,piece,offset,original,vector) VALUES(?,?,?,?,?,?,?)", [bookID, SemanticEmbedding.version, row[0], "0", "0", row[2]])
+            let status = vector.withUnsafeBytes {
+                sqlite3_bind_blob(statement, 7, $0.baseAddress, Int32($0.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            }
+            guard status == SQLITE_OK, sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw IndexError.storage
+            }
+            sqlite3_finalize(statement)
+        }
+        try db.execute("INSERT INTO embedding_progress VALUES(?,?,?,?,?)", [bookID, SemanticEmbedding.version, "0", String(rows.count), String(rows.count)])
+        try db.execute("UPDATE preparations SET completed=total WHERE book_id=?", [bookID])
+        return (root, db, BookIndex(url: root.appendingPathComponent("book-index.sqlite")), bookID, BookEvidenceScope(bookID: bookID, chapters: [1]), unreadID,
+                Set(allowedRows.map { Int($0[0])! }), Int(rows.first { $0[2] == abbreviation }![0])!, abbreviation)
+    }
+
     func testIssue11SentenceBoundarySoftLinesAbbreviationsAndPunctuation() async throws {
         let english = "Mr. Darcy read the letter\nagain. He changed his mind! Why?"
         let ranges = SourceSentenceUnit.ranges(english, language: .english)

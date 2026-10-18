@@ -59,8 +59,7 @@ extension BookIndex {
         let db = try IndexDatabase(url: url)
         guard try db.state(scope.bookID).semanticReady else { throw QuestionError.preparation }
         let vector = try await SemanticEmbedding.shared.embed(query)
-        let rows = try db.rows("SELECT id,chapter,ordinal,locator,original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal", [scope.bookID])
-        let allowed = rows.filter { scope.permits(chapter: Int($0[1])!, ordinal: Int($0[2])!) }
+        let allowed = try db.scopedFragments(scope: scope)
         let ids = Set(allowed.map { Int($0[0])! })
         var groups: [String: [Int]] = [:], order: [String] = [], scores: [Int: Float] = [:]
         for row in allowed {
@@ -70,7 +69,8 @@ extension BookIndex {
             groups[key, default: []].append(Int(row[0])!)
         }
         var matches: [Int: (piece: Int, offset: Int, text: String)] = [:]
-        let statement = try db.statement("SELECT fragment_id,vector,piece,offset,original FROM embeddings WHERE book_id=? AND model=?", [scope.bookID, SemanticEmbedding.version])
+        let scopeSQL = scope.sql
+        let statement = try db.statement("SELECT e.fragment_id,e.vector,e.piece,e.offset,e.original FROM embeddings e JOIN fragments f ON f.id=e.fragment_id WHERE " + scopeSQL.filter + " AND e.book_id=f.book_id AND e.model=?", scopeSQL.bounds + [SemanticEmbedding.version])
         defer { sqlite3_finalize(statement) }
         while true {
             try Task.checkCancellation()
@@ -129,8 +129,7 @@ extension BookIndex {
         guard try db.state(scope.bookID).semanticReady else { throw QuestionError.preparation }
         var vectors: [[Float]] = []
         for query in queries { vectors.append(try await SemanticEmbedding.shared.embed(query)) }
-        let rows = try db.rows("SELECT id,chapter,ordinal,locator,original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal", [scope.bookID])
-            .filter { scope.permits(chapter: Int($0[1])!, ordinal: Int($0[2])!) }
+        let rows = try db.scopedFragments(scope: scope)
         let sources = Dictionary(uniqueKeysWithValues: rows.map { (Int($0[0])!, $0) })
         var chapters: [String: [Int]] = [:], chapterOrder: [String] = []
         for row in rows {
@@ -142,7 +141,8 @@ extension BookIndex {
         struct Match { let score: Float; let piece: Int; let offset: Int; let text: String }
         var matches = Array(repeating: [Int: Match](), count: queries.count)
         var pieceMatches = Array(repeating: [Int: [Match]](), count: queries.count)
-        let statement = try db.statement("SELECT fragment_id,vector,piece,offset,original FROM embeddings WHERE book_id=? AND model=?", [scope.bookID, SemanticEmbedding.version])
+        let scopeSQL = scope.sql
+        let statement = try db.statement("SELECT e.fragment_id,e.vector,e.piece,e.offset,e.original FROM embeddings e JOIN fragments f ON f.id=e.fragment_id WHERE " + scopeSQL.filter + " AND e.book_id=f.book_id AND e.model=?", scopeSQL.bounds + [SemanticEmbedding.version])
         defer { sqlite3_finalize(statement) }
         while true {
             try Task.checkCancellation()
@@ -406,6 +406,11 @@ extension BookIndex {
 }
 
 extension IndexDatabase {
+    func scopedFragments(scope: BookEvidenceScope) throws -> [[String]] {
+        let sql = scope.sql
+        return try rows("SELECT f.id,f.chapter,f.ordinal,f.locator,f.original FROM fragments f WHERE " + sql.filter + " ORDER BY f.chapter,f.ordinal", sql.bounds)
+    }
+
     func evidence(id: Int, scope: BookEvidenceScope, range: NSRange? = nil) throws -> QuestionEvidence? {
         guard let row = try rows("SELECT chapter,ordinal,locator,original FROM fragments WHERE id=? AND book_id=?", [String(id), scope.bookID]).first,
               scope.permits(chapter: Int(row[0])!, ordinal: Int(row[1])!),
@@ -439,14 +444,13 @@ extension IndexDatabase {
 extension BookIndex {
     func permits(_ evidence: [QuestionEvidence], scope: BookEvidenceScope) throws -> Bool {
         let db = try IndexDatabase(url: url)
-        let fragments = try db.rows("SELECT chapter,ordinal,locator,original FROM fragments WHERE book_id=?", [scope.bookID])
+        let fragments = try db.scopedFragments(scope: scope)
         for value in evidence where !value.quote.isEmpty {
             let location = try value.location()
             let found = try fragments.contains { row in
-                guard scope.permits(chapter: Int(row[0])!, ordinal: Int(row[1])!),
-                      let source = try Locator(json: JSONValue(jsonString: row[2], warnings: nil), warnings: nil),
+                guard let source = try Locator(json: JSONValue(jsonString: row[3], warnings: nil), warnings: nil),
                       source.href == location.href else { return false }
-                let original = row[3] as NSString
+                let original = row[4] as NSString
                 let fragmentStart = (source.text.before ?? "").utf16.count
                 if let range = location.locations.otherLocations["domRange"]?.object,
                    let nodes = source.locations.otherLocations["shudengTextNodes"]?.array {
@@ -524,10 +528,10 @@ extension BookIndex {
     /// Model child chunks all point back to their complete parent sentence.
     func sentenceUnits(scope: BookEvidenceScope) throws -> [SourceSentenceUnit] {
         let db = try IndexDatabase(url: url)
-        let rows = try db.rows("SELECT id,chapter,ordinal,locator,original FROM fragments WHERE book_id=? ORDER BY chapter,ordinal", [scope.bookID])
+        let rows = try db.scopedFragments(scope: scope)
         let language = NLLanguageRecognizer.dominantLanguage(for: rows.prefix(20).map { $0[4] }.joined(separator: " "))
         var units: [SourceSentenceUnit] = []
-        for row in rows where scope.permits(chapter: Int(row[1])!, ordinal: Int(row[2])!) {
+        for row in rows {
             guard let location = try Locator(json: JSONValue(jsonString: row[3], warnings: nil), warnings: nil) else { throw IndexError.source }
             let text = row[4], source = text as NSString
             let chapter = location.locations.otherLocations["shudengChapter"]?.string ?? location.href.string
