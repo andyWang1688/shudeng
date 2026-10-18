@@ -1,5 +1,241 @@
 import XCTest
 
+extension ReadingUITests {
+    // The host backs up the original data, explicitly launches the isolated app,
+    // and restarts it between this method and the offline verification method.
+    func testIssue17IntegratedMode() throws {
+        let app = issue12App()
+        let mode = ProcessInfo.processInfo.environment["I17_MODE"] ?? "分页"
+        let fault = ProcessInfo.processInfo.environment["I17_FAULT"] == "1"
+        questionService(app, format: mode == "滚动" ? "Anthropic" : "OpenAI", model: "integration17", address: "http://127.0.0.1:18777/v1")
+        issue17Import("semantic-fixture.epub", in: app)
+        evidence("issue17-" + mode + "-import", app)
+        app.alerts.buttons["知道了"].tap()
+        try issue17Mode(app, mode: mode, fault: fault)
+    }
+
+    private func issue17Import(_ name: String, in app: XCUIApplication) {
+        app.buttons["导入"].tap()
+        let folder = app.cells["Issue17Acceptance, Folder"]
+        if !folder.waitForExistence(timeout: 3) {
+            let browse = app.buttons.matching(identifier: "浏览").firstMatch
+            XCTAssertTrue(browse.waitForExistence(timeout: 5)); browse.tap()
+            if !folder.waitForExistence(timeout: 2) {
+                let back = app.navigationBars.buttons["BackButton"]
+                if back.exists { back.tap() }
+                let local = app.cells["DOC.sidebar.item.我的iPhone"]
+                if local.waitForExistence(timeout: 3) { local.tap() }
+            }
+        }
+        XCTAssertTrue(folder.waitForExistence(timeout: 5))
+        folder.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
+        let file = app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", name + ",")).firstMatch
+        XCTAssertTrue(file.waitForExistence(timeout: 5))
+        file.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 10))
+    }
+
+    private func issue17Mode(_ app: XCUIApplication, mode: String, fault: Bool) throws {
+        let book = app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
+        expectation(for: NSPredicate { _, _ in (book.value as? String ?? "").contains("书内资料可用") }, evaluatedWith: app)
+        waitForExpectations(timeout: 60)
+        book.tap(); waitForBody(app)
+        settings(app, mode: mode, dark: mode == "仿真", font: mode == "仿真" ? 150 : 100)
+        searchBook(app, query: "建设预算", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
+        let source = "作者没有在书里给出盐桥计划的建设预算，也没有给出任何商业报价。读者不能从设备数量推出项目费用。"
+        let paragraph = app.webViews.staticTexts[source].firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
+        paragraph.press(forDuration: 1.3); noteMenu("写笔记", in: app)
+        replaceNoteBody("I17-" + mode + "-note", in: app)
+        evidence("issue17-" + mode + "-note-keyboard", app)
+        if fault { print("I17_INJECT_NOTE"); Thread.sleep(forTimeInterval: 3) }
+        app.buttons["保存笔记"].tap()
+        if fault {
+            XCTAssertTrue(app.staticTexts["笔记保存失败，内容仍在此页；请重试保存笔记"].waitForExistence(timeout: 5))
+            evidence("issue17-note-real-save-failure", app)
+            print("I17_RESTORE_NOTE"); Thread.sleep(forTimeInterval: 3)
+            app.buttons["保存笔记"].tap()
+        }
+        waitForBody(app); evidence("issue17-" + mode + "-note-highlight", app)
+        paragraph.press(forDuration: 1.3); noteMenu("提问", in: app)
+        issue12Send("I17-" + mode + " 切掉主电源后哪两件装置继续工作？", app: app)
+        evidence("issue17-" + mode + "-first-saved", app)
+        let follow = app.buttons["question-follow-up"]; issue12Reach(follow, in: app); follow.tap()
+        let followText = "I17-" + mode + "-follow 为什么记录器仍然运行？"
+        if fault {
+            let input = app.textViews["question-input"]; issue12Reach(input, in: app)
+            input.tap(); input.typeText(followText)
+            let send = app.buttons["question-send"]; issue12Reach(send, in: app); send.tap()
+            app.alerts.buttons["发送并查找书内依据"].tap()
+            let failed = app.staticTexts["question-status"]
+            expectation(for: NSPredicate { _, _ in failed.label.hasPrefix("保存失败") }, evaluatedWith: app)
+            waitForExpectations(timeout: 20); evidence("issue17-answer-real-save-failure", app)
+            print("I17_RESTORE_ANSWER"); Thread.sleep(forTimeInterval: 3)
+            let retry = app.buttons["重试保存"]; issue12Reach(retry, in: app); retry.tap(); questionSaved(app)
+        } else { issue12Send(followText, app: app) }
+        evidence("issue17-" + mode + "-follow-saved", app)
+        let reference = app.buttons["question-reference-0"]; issue12Reach(reference, in: app); reference.tap()
+        XCTAssertTrue(app.navigationBars["原文材料"].waitForExistence(timeout: 5))
+        evidence("issue17-" + mode + "-reference-snapshot", app)
+        app.buttons["跳转原文"].tap(); waitForBody(app)
+        let target = "每座站的温度仪由主电池供电，计时器和记录器则接在独立的备用电池上。主供电切断后，后两者继续工作，温度仪停止。"
+        searchMarkerVisible(app, target); evidence("issue17-" + mode + "-cross-chapter-target", app)
+        app.buttons["回提问处"].tap(); waitForBody(app)
+        searchMarkerVisible(app, source); evidence("issue17-" + mode + "-returned-origin", app)
+        if mode == "仿真" {
+            settings(app, mode: mode, dark: false, font: 175)
+            for cycle in 1...2 {
+                curlTurn(app, forward: true); curlTurn(app, forward: false)
+                evidence("issue17-curl-cache-round-\(cycle)", app)
+            }
+            print("I17_CURL_BEFORE_CANCEL"); Thread.sleep(forTimeInterval: 2)
+            curlTurn(app, forward: true, cancel: true)
+            print("I17_CURL_AFTER_CANCEL"); Thread.sleep(forTimeInterval: 2)
+            evidence("issue17-curl-after-cancel", app)
+        }
+        app.buttons["书架"].tap(); app.tabBars.buttons["笔记"].tap()
+        let row = noteRow("I17-" + mode + "-note", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap(); app.buttons["返回原文"].tap(); waitForBody(app)
+        // Large text can split this paragraph over pages. The exact note quote
+        // is checked in the editor; the screenshot verifies its visible highlight.
+        XCTAssertTrue(paragraph.exists); evidence("issue17-" + mode + "-note-return", app)
+        app.buttons["书架"].tap(); app.tabBars.buttons["对话"].tap()
+        XCTAssertEqual(app.tables["question-history"].cells.count, 1)
+        evidence("issue17-" + mode + "-history-summary", app)
+        print("I17_MODE_FINISHED \(mode)")
+    }
+
+    func testIssue17OfflineRestart() {
+        let app = issue12App()
+        let mode = ProcessInfo.processInfo.environment["I17_MODE"] ?? "分页"
+        app.tabBars.buttons["笔记"].tap()
+        let row = noteRow("I17-" + mode + "-note", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        XCTAssertEqual(app.textViews["note-body"].value as? String, "I17-" + mode + "-note")
+        evidence("issue17-" + mode + "-offline-note", app); app.buttons["关闭"].tap()
+        app.tabBars.buttons["对话"].tap(); issue12Row("I17-" + mode, app: app).tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "受控组合回答：记录器和计时器使用备用电池。")).firstMatch.waitForExistence(timeout: 5))
+        let reference = app.buttons["question-reference-0"]; issue12Reach(reference, in: app); reference.tap()
+        XCTAssertTrue(app.navigationBars["原文材料"].waitForExistence(timeout: 5))
+        evidence("issue17-" + mode + "-offline-reference", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["关闭"].tap()
+    }
+
+    func testIssue17RebuildWithRecordsAndReading() {
+        let app = issue12App()
+        issue17Import("search-other.epub", in: app); app.alerts.buttons["知道了"].tap()
+        app.collectionViews["library"].cells[searchOtherID].tap(); waitForBody(app)
+        app.buttons["目录与书签"].tap(); app.buttons["添加书签"].tap()
+        XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5)); app.buttons["完成"].tap()
+        app.buttons["书架"].tap()
+        app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"].tap(); waitForBody(app)
+        app.buttons["目录与书签"].tap(); app.buttons["添加书签"].tap()
+        XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
+        app.buttons["已读范围"].tap()
+        for chapter in [0, 2] {
+            app.tables["read-chapters"].cells["read-chapter-" + String(chapter)].tap()
+            app.alerts.buttons["确认已读"].tap()
+        }
+        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["书内搜索"].tap()
+        print("I17_BEFORE_REBUILD"); Thread.sleep(forTimeInterval: 3)
+        app.buttons["重新准备"].tap(); evidence("issue17-rebuild-started-with-business-records", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap(); waitForBody(app)
+        evidence("issue17-reading-after-rebuild-start", app)
+        app.buttons["书架"].tap()
+        let book = app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
+        expectation(for: NSPredicate { _, _ in (book.value as? String ?? "").contains("书内资料可用") }, evaluatedWith: app)
+        waitForExpectations(timeout: 60); print("I17_AFTER_REBUILD"); Thread.sleep(forTimeInterval: 3)
+        app.tabBars.buttons["笔记"].tap(); XCTAssertTrue(noteRow("I17-仿真-note", in: app).exists)
+        app.tabBars.buttons["对话"].tap(); XCTAssertTrue(issue12Row("I17-仿真", app: app).exists)
+        evidence("issue17-records-after-rebuild", app)
+    }
+
+    func testIssue17SmallDarkLargeInteraction() {
+        let app = issue12App()
+        app.tabBars.buttons["我的"].tap(); evidence("issue17-small-my", app)
+        app.tabBars.buttons["书架"].tap(); evidence("issue17-small-shelf", app)
+        app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"].tap(); waitForBody(app)
+        app.buttons["隐藏工具栏"].tap(); evidence("issue17-small-toolbar-hidden", app)
+        app.buttons["显示工具栏"].tap(); app.buttons["reader-ask-book"].tap()
+        let input = app.textViews["question-input"]; issue12Reach(input, in: app); input.tap(); input.typeText("I17-layout-draft")
+        evidence("issue17-small-question-keyboard", app); app.buttons["关闭"].tap()
+        app.buttons["书架"].tap(); app.tabBars.buttons["笔记"].tap()
+        let row = noteRow("I17-仿真-note", in: app)
+        if !row.isHittable { app.tables["notes"].swipeUp() }
+        XCTAssertTrue(row.isHittable); evidence("issue17-small-notes", app)
+        app.tabBars.buttons["对话"].tap(); issue12Row("I17-仿真", app: app).tap()
+        let follow = app.buttons["question-follow-up"]; issue12Reach(follow, in: app); follow.tap()
+        issue12Send("I17-layout-follow 为什么使用备用电池？", app: app)
+        let reference = app.buttons["question-reference-0"]; issue12Reach(reference, in: app); reference.tap()
+        evidence("issue17-small-reference", app); app.buttons["跳转原文"].tap(); waitForBody(app)
+        evidence("issue17-small-reading-target", app); app.buttons["回提问处"].tap(); waitForBody(app)
+        app.buttons.matching(identifier: "书架").allElementsBoundByIndex.first { $0.isHittable }!.tap()
+        app.tabBars.buttons["对话"].tap(); evidence("issue17-small-history", app)
+    }
+
+    func testIssue17OpenNoteForWriteBoundary() {
+        let app = issue12App(); app.tabBars.buttons["笔记"].tap()
+        let row = noteRow("I17-仿真-note", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        evidence("issue17-before-write-boundary", app)
+    }
+
+    func testIssue17CurlNoteReturnCompletion() {
+        let app = issue12App(); app.buttons["书架"].tap()
+        app.tabBars.buttons["笔记"].tap(); noteRow("I17-仿真-note", in: app).tap()
+        XCTAssertEqual(app.textViews["note-quote"].value as? String, "报价")
+        app.buttons["返回原文"].tap(); waitForBody(app)
+        evidence("issue17-curl-note-precise-quote-return", app)
+        app.buttons["书架"].tap(); app.tabBars.buttons["对话"].tap()
+        XCTAssertEqual(app.tables["question-history"].cells.count, 1)
+        evidence("issue17-curl-history-summary", app)
+    }
+
+    func testIssue17WriteBoundaryRecovery() {
+        let app = issue12App(); app.tabBars.buttons["笔记"].tap()
+        noteRow("I17-write-boundary-draft", in: app).tap()
+        XCTAssertEqual(app.textViews["note-body"].value as? String, "I17-write-boundary-draft")
+        evidence("issue17-write-boundary-recovered-draft", app)
+        replaceNoteBody("I17-仿真-note", in: app); app.buttons["保存笔记"].tap()
+        XCTAssertEqual(app.tables["notes"].cells.count, 1)
+        app.tabBars.buttons["对话"].tap(); XCTAssertEqual(app.tables["question-history"].cells.count, 1)
+        evidence("issue17-write-boundary-same-record-retry", app)
+    }
+
+    func testIssue17LayoutHistoryCompletion() {
+        let app = issue12App()
+        let history = app.tables["question-history"]
+        history.swipeDown(); history.swipeDown(); history.swipeDown()
+        let row = issue12Row("I17-仿真", app: app)
+        XCTAssertTrue(row.isHittable)
+        XCTAssertFalse(row.label.contains("citations")); XCTAssertFalse(row.label.contains("{\""))
+        evidence("issue17-small-history-completed", app)
+    }
+
+    func testIssue17SmallDarkKeyboardVisibility() {
+        let app = issue12App()
+        app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"].tap()
+        waitForBody(app); app.buttons["reader-ask-book"].tap()
+        let input = app.textViews["question-input"]; issue12Reach(input, in: app)
+        input.tap(); input.typeText("x")
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        XCTAssertLessThan(keyboard.frame.minY, 667)
+        let scroll = app.scrollViews["question-scroll"]
+        for _ in 0..<4 where input.frame.maxY > keyboard.frame.minY {
+            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+            let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+            start.press(forDuration: 0.05, thenDragTo: end)
+        }
+        XCTAssertTrue(keyboard.exists)
+        XCTAssertTrue(input.isHittable)
+        XCTAssertLessThanOrEqual(input.frame.maxY, keyboard.frame.minY)
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "issue17-small-question-keyboard-visible"; shot.lifetime = .keepAlways; add(shot)
+    }
+}
+
 final class ReadingUITests: XCTestCase {
     func testIssue13RangeNavigationAndRealHTTP() {
         let app = issue12App()
