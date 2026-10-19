@@ -597,12 +597,27 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         library.questions.save(record)
         navigator.clearSelection()
         let controller = QuestionController(library: library, id: record.id) { [weak self] target, origin in
-            self?.questionOrigin = origin; self?.navigate(to: target)
+            self?.showQuestionReference(target, origin: origin)
         }
         let navigation = UINavigationController(rootViewController: controller)
         navigation.modalPresentationStyle = .pageSheet
         navigation.sheetPresentationController?.detents = [.large()]
         present(navigation, animated: true)
+    }
+    private func showQuestionReference(_ target: Locator, origin: Locator) {
+        guard !loading, !navigating, !curlBusy else { return }
+        let changesViewport = questionOrigin == nil
+        questionOrigin = origin
+        if changesViewport {
+            // Showing the return button changes the reading viewport. Recreate
+            // Readium with those bounds before resolving the exact occurrence;
+            // UIKit layout alone does not settle its preloaded pagination.
+            view.layoutIfNeeded()
+            openingTarget = target
+            changeSettings(settings, force: true, restoring: target)
+        } else {
+            navigate(to: target)
+        }
     }
     @objc private func backToQuestion() { if let questionOrigin { navigate(to: questionOrigin) } }
     private func captureSelection(writeNote: Bool, question: Bool = false) {
@@ -637,7 +652,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                     library.questions.save(record)
                     navigator.clearSelection()
                     let controller = QuestionController(library: library, id: record.id) { [weak self] target, origin in
-                        self?.questionOrigin = origin; self?.navigate(to: target)
+                        self?.showQuestionReference(target, origin: origin)
                     }
                     let sheet = UINavigationController(rootViewController: controller)
                     sheet.sheetPresentationController?.detents = [.large()]
