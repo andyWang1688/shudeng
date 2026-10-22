@@ -1,5 +1,7 @@
 # #11 单书自由提问与章节覆盖
 
+> 以下为历史探索记录，不是当前实现指令。当前首版采用 [ADR0008](../adr/0008-local-hybrid-retrieval.md) 的简单本地混合检索、最多8块与一次最终生成，不逐章覆盖；用户已接受检索漏背景和偶发错误归因作为首版已知限制，原失败保留。当前依据见[阅读问答设计](../reading-ai-design.md)与[验收矩阵](../../.scratch/supervision/issue-19-current-matrix.md)。
+
 Base: e1b32cd64f0b79298883cb41a75c8c3814edf5c4。运行前策略及预算冻结；不是验证结果。
 
 ## 固定输入
@@ -67,6 +69,14 @@ groups1复用索引，1项测试15.916秒、exit0。906个去重窗口，342个�
 在同一固定四个查询外加入原始用户问题作为本地扫描facet（不增加远程子问题调用），并保留每个fragment最多三个embedding piece后，候选层达到19/19固定原句。`scenes1-summary.json`：候选1,879窗口、627组、候选原文637,788 UTF-8字节；候选占全书741,970字节的85.96%，说明不能将完整候选直接发送服务。去重组按quote仅编码一次仍约801,912字节（`scenes1-volume.json`），需要有限选证批次。
 
 本轮仍未把候选直接当最终材料。此前完整段窗口轮转最终0/19；已将装包改回命中piece附近的有限窗口（每窗约1800字节、组合字符安全收缩），但因最后一次构建未产出新的测试附件，最终装包保留率仍未验证，必须继续用同一19锚诊断确认。build12曾在完整段实现上通过编译，build13因目的地兼容检查退出70，未作为新证据。
+
+### 2026-10-19 evidence-delivery repair (WIP)
+
+Confirmed code defect: chapterWindows ranked structural heading fragments with prose and expanded each scene in source order, so a weak neighbor or heading entered the 24-window list before the matched embedding piece. The final QuestionPlan then clipped that list, dropping the matched sentence even when its parent fragment and piece were in the candidate pool.
+
+Minimal source change in SemanticRetrieval.swift: exclude h1–h6 nodes from chapter ranking and sibling expansion when prose siblings exist; append each matched piece first, then nearby same-parent prose by distance; retain the existing scope, query facets, piece cap, window cap, byte cap, and locator ranges. SemanticTests.swift adds focused assertions for no heading evidence and first-scene offsets resolving to ranked embedding offsets.
+
+Offline proxy (.scratch/delivery/issue-11-evidence-delivery/offline-structural-order-audit.py) replayed frozen scenes1.json groups without model or network calls. Before the ordering fix, 127/627 groups began with heading nodes; after structural filtering the proxy had 0 heading-first groups, 24 windows, and 14,986 UTF-8 quote bytes. The proxy retained 0/19 frozen anchors (baseline final was also 0/19), so this is a candidate-delivery repair, not #11 acceptance; retrieval recall and eight-proposition sufficiency remain unresolved until the focused XCTest is run.
 
 下一检查点是：用命中piece窗口重新跑现有单项诊断，逐条记录候选→选证→最终请求材料保留数；若预算下仍丢失，则停止排序微调，按约8批64KB候选选证评审。真实服务、远程请求、回答质量、保存重启和引用往返均未验证。
 

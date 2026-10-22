@@ -2,16 +2,31 @@
 
 以阅读为中心的个人阅读应用。AI 是按需出现的辅助工具。
 
+> v0.1.0 首版已通过约定的 iOS 模拟器验收。[下载首版](https://github.com/andyWang1688/shudeng/releases/tag/v0.1.0) · [安装与版本说明](docs/releases/v0.1.0.md)。下载包用于 Xcode iOS Simulator，不是可安装到 iPhone 的 IPA，也未上架 App Store。
+
 ## 项目方向
 
-- 首发原生 iOS，长期考虑多端。
+- 首发原生 iOS，以 iPhone 为主，长期考虑多端。
+- 面向阅读外语或较难非虚构书籍的个人读者，支持阅读中直接提问并保留问答记录。
+- 首发支持 EPUB；AI 服务由读者在设置页自行配置，支持 OpenAI、Anthropic 两种接口格式。
 - 界面克制、清晰，核心操作简单可靠。
-- 重视阅读进度、笔记和用户数据的持久化与恢复。
-- 首发聚焦核心能力；具体范围与技术方案尚待确定。
+- 支持左右翻页、连续滚动和仿真翻页。
+- 本机可靠保存阅读进度、笔记与对话；完整备份导出与恢复、云同步移后。
+- 阅读问答采用内置 multilingual MiniLM 的简单本地 RAG，使用[本地向量与关键词候选合并](docs/adr/0008-local-hybrid-retrieval.md)；最多8块材料、一次生成，不承诺完整理解全书。
+- 参考 ReadAny 的 `feat/native-ios` 分支中 Shudeng 应用的已有产品设计，精简首发范围并独立实现。
+
+## 产品文档
+
+先看[首发已确认决策](docs/first-release-decisions.md)，完整入口见[文档首页](docs/README.md)：
+
+- [认识书灯](docs/introduction.md)：为谁解决什么问题，计划提供怎样的阅读体验。
+- [阅读问答如何工作](docs/how-reading-ai-works.md)：用具体例子解释查书、向量检索、提示词与代码的分工。
+- [产品范围](docs/product-scope.md)：首发包含什么，哪些功能移后，哪些细节尚待确定。
+- [阅读问答设计](docs/reading-ai-design.md)：当前简单 RAG 方案与验收边界；[开源项目对照](docs/reading-ai-comparison.md)保留历史调研。
 
 ## 当前状态
 
-项目已初始化，尚未开始应用开发。
+2026-10-21 [首发模拟器验收通过](https://github.com/andyWang1688/shudeng/issues/19#issuecomment-6314647587)：24条真实服务问答完成保存、54条引用原文核对、24条重启恢复，以及3轮本地性能测试。验收范围和已知限制见[首版说明](docs/releases/v0.1.0.md)；完成记录不代表每条答案正确，真机、最低系统版本与商店分发仍未验证。
 
 独立实现；本仓库未导入其他项目的源码或 Git 历史。第三方组件须分别核对来源和许可证。
 

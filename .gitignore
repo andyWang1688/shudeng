@@ -7,3 +7,7 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 node_modules/
+.scratch/
+delivery/
+__pycache__/
+*.py[cod]

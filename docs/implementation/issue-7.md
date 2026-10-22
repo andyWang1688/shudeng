@@ -13,6 +13,8 @@
 
 固定检查文字是“Reply OK.”，不发送书内原文或历史；不会要求模型工具调用。检查成功仅表示本次文字请求可解析，不代表模型质量、完整问答、所有扩展或任意服务都兼容。支持 max_tokens 的上述契约；仅接受 Responses 或 max_completion_tokens 的服务不在本票兼容范围。没有流式、工具、音频、图像、嵌入、模型市场或问答页面。
 
+官方 DeepSeek 文字兼容例外：仅精确模型 `deepseek-flash`，且解析后的 HTTPS URL 为 `api.deepseek.com`、端口默认或443，并匹配所选格式的精确路径时，额外发送 `thinking: {type: disabled}`：OpenAI 为 `/chat/completions` 或 `/v1/chat/completions`，Anthropic 为 `/anthropic/v1/messages`。Anthropic 配置填写完整地址 `https://api.deepseek.com/anthropic/v1/messages`，不自动修改配置或推断供应商路由。官方默认启用 high thinking，已有 OpenAI 对照请求出现输出预算全部用于 reasoning、正文为空；关闭 thinking 后返回正文。此规则覆盖连接检查和现有文字问答，不改变16／600／1600输出上限、超时、上下文预算或 length／reasoning-only 的未完成语义；其他网关、路径、模型及通用 Anthropic 继续四字段契约。依据见[官方 thinking 文档](https://api-docs.deepseek.com/guides/thinking_mode/)、[官方根端点示例](https://api-docs.deepseek.com/)、[官方 v1 端点示例](https://api-docs.deepseek.com/zh-cn/quick_start/agent_integrations/workbuddy)和[官方 Anthropic 文档](https://api-docs.deepseek.com/guides/anthropic_api)。这不代表 #11 召回或 #19 模型质量通过；定向验证记录见 `.scratch/delivery/deepseek-text-compat/` 及 `.scratch/delivery/deepseek-anthropic-compat/`。
+
 地址允许 HTTPS，HTTP 仅允许 localhost、127.0.0.1 和 ::1 供本机测试；不接受 URL 中的用户名、密码、query 或 fragment。去掉末尾斜杠；若地址已以所选文字端点结尾，直接使用；否则空路径先设为 /v1，再追加 /chat/completions 或 /messages。自定义代理根路径必须由读者完整填写（例如 /gateway/v1）。拒绝重定向，不向新地址转发凭据；无持久化网络缓存和 Cookie。连接超时20秒，失败需主动重试，无静默重试或付费真实服务验证。
 
 缺少模型／密钥、地址无效、401/403 鉴权、429 限流／额度、5xx/网络、其他状态／空文字／不匹配 JSON 分别给固定提示。不把响应原文、请求头、底层 error 或地址拼入提示；即使服务错误体回显凭据也不展示。配置读取失败只在设置页提供重试，阅读不依赖 AI 配置。
