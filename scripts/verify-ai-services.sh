@@ -1,11 +1,14 @@
 #!/bin/sh
 # Local simulator verification only; no Apple account or real credential required.
 set -eu
+
+shudeng_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$shudeng_root/scripts/test_resources.sh"
 simulator=$1
 result=$2
 log=$3
 shift 3
-entitlements=$(mktemp /tmp/shudeng-issue7-entitlements.XXXXXX)
+entitlements="$SHUDENG_TEST_SCRATCH/entitlements.plist"
 trap 'rm -f "$entitlements"' EXIT INT TERM
 cat > "$entitlements" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -17,7 +20,7 @@ cat > "$entitlements" <<'PLIST'
 PLIST
 # Simulator securityd reads the Mach-O section. Do not put restricted iOS
 # entitlements in a host ad-hoc signature (macOS will refuse to launch it).
-xcodebuild -project ios/Shudeng.xcodeproj -scheme Shudeng -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath /tmp/shudeng-issue7-derived -clonedSourcePackagesDirPath /tmp/shudeng-readium-spm -disableAutomaticPackageResolution -parallel-testing-enabled NO -collect-test-diagnostics never CODE_SIGNING_ALLOWED=NO ENABLE_DEBUG_DYLIB=NO "OTHER_LDFLAGS=\$(inherited) -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __entitlements -Xlinker $entitlements" build-for-testing > "$log.build" 2>&1
+shudeng_xcodebuild --profile simulator-contracts -- -project ios/Shudeng.xcodeproj -scheme Shudeng -destination "platform=iOS Simulator,id=$simulator" -disableAutomaticPackageResolution -parallel-testing-enabled NO -collect-test-diagnostics never CODE_SIGNING_ALLOWED=NO ENABLE_DEBUG_DYLIB=NO "OTHER_LDFLAGS=\$(inherited) -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __entitlements -Xlinker $entitlements" build-for-testing > "$log.build" 2>&1
 # Reinstall only the test runner; never uninstall the app or its data.
 xcrun simctl uninstall "$simulator" dev.shudeng.app.uitests.xctrunner >/dev/null 2>&1 || true
-xcodebuild -project ios/Shudeng.xcodeproj -scheme Shudeng -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath /tmp/shudeng-issue7-derived -clonedSourcePackagesDirPath /tmp/shudeng-readium-spm -disableAutomaticPackageResolution -parallel-testing-enabled NO -collect-test-diagnostics never -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO "$@" test-without-building > "$log" 2>&1
+shudeng_xcodebuild --profile simulator-contracts -- -project ios/Shudeng.xcodeproj -scheme Shudeng -destination "platform=iOS Simulator,id=$simulator" -disableAutomaticPackageResolution -parallel-testing-enabled NO -collect-test-diagnostics never -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO "$@" test-without-building > "$log" 2>&1

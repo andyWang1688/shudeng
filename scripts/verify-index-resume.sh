@@ -1,5 +1,8 @@
 #!/bin/sh
 set -eu
+
+shudeng_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$shudeng_root/scripts/test_resources.sh"
 simulator=${1:?Specify simulator UDID}
 result=${2:?Specify new xcresult path}
 log=${3:?Specify log path}
@@ -20,7 +23,7 @@ test_id=4aa9213d7e01875d35c2bd6f4409c5e902c9b57a5ce7c4ea8c03e8e888396ce8
 ) &
 watcher=$!
 trap 'kill "$watcher" 2>/dev/null || true' EXIT INT TERM
-xcodebuild -project ios/Shudeng.xcodeproj -scheme Shudeng -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath /tmp/shudeng-issue7-derived -clonedSourcePackagesDirPath /tmp/shudeng-readium-spm -disableAutomaticPackageResolution -parallel-testing-enabled NO -collect-test-diagnostics never -only-testing:ShudengUITests/ReadingUITests/testBookPreparationLongImportReadInterruptAndResume -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO test-without-building > "$log" 2>&1
+shudeng_xcodebuild --profile simulator-contracts -- -project ios/Shudeng.xcodeproj -scheme Shudeng -destination "platform=iOS Simulator,id=$simulator" -disableAutomaticPackageResolution -parallel-testing-enabled NO -collect-test-diagnostics never -only-testing:ShudengUITests/ReadingUITests/testBookPreparationLongImportReadInterruptAndResume -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO test-without-building > "$log" 2>&1
 wait "$watcher"
 container=$(xcrun simctl get_app_container "$simulator" dev.shudeng.app data)
 sqlite3 "$container/Library/Application Support/Shudeng/book-index.sqlite" ".backup '${log}.final.sqlite'"

@@ -1,5 +1,8 @@
 #!/bin/sh
 set -eu
+
+shudeng_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$shudeng_root/scripts/test_resources.sh"
 simulator=$1
 result=$2
 log=$3

@@ -1,5 +1,8 @@
 #!/bin/sh
 set -eu
+
+shudeng_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$shudeng_root/scripts/test_resources.sh"
 simulator=${1:?Specify simulator UDID}
 result=${2:?Specify new xcresult path}
 log=${3:?Specify log path}
@@ -28,7 +31,7 @@ trap cleanup EXIT INT TERM
 ) &
 watcher=$!
 trap 'cleanup; kill "$watcher" 2>/dev/null || true' EXIT INT TERM
-TEST_RUNNER_SHUDENG_INDEX_FAULT=1 xcodebuild -project ios/Shudeng.xcodeproj -scheme Shudeng -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath /tmp/shudeng-issue7-derived -clonedSourcePackagesDirPath /tmp/shudeng-readium-spm -disableAutomaticPackageResolution -parallel-testing-enabled NO -collect-test-diagnostics never -only-testing:ShudengUITests/ReadingUITests/testBookPreparationRealWriteFailureRetryAndReading -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO test-without-building > "$log" 2>&1
+TEST_RUNNER_SHUDENG_INDEX_FAULT=1 shudeng_xcodebuild --profile simulator-contracts -- -project ios/Shudeng.xcodeproj -scheme Shudeng -destination "platform=iOS Simulator,id=$simulator" -disableAutomaticPackageResolution -parallel-testing-enabled NO -collect-test-diagnostics never -only-testing:ShudengUITests/ReadingUITests/testBookPreparationRealWriteFailureRetryAndReading -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO test-without-building > "$log" 2>&1
 wait "$watcher"
 locate
 sqlite3 "$index" ".backup '${log}.final.sqlite'"
