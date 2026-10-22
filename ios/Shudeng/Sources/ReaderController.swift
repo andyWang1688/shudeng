@@ -413,6 +413,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 // Wait beyond Readium's scroll-end debounce, then refresh from
                 // the native viewport even when the jump stayed on the same page.
                 try? await Task.sleep(nanoseconds: 350_000_000)
+                var retried = false
                 for _ in 0..<60 {
                     if loadFailed { break }
                     // Readium can expose the pending search Locator before its
@@ -423,9 +424,15 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                        current.locations.progression != nil,
                        current.locations.cssSelector == nil, current.locations.domRange == nil,
                        current.text.highlight == nil,
-                       case let .success(visible as Bool) = await navigator.evaluateJavaScript(Self.targetIsVisible(target)), visible {
-                        arrived = true
-                        break
+                       case let .success(visible as Bool) = await navigator.evaluateJavaScript(Self.targetIsVisible(target)) {
+                        if visible {
+                            arrived = true
+                            break
+                        }
+                        if !retried {
+                            retried = true
+                            _ = await navigator.go(to: target, options: .init(animated: false))
+                        }
                     }
                     try? await Task.sleep(nanoseconds: 100_000_000)
                 }

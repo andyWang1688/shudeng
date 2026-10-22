@@ -359,7 +359,7 @@ final class ReadingUITests: XCTestCase {
         app.buttons["question-send"].tap()
         XCTAssertTrue(app.alerts["资料尚未准备完整"].waitForExistence(timeout: 5))
         evidence("issue12-explicit-local-choice", app)
-        app.alerts.buttons["仅用选文和邻文解释"].tap(); questionSaved(app)
+        app.alerts.buttons["仅用选文解释"].tap(); questionSaved(app)
         XCTAssertTrue(app.staticTexts["question-scope"].label.contains("主动选择局部"))
         evidence("issue12-local-first-saved", app)
         app.buttons["关闭"].tap(); app.buttons["书架"].tap()
@@ -2226,6 +2226,60 @@ extension ReadingUITests {
 }
 
 extension ReadingUITests {
+    func testIssue18CurrentPreparationFailureWaitThenExplicitLocalChoice() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--isolated-reading-test"]
+        app.launch()
+        issue17Import("semantic-fixture.epub", in: app)
+        app.alerts.buttons["知道了"].tap()
+        let book = app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate { _, _ in
+            (book.value as? String ?? "").contains("书内资料可用")
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 90)
+        print("I18_INJECT_PREPARATION_FAULT")
+        app.terminate()
+        Thread.sleep(forTimeInterval: 5)
+        app.launch()
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate { _, _ in
+            (book.value as? String ?? "").contains("失败")
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        questionService(app, format: "OpenAI", model: "prep-wait", address: "http://127.0.0.1:18769/v1")
+        book.tap()
+        if app.alerts["翻页准备失败"].waitForExistence(timeout: 3) {
+            app.alerts.buttons["使用分页"].tap()
+        }
+        waitForBody(app)
+        searchBook(app, query: "初版规则规定", count: 1)
+        app.tables["book-search-results"].cells.firstMatch.tap()
+        waitForBody(app)
+        let paragraph = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "初版规则规定所有停机指令")
+        ).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
+        paragraph.press(forDuration: 1.3)
+        noteMenu("提问", in: app)
+        let input = app.textViews["question-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap(); input.typeText("资料尚未准备完整时，应该等待还是只用选文解释？")
+        app.buttons["question-send"].tap()
+        XCTAssertTrue(app.alerts["资料尚未准备完整"].waitForExistence(timeout: 5))
+        evidence("issue18-current-preparation-wait-or-local-choice", app)
+        app.alerts.buttons["等待资料准备"].tap()
+        XCTAssertEqual(app.staticTexts["question-status"].label, "问题草稿")
+        app.buttons["question-send"].tap()
+        let local = app.buttons["仅用选文解释"].firstMatch
+        XCTAssertTrue(local.waitForExistence(timeout: 5))
+        local.tap()
+        questionSaved(app)
+        XCTAssertTrue(app.staticTexts["question-scope"].label.contains("主动选择局部"))
+        evidence("issue18-current-explicit-local-answer-saved", app)
+    }
+
     func testQuestionIncompletePreparationWaitThenExplicitLocalChoice() throws {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launch()
@@ -2247,7 +2301,7 @@ extension ReadingUITests {
         evidence("issue9-preparation-wait-or-local-choice", app)
         app.alerts.buttons["等待资料准备"].tap()
         XCTAssertEqual(app.staticTexts["question-status"].label, "问题草稿")
-        app.buttons["question-send"].tap(); app.alerts.buttons["仅用选文和邻文解释"].tap()
+        app.buttons["question-send"].tap(); app.alerts.buttons["仅用选文解释"].tap()
         questionSaved(app)
         XCTAssertTrue(app.staticTexts["question-scope"].label.contains("主动选择局部"))
         evidence("issue9-explicit-local-saved-scope", app)

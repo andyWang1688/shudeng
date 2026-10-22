@@ -85,6 +85,95 @@ final class AIServiceTests: XCTestCase {
             c.address = address; XCTAssertThrowsError(try AIConnection.endpoint(for: c))
         }
     }
+    func testOfficialDeepSeekTextRequestDisablesThinkingWithinExistingBudgets() throws {
+        var c = configuration(model: "deepseek-flash")
+        for address in ["https://api.deepseek.com", "https://api.deepseek.com/v1/", "https://api.deepseek.com/chat/completions", "https://api.deepseek.com/v1/chat/completions/", "https://api.deepseek.com:443/chat/completions"] {
+            c.address = address
+            for (maxTokens, timeout) in [(16, 20.0), (600, 30.0), (1600, 90.0)] {
+                let request = try AIConnection.request(c, key: token, prompt: "Fixture text.", maxTokens: maxTokens, timeout: timeout)
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+                XCTAssertEqual(Set(body.keys), Set(["model", "messages", "max_tokens", "stream", "thinking"]))
+                XCTAssertEqual(body["thinking"] as? [String: String], ["type": "disabled"])
+                XCTAssertEqual(body["model"] as? String, "deepseek-flash")
+                XCTAssertEqual(body["messages"] as? [[String: String]], [["role": "user", "content": "Fixture text."]])
+                XCTAssertEqual(body["max_tokens"] as? Int, maxTokens)
+                XCTAssertEqual(body["stream"] as? Bool, false)
+                XCTAssertEqual(request.url, try AIConnection.endpoint(for: c))
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.timeoutInterval, timeout)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer " + token)
+                XCTAssertNil(request.value(forHTTPHeaderField: "x-api-key"))
+            }
+        }
+    }
+    func testOfficialDeepSeekAnthropicRequestDisablesThinkingWithinExistingBudgets() throws {
+        var c = configuration(.anthropic, model: "deepseek-flash")
+        for address in ["https://api.deepseek.com/anthropic/v1/messages", "https://api.deepseek.com:443/anthropic/v1/messages/"] {
+            c.address = address
+            for (maxTokens, timeout) in [(16, 20.0), (600, 30.0), (1600, 90.0)] {
+                let request = try AIConnection.request(c, key: token, prompt: "Fixture text.", maxTokens: maxTokens, timeout: timeout)
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+                XCTAssertEqual(Set(body.keys), Set(["model", "messages", "max_tokens", "stream", "thinking"]))
+                XCTAssertEqual(body["thinking"] as? [String: String], ["type": "disabled"])
+                XCTAssertEqual(body["model"] as? String, "deepseek-flash")
+                XCTAssertEqual(body["messages"] as? [[String: String]], [["role": "user", "content": "Fixture text."]])
+                XCTAssertEqual(body["max_tokens"] as? Int, maxTokens)
+                XCTAssertEqual(body["stream"] as? Bool, false)
+                XCTAssertEqual(request.url?.path, "/anthropic/v1/messages")
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.timeoutInterval, timeout)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+                XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), token)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
+            }
+        }
+    }
+    func testOtherTextRequestsKeepFourFieldContract() throws {
+        let cases: [(String, String, AIFormat)] = [
+            ("https://gateway.example/v1", "deepseek-flash", .openAI),
+            ("https://api.deepseek.com.example/v1", "deepseek-flash", .openAI),
+            ("https://api.deepseek.com:8443/v1", "deepseek-flash", .openAI),
+            ("https://api.deepseek.com/gateway/v1", "deepseek-flash", .openAI),
+            ("https://api.deepseek.com/beta/chat/completions", "deepseek-flash", .openAI),
+            ("http://127.0.0.1:18767/v1", "deepseek-flash", .openAI),
+            ("https://api.deepseek.com/v1", "deepseek-v4-pro", .openAI),
+            ("https://api.deepseek.com/v1", "deepseek-v4-flash", .openAI),
+            ("https://api.deepseek.com/v1", "deepseek-flash-future", .openAI),
+            ("https://api.deepseek.com/v1", "DeepSeek-Flash", .openAI),
+            ("https://api.deepseek.com/anthropic", "deepseek-flash", .anthropic),
+            ("https://gateway.example/anthropic/v1/messages", "deepseek-flash", .anthropic),
+            ("https://api.deepseek.com.example/anthropic/v1/messages", "deepseek-flash", .anthropic),
+            ("https://api.deepseek.com:8443/anthropic/v1/messages", "deepseek-flash", .anthropic),
+            ("https://api.deepseek.com/v1/messages", "deepseek-flash", .anthropic),
+            ("https://api.deepseek.com/proxy/anthropic/v1/messages", "deepseek-flash", .anthropic),
+            ("https://api.deepseek.com/anthropic/v1/messages", "deepseek-v4-pro", .anthropic),
+            ("https://api.deepseek.com/anthropic/v1/messages", "deepseek-flash-future", .anthropic)
+        ]
+        for (address, model, format) in cases {
+            var c = configuration(format, model: model)
+            c.address = address
+            for (maxTokens, timeout) in [(16, 20.0), (600, 30.0), (1600, 90.0)] {
+                let request = try AIConnection.request(c, key: token, prompt: "Fixture text.", maxTokens: maxTokens, timeout: timeout)
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+                XCTAssertEqual(Set(body.keys), Set(["model", "messages", "max_tokens", "stream"]), address + " / " + model)
+                XCTAssertEqual(body["model"] as? String, model)
+                XCTAssertEqual(body["messages"] as? [[String: String]], [["role": "user", "content": "Fixture text."]])
+                XCTAssertEqual(body["max_tokens"] as? Int, maxTokens)
+                XCTAssertEqual(body["stream"] as? Bool, false)
+                XCTAssertEqual(request.timeoutInterval, timeout)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                if format == .openAI {
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer " + token)
+                    XCTAssertNil(request.value(forHTTPHeaderField: "x-api-key"))
+                } else {
+                    XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), token)
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
+                }
+            }
+        }
+    }
     func testKeychainRestartSwitchAndAtomicFailureRecovery() async throws {
         let store = try AIConfigurationStore(root: root, secrets: secrets)
         let a = configuration(), b = configuration(.anthropic)

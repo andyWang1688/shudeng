@@ -166,11 +166,11 @@ final class QuestionController: UIViewController, UITextViewDelegate {
                 alert.addAction(UIAlertAction(title: "等待资料准备", style: .cancel)); present(alert, animated: true); return
             }
             let free = record.freeQuestion == true
-            let message = (free ? "问题与当前书内取材" : "问题、选文、附近原文") + (ready ? "和当前书关键词、本地语义检索命中及补齐的邻段原文（可能来自其他章节）" : "（当前资料未齐，仅可主动选择局部解释）") + "将交给“\(configuration.name)”（\(configuration.address)），可能产生费用。单次原文容量有限，实际材料和不足范围将记录在本对话。"
-            let extra = continuing ? "本次还会发送此前各轮问题与回答，先明确追问再重新查书，共两次请求；历史回答不作为原文依据。历史与原文均计入本地24KB预算，此上限不保证服务接受，容量不足会明确提示。" : free && ready && QuestionPlan.wholeBook(record.question) ? "全书问题先发送问题与最多500字原文样本判断语言并拆解查询，再发送取材回答，共两次请求。" : ""
-            let restriction = record.onlyRead == true ? "仅已读：仅发送明确确认已读章节内的原文，可能缺少后文解释；未读邻文将排除。没有已读资料或选文、历史越界时不发送，请确认已读范围或新建问题。" : "整书：允许参考未读内容。"
+            let message = (free ? "问题与本次查到的书内原文" : "问题、提问选文与本次查到的书内原文") + (ready ? "（可能来自其他章节）" : "（当前资料未齐，仅可主动选择局部解释）") + "将交给“\(configuration.name)”（\(configuration.address)），请求一次回答，可能产生费用。实际材料会记录在本对话；有限片段不代表完整概括全书。"
+            let extra = continuing ? "本次还会发送此前各轮问题与回答以理解追问，历史回答不作为原文依据。容量不足会明确提示。" : ""
+            let restriction = record.onlyRead == true ? "仅已读：仅发送明确确认已读章节内的原文，可能缺少后文解释。没有已读资料或选文、历史越界时不发送，请确认已读范围或新建问题。" : "整书：允许参考未读内容。"
             let alert = UIAlertController(title: ready ? "发送书内原文" : "资料尚未准备完整", message: restriction + message + extra, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: ready ? "发送并查找书内依据" : (free ? "仅用已准备资料解释" : "仅用选文和邻文解释"), style: .default) { [weak self] _ in
+            alert.addAction(UIAlertAction(title: ready ? "发送并查找书内依据" : (free ? "仅用已准备资料解释" : "仅用选文解释"), style: .default) { [weak self] _ in
                 guard let self else { return }; self.library.questions.send(self.id, library: self.library, local: !ready)
             })
             alert.addAction(UIAlertAction(title: ready ? "取消" : "等待资料准备", style: .cancel))

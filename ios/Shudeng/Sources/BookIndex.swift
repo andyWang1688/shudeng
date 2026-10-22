@@ -299,6 +299,7 @@ final class IndexDatabase {
         guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK else {
             sqlite3_close(db); throw IndexError.storage
         }
+        sqlite3_busy_timeout(db, 1000)
         do {
             try execute("CREATE TABLE IF NOT EXISTS embeddings(book_id TEXT NOT NULL, model TEXT NOT NULL, fragment_id INTEGER NOT NULL, piece INTEGER NOT NULL, offset INTEGER NOT NULL, original TEXT NOT NULL, vector BLOB NOT NULL CHECK(length(vector)=1536), PRIMARY KEY(book_id,fragment_id,piece))")
             try execute("CREATE TABLE IF NOT EXISTS embedding_progress(book_id TEXT PRIMARY KEY, model TEXT NOT NULL, cursor INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL)")
@@ -418,5 +419,14 @@ final class IndexDatabase {
             }
         }
         return hits
+    }
+
+    /// FTS character grams only shortlist fragments; retrieval verifies each stored block.
+    func keywordFragments(scope: BookEvidenceScope, terms: [String], limit: Int) throws -> Set<Int> {
+        let expressions = terms.map { BookText.tokens($0, query: true) }.filter { !$0.isEmpty }
+        guard !expressions.isEmpty, limit > 0 else { return [] }
+        let query = expressions.map { "(" + $0 + ")" }.joined(separator: " OR ")
+        let rows = try rows("SELECT f.id FROM fragment_terms t JOIN fragments f ON f.id=t.rowid WHERE fragment_terms MATCH ? AND t.book_id=f.book_id AND " + scope.sql.filter + " ORDER BY bm25(fragment_terms),f.id LIMIT ?", [query] + scope.sql.bounds + [String(limit)])
+        return Set(rows.compactMap { Int($0[0]) })
     }
 }

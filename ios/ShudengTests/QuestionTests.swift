@@ -2,6 +2,93 @@ import XCTest
 import ReadiumShared
 @testable import Shudeng
 
+final class QuestionKeywordTests: XCTestCase {
+    func testKeywordsKeepExactChineseTermsAtEndOfQuestion() {
+        let terms = QuestionPlan.keywords("林黛玉初进贾府时为什么步步留心、时时在意？")
+        for term in ["步步", "留心", "时时", "在意"] {
+            XCTAssertTrue(terms.contains(term), "Missing \(term): \(terms)")
+        }
+    }
+    func testKeywordsPreserveCaseInsensitiveDeduplicationAndStopWords() {
+        let text = "WHY the ENGINEER engineer and this that what does RECORDER recorder BATTERY battery 为什么 是什么意思 留心 留心"
+        XCTAssertEqual(QuestionPlan.keywords(text), ["engineer", "recorder", "battery", "留心"])
+    }
+    func testKeywordsBoundLongInputWhileKeepingExactTailTerms() {
+        let observations = (1...40).map { "sensor\($0)" }.joined(separator: " ")
+        let terms = QuestionPlan.keywords(observations + " 请解释为何停止供电？")
+        XCTAssertLessThanOrEqual(terms.count, 20)
+        for term in ["停止", "供电"] { XCTAssertTrue(terms.contains(term), "Missing \(term)") }
+    }
+}
+
+final class QuestionCitationTests: XCTestCase {
+    private func evidence() throws -> QuestionEvidence {
+        let row = ["id": "E1", "locatorJSON": "{\"href\":\"chapter.xhtml\",\"locations\":{\"cssSelector\":\"#source\"}}",
+            "quote": "前句。备用电池继续供电。后句。", "context": "只有上下文提到机房。前句。备用电池继续供电。后句。", "chapter": "Test chapter"]
+        return try JSONDecoder().decode(QuestionEvidence.self, from: JSONSerialization.data(withJSONObject: row))
+    }
+    private func reply(_ references: [[String: String]]) throws -> String {
+        String(data: try JSONSerialization.data(withJSONObject: ["answer": "Explanation", "citations": references]), encoding: .utf8)!
+    }
+    func testCitationAcceptsWholeQuoteAndContinuousExcerptWithOriginalEvidence() throws {
+        let source = try evidence()
+        for quote in [source.quote, "备用电池继续供电。"] {
+            let result = QuestionPlan.validate(try reply([["id": source.id, "quote": quote]]), evidence: [source])
+            XCTAssertEqual(result.citations, [source]); XCTAssertEqual(result.warning, "")
+        }
+    }
+    func testCitationRejectsEmptyAlteredUnknownContextAndNoncontinuousQuotes() throws {
+        let source = try evidence()
+        let invalid = ["", " \n\t", "备用电池停止供电。", "只有上下文提到机房。", "前句。后句。"]
+            .map { ["id": source.id, "quote": $0] } + [["id": "E99", "quote": source.quote]]
+        for reference in invalid {
+            let result = QuestionPlan.validate(try reply([reference]), evidence: [source])
+            XCTAssertTrue(result.citations.isEmpty); XCTAssertFalse(result.warning.isEmpty)
+        }
+    }
+    func testCitationDeduplicatesAcceptedExcerptsByEvidenceID() throws {
+        let source = try evidence()
+        let result = QuestionPlan.validate(try reply([["id": source.id, "quote": "备用电池继续供电。"],
+            ["id": source.id, "quote": source.quote]]), evidence: [source])
+        XCTAssertEqual(result.citations, [source]); XCTAssertFalse(result.warning.isEmpty)
+    }
+}
+
+final class QuestionCitationWhitespaceTests: XCTestCase {
+    private func evidence() throws -> QuestionEvidence {
+        let row = ["id": "E1", "locatorJSON": "{\"href\":\"chapter.xhtml\",\"locations\":{\"cssSelector\":\"#source\"}}",
+            "quote": "Before.\r\n\tI ask   only a comfortable\u{00a0}home.\nAfter.\nre sign", "context": "Only in context.", "chapter": "Test chapter"]
+        return try JSONDecoder().decode(QuestionEvidence.self, from: JSONSerialization.data(withJSONObject: row))
+    }
+    private func reply(_ references: [[String: String]]) throws -> String {
+        String(data: try JSONSerialization.data(withJSONObject: ["answer": "Explanation", "citations": references]), encoding: .utf8)!
+    }
+    func testCitationAcceptsWhitespaceChangesWithOriginalEvidence() throws {
+        let source = try evidence()
+        for quote in [source.quote, "I ask only a comfortable home.", " \tI\nask\r\nonly a comfortable home.\n"] {
+            let result = QuestionPlan.validate(try reply([["id": source.id, "quote": quote]]), evidence: [source])
+            XCTAssertEqual(result.citations, [source]); XCTAssertEqual(result.warning, "")
+        }
+    }
+    func testCitationRejectsChangesBeyondWhitespaceAndNoncontinuousQuotes() throws {
+        let source = try evidence()
+        let invalid = ["", " \r\n\t", "I ask only a comfortable house.", "i ask only a comfortable home.",
+            "I ask only a comfortable home!", "Before. After.", "resign", "I ask only...home.", "Only in context."]
+            .map { ["id": source.id, "quote": $0] } + [["id": "E99", "quote": "I ask only a comfortable home."]]
+        for reference in invalid {
+            let result = QuestionPlan.validate(try reply([reference]), evidence: [source])
+            XCTAssertTrue(result.citations.isEmpty); XCTAssertFalse(result.warning.isEmpty)
+        }
+    }
+    func testCitationWhitespaceKeepsDeduplicationAndMixedWarnings() throws {
+        let source = try evidence(), valid = ["id": "E1", "quote": "I ask only a comfortable home."]
+        for references in [[valid, valid], [valid, ["id": "E99", "quote": valid["quote"]!]]] {
+            let result = QuestionPlan.validate(try reply(references), evidence: [source])
+            XCTAssertEqual(result.citations, [source]); XCTAssertFalse(result.warning.isEmpty)
+        }
+    }
+}
+
 @MainActor
 final class QuestionTests: XCTestCase {
     private var root: URL!
@@ -21,6 +108,15 @@ final class QuestionTests: XCTestCase {
             locations: .init(otherLocations: ["cssSelector": .string("#second-occurrence")]), text: .init(highlight: quote))
         var record = ReadingQuestion(book: book, selection: QuestionEvidence(locator: location), neighbors: [])
         record.question = "Why review?"; return record
+    }
+    private func availableQuestion(_ library: LibraryStore) async throws -> ReadingQuestion {
+        let file = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "original-fixture", withExtension: "epub", subdirectory: "Fixtures"))
+        let book = try await library.importBook(from: file).book
+        await library.preparation.stop(bookID: book.id)
+        let location = Locator(href: AnyURL(string: "OEBPS/ch1.xhtml")!, mediaType: .xhtml, title: "第1章：原创验证文本",
+            locations: .init(otherLocations: ["cssSelector": .string("#c1-p1")]), text: .init(highlight: "阅读需要保留上下文。"))
+        var record = ReadingQuestion(book: book, selection: QuestionEvidence(locator: location), neighbors: [])
+        record.question = "为什么阅读需要保留上下文？"; return record
     }
     func testFreeQuestionDistinctIdentityOriginAndAtomicRetry() throws {
         let book = Book(id: "book-only", title: "Book", author: "Author")
@@ -88,6 +184,21 @@ final class QuestionTests: XCTestCase {
         do { _ = try await QuestionPlan.make(question(String(repeating: "大", count: 9000)), index: index, local: true, state: BookPreparationState()); XCTFail("Expected capacity refusal") }
         catch { XCTAssertEqual(error as? QuestionError, .budget) }
     }
+    func testIssue21LocalSelectionKeepsAllPartsWithoutNeighborsOrEmbedding() async throws {
+        let first = question("FIRST-SELECTED-PART").selection, second = question("SECOND-SELECTED-PART").selection
+        var record = ReadingQuestion(book: Book(id: "current-book", title: "Local", author: ""), selection: first, neighbors: [question("UNUSED-NEIGHBOR").selection])
+        record.selectionParts = [first, second]; record.question = "本句为何如此？"
+        record.history = [QuestionHistoryTurn(id: UUID(), question: "Earlier question", answer: "UNVERIFIED-HISTORY-ANSWER", state: .complete)]
+        let unused = root.appendingPathComponent("no-index.sqlite")
+        let plan = try await QuestionPlan.make(record, index: BookIndex(url: unused), local: true, state: BookPreparationState())
+        XCTAssertEqual(plan.evidence.map(\.quote), [first.quote, second.quote])
+        XCTAssertTrue(plan.notice.contains("仅发送提问选文")); XCTAssertNil(plan.trace)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unused.path))
+        XCTAssertFalse(plan.prompt.contains("UNUSED-NEIGHBOR"))
+        XCTAssertFalse(plan.evidence.contains { $0.quote == "UNVERIFIED-HISTORY-ANSWER" })
+        let query = QuestionPlan.retrievalInput(record, evidence: plan.evidence)
+        for text in [record.question, first.quote, second.quote, "Earlier question", "UNVERIFIED-HISTORY-ANSWER", "非书内依据"] { XCTAssertTrue(query.contains(text)) }
+    }
     func testBothRealHTTPFormatsCancelImmediateRetryAndLateResponse() async throws {
         let library = try LibraryStore(root: root), store = QuestionStore(root: root, secrets: secrets)
         let configurations = try AIConfigurationStore(root: root, secrets: secrets)
@@ -95,7 +206,7 @@ final class QuestionTests: XCTestCase {
         for format in AIFormat.allCases {
             var configuration = AIConfiguration(name: "Fixture", format: format, address: "http://127.0.0.1:18769/v1", model: "late")
             try configurations.save(configuration, newKey: "not-a-real-credential"); try configurations.select(configuration.id)
-            let record = question(); store.save(record)
+            let record = try await availableQuestion(library); store.save(record)
             store.send(record.id, library: library, local: true)
             try await Task.sleep(nanoseconds: 300_000_000)
             store.cancel(record.id)
@@ -179,6 +290,8 @@ extension QuestionTests {
         }
         let selectedSource = try source("初版规则规定所有停机指令")
         let unread = try source("第七日发生电池漏液")
+        let otherID = Int(try XCTUnwrap(db.rows("SELECT id FROM fragments WHERE book_id=?", [other.id]).first)[0])!
+        let alien = try XCTUnwrap(db.evidence(id: otherID, scope: BookEvidenceScope(bookID: other.id)))
         let settings = try AIConfigurationStore(root: root, secrets: secrets)
         defer { for value in settings.configurations { try? settings.remove(value.id) } }
         let store = QuestionStore(root: root, secrets: secrets)
@@ -188,7 +301,7 @@ extension QuestionTests {
         try settings.save(configuration, newKey: "not-a-real-credential"); store.save(full)
         store.send(full.id, library: library, local: false); try await issue12Wait(store, id: full.id)
         XCTAssertEqual(store.record(full.id)?.state, .complete)
-        XCTAssertTrue(store.record(full.id)?.evidence.contains { $0.quote.contains("第七日发生电池漏液") } == true)
+        XCTAssertLessThanOrEqual(store.record(full.id)?.retrievalTrace?.semantic.count ?? 0, 8)
         XCTAssertTrue(store.record(full.id)?.answer.contains("第七日发生电池漏液") == true)
         try library.setChapterRead(0, read: true, for: book.id)
         try library.setChapterRead(2, read: true, for: book.id)
@@ -209,7 +322,7 @@ extension QuestionTests {
         store.send(follow, library: library, local: false); try await issue12Wait(store, id: follow)
         XCTAssertEqual(store.record(follow)?.state, .incomplete)
         count = try await issue13Requests().count; XCTAssertEqual(count, before)
-        for (name, selection, chapters) in [("I13-ZERO-SELECTION", unread, [0, 2]), ("I13-ZERO-EMPTY", selectedSource, [])] {
+        for (name, selection, chapters) in [("I13-ZERO-SELECTION", unread, [0, 2]), ("I13-ZERO-EMPTY", selectedSource, []), ("I13-ZERO-CROSS-BOOK", alien, [0, 2])] {
             var bad = ReadingQuestion(book: book, selection: selection, neighbors: [])
             bad.question = name; bad.onlyRead = true; store.save(bad)
             store.send(bad.id, library: library, local: false, scope: BookEvidenceScope(bookID: book.id, chapters: chapters))
@@ -268,6 +381,100 @@ extension QuestionTests {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         throw QuestionError.preparation
+    }
+    func testIssue21FinalMaterialCountsSelectionAndRejectsNineRequired() async throws {
+        let (library, book) = try await issue12Book()
+        let index = library.preparation.index, scope = BookEvidenceScope(bookID: book.id)
+        let db = try IndexDatabase(url: root.appendingPathComponent("book-index.sqlite"))
+        let rows = try db.rows("SELECT id FROM fragments WHERE book_id=? ORDER BY id LIMIT 9", [book.id])
+        let required = try rows.map { try XCTUnwrap(db.evidence(id: Int($0[0])!, scope: scope)) }
+        let selection = try XCTUnwrap(db.evidence(id: Int(rows[0][0])!, scope: scope, range: NSRange(location: 0, length: 2)))
+        var record = ReadingQuestion(book: book, selection: selection, neighbors: [])
+        record.question = "FINAL-BUDGET 盐桥的停机规则为什么改变？"
+        let plan = try await QuestionPlan.make(record, index: index, local: false, state: library.preparation.states[book.id]!)
+        XCTAssertEqual(plan.trace?.anchors.count, 8)
+        XCTAssertEqual(plan.evidence.count, 8)
+        XCTAssertEqual(plan.evidence.first?.locatorJSON, selection.locatorJSON)
+        XCTAssertEqual(plan.evidence.first?.quote, selection.quote)
+        XCTAssertTrue(plan.notice.contains("部分检索材料超出本次容量未发送"))
+        XCTAssertLessThanOrEqual(plan.prompt.utf8.count, 24000)
+        let payload = try XCTUnwrap(plan.prompt.split(separator: "\n", maxSplits: 1).last)
+        let material = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
+        XCTAssertEqual((material["evidence"] as? [[String: String]])?.count, 8)
+        record.selectionParts = Array(required.prefix(8))
+        let boundary = try await QuestionPlan.make(record, index: index, local: true, state: BookPreparationState())
+        XCTAssertEqual(boundary.evidence.map(\.quote), record.selectionParts!.map(\.quote))
+        record.selectionParts = required
+        do { _ = try await QuestionPlan.make(record, index: index, local: true, state: BookPreparationState()); XCTFail("Nine required selections must not be clipped") }
+        catch { XCTAssertEqual(error as? QuestionError, .budget) }
+    }
+    func testIssue21SelectedFreeAndFollowupUseOneFinalHTTPInBothFormats() async throws {
+        let (library, book) = try await issue12Book()
+        let index = library.preparation.index, allowed = BookEvidenceScope(bookID: book.id)
+        let db = try IndexDatabase(url: root.appendingPathComponent("book-index.sqlite"))
+        func source(_ phrase: String) throws -> QuestionEvidence {
+            let row = try XCTUnwrap(db.rows("SELECT id FROM fragments WHERE book_id=? AND original LIKE ?", [book.id, "%" + phrase + "%"]).first)
+            return try XCTUnwrap(db.evidence(id: Int(row[0])!, scope: allowed))
+        }
+        let selected = try source("初版规则规定所有停机指令"), second = try source("观测员判断大雾")
+        let unusedNeighbor = question("ISSUE21-UNUSED-NEIGHBOR").selection
+        let settings = try AIConfigurationStore(root: root, secrets: secrets)
+        defer { for value in settings.configurations { try? settings.remove(value.id) } }
+        let store = QuestionStore(root: root, secrets: secrets)
+        for format in AIFormat.allCases {
+            let configuration = AIConfiguration(name: "Issue21", format: format, address: "http://127.0.0.1:18773/v1", model: "issue21")
+            try settings.save(configuration, newKey: "not-a-real-credential"); try settings.select(configuration.id)
+            var first = ReadingQuestion(book: book, selection: selected, neighbors: [unusedNeighbor])
+            first.selectionParts = [selected, second]; first.question = "ISSUE21 余辉延迟为什么影响停机规则？"
+            // Legacy parser metadata must not become this turn's retrieval result.
+            first.retrievalQueries = ["OLD-RESOLVED-QUERY"]; first.retrievalNotice = "OLD-RESOLVER-NOTICE"
+            var free = ReadingQuestion(book: book, origin: try selected.location())
+            free.question = "ISSUE21 全书停机规则有哪些联系？"
+            for record in [first, free] {
+                XCTAssertTrue(store.save(record))
+                try await verifyOneFinalRequest(record.id)
+            }
+            let follow = try XCTUnwrap(store.followUp(first.id))
+            store.edit(follow, text: "ISSUE21 那作者后来为什么改口？")
+            try await verifyOneFinalRequest(follow)
+            let saved = try XCTUnwrap(store.record(follow))
+            let required = try await QuestionPlan.requiredEvidence(saved, index: index, local: false, scope: allowed)
+            let query = QuestionPlan.retrievalInput(saved, evidence: required)
+            for text in [saved.question, selected.quote, second.quote, first.question, try XCTUnwrap(store.record(first.id)).answer, "历史回答（非书内依据）"] { XCTAssertTrue(query.contains(text)) }
+            XCTAssertFalse(query.contains(unusedNeighbor.quote))
+        }
+        func verifyOneFinalRequest(_ id: UUID) async throws {
+            let before = try await issue13Requests().count
+            store.send(id, library: library, local: false); try await issue12Wait(store, id: id)
+            let saved = try XCTUnwrap(store.record(id))
+            XCTAssertEqual(saved.state, .complete, saved.failure ?? "")
+            XCTAssertNil(saved.retrievalQueries); XCTAssertNil(saved.retrievalNotice)
+            XCTAssertTrue(saved.searchedChapters?.isEmpty == true); XCTAssertTrue(saved.omittedChapters?.isEmpty == true)
+            let trace = try XCTUnwrap(saved.retrievalTrace)
+            XCTAssertTrue(trace.expanded.isEmpty)
+            XCTAssertLessThanOrEqual(trace.anchors.count, 8)
+            XCTAssertLessThanOrEqual(trace.keyword.count, 8); XCTAssertLessThanOrEqual(trace.semantic.count, 8)
+            let rows = Array(try await issue13Requests().dropFirst(before))
+            XCTAssertEqual(rows.count, 1)
+            let row = try XCTUnwrap(rows.first), prompt = try XCTUnwrap(row["prompt"] as? String)
+            XCTAssertEqual(row["max_tokens"] as? Int, 1600)
+            XCTAssertEqual(row["path"] as? String, saved.format == .openAI ? "/v1/chat/completions" : "/v1/messages")
+            XCTAssertFalse(prompt.contains(unusedNeighbor.quote)); XCTAssertFalse(prompt.contains("OLD-RESOLVED")); XCTAssertFalse(prompt.contains("OLD-RESOLVER"))
+            XCTAssertTrue(prompt.contains("历史回答仅帮助理解指代，不是原文依据")); XCTAssertTrue(prompt.contains("不承诺完整概括全书"))
+            XCTAssertLessThanOrEqual(prompt.utf8.count, 24000)
+            let material = try XCTUnwrap(row["material"] as? [String: Any])
+            XCTAssertEqual(material["bookID"] as? String, book.id)
+            XCTAssertEqual(material["selection"] as? [String], (saved.selectionParts ?? [saved.selection]).map(\.quote))
+            let history = try XCTUnwrap(material["history"] as? [[String: Any]])
+            XCTAssertEqual(history.compactMap { $0["question"] as? String }, (saved.history ?? []).map(\.question))
+            XCTAssertEqual(history.compactMap { $0["answer"] as? String }, (saved.history ?? []).map(\.answer))
+            let evidence = try XCTUnwrap(material["evidence"] as? [[String: String]])
+            XCTAssertEqual(evidence.compactMap { $0["quote"] }, saved.evidence.map(\.quote))
+            let permitted = try await index.permits(saved.evidence, scope: allowed); XCTAssertTrue(permitted)
+            let restored = try XCTUnwrap(QuestionStore(root: root, secrets: secrets).record(id))
+            XCTAssertEqual(restored.answer, saved.answer); XCTAssertEqual(restored.citations, saved.citations)
+        }
+        try issue12Attachment("issue21-single-request-materials", store: store)
     }
     private func issue12Wait(_ store: QuestionStore, id: UUID) async throws {
         for _ in 0..<600 {
@@ -364,7 +571,6 @@ extension QuestionTests {
         first.question = "初版规则要求多久后执行停机，等待是为了什么？"
         XCTAssertTrue(store.save(first)); store.send(first.id, library: library, local: false)
         try await issue12Wait(store, id: first.id); XCTAssertEqual(store.record(first.id)?.state, .complete)
-        let firstEvidence = try XCTUnwrap(store.record(first.id)).evidence
         let follow = try XCTUnwrap(store.followUp(first.id)); store.edit(follow, text: "那他为什么改口？")
         configuration = AIConfiguration(name: "Issue12 Anthropic", format: .anthropic, address: "http://127.0.0.1:18772/v1", model: "issue12")
         try configurations.save(configuration, newKey: "not-a-real-credential"); try configurations.select(configuration.id)
@@ -372,17 +578,19 @@ extension QuestionTests {
         let changed = try XCTUnwrap(store.record(follow))
         XCTAssertEqual(changed.state, .complete); XCTAssertEqual(changed.format, .anthropic)
         XCTAssertEqual(store.record(first.id)?.format, .openAI)
-        let quotes = changed.evidence.map(\.quote).joined()
-        for required in ["初版规则规定", "第七日发生电池漏液", "事故后作者修订"] { XCTAssertTrue(quotes.contains(required), required) }
+        XCTAssertNil(changed.retrievalQueries); XCTAssertNil(changed.retrievalNotice)
+        XCTAssertEqual(changed.history?.first?.question, first.question)
+        XCTAssertLessThanOrEqual(changed.retrievalTrace?.semantic.count ?? 0, 8)
         let next = try XCTUnwrap(store.followUp(first.id)); store.edit(next, text: "那切断主供电后，记录器和计时器为什么还在运行？")
         store.send(next, library: library, local: false, scope: BookEvidenceScope(bookID: book.id)); try await issue12Wait(store, id: next)
         let third = try XCTUnwrap(store.record(next))
         XCTAssertEqual(third.state, .complete)
-        XCTAssertTrue(third.evidence.contains { $0.quote.contains("独立的备用电池") })
-        XCTAssertTrue(third.evidence.contains { $0.quote.contains("危险时应切断主供电") })
-        XCTAssertFalse(Set(third.evidence.map(\.locatorJSON)).subtracting(firstEvidence.map(\.locatorJSON)).isEmpty, "New evidence must enter a follow-up")
+        XCTAssertLessThanOrEqual(third.retrievalTrace?.semantic.count ?? 0, 8)
+        XCTAssertTrue(third.evidence.contains { $0.quote == first.selection.quote })
+        XCTAssertEqual(third.history?.count, 2)
+        XCTAssertFalse(third.retrievalTrace?.semantic.isEmpty ?? true)
         try issue12Attachment("issue12-real-retrieval-three-turns", store: store)
-        // Both the selected text and prior full-book answers are disallowed before any resolver HTTP.
+        // Both the selected text and prior full-book answers are disallowed before any answer HTTP.
         let restricted = try XCTUnwrap(store.followUp(first.id)); store.edit(restricted, text: "SCOPE12-NO-HTTP-SELECTED")
         store.send(restricted, library: library, local: false, scope: BookEvidenceScope(bookID: book.id, throughChapter: -1, throughOrdinal: -1))
         try await issue12Wait(store, id: restricted)
@@ -416,13 +624,12 @@ extension QuestionTests {
     func testIssue12HistoryBudgetAndProviderCapacity() async throws {
         var record = question()
         record.history = [QuestionHistoryTurn(id: UUID(), question: "long", answer: String(repeating: "大", count: 9000), state: .complete)]
-        XCTAssertThrowsError(try QuestionPlan.followUpPrompt(record)) { XCTAssertEqual($0 as? QuestionError, .budget) }
         do { _ = try await QuestionPlan.make(record, index: BookIndex(url: root.appendingPathComponent("unused.sqlite")), local: true, state: BookPreparationState()); XCTFail("History cannot be silently clipped") }
         catch { XCTAssertEqual(error as? QuestionError, .budget) }
         let library = try LibraryStore(root: root), configurations = try AIConfigurationStore(root: root, secrets: secrets)
         let configuration = AIConfiguration(name: "Capacity", format: .anthropic, address: "http://127.0.0.1:18772/v1", model: "capacity")
         try configurations.save(configuration, newKey: "not-a-real-credential")
-        let store = QuestionStore(root: root, secrets: secrets), submitted = question()
+        let store = QuestionStore(root: root, secrets: secrets), submitted = try await availableQuestion(library)
         store.save(submitted); store.send(submitted.id, library: library, local: true); try await issue12Wait(store, id: submitted.id)
         XCTAssertEqual(store.record(submitted.id)?.state, .incomplete)
         XCTAssertTrue(store.record(submitted.id)?.failure?.contains("容量") == true)
@@ -475,7 +682,7 @@ extension QuestionTests {
         for format in AIFormat.allCases {
             let configuration = AIConfiguration(name: "Truncation fixture", format: format, address: "http://127.0.0.1:18769/v1", model: "truncated")
             try configurations.save(configuration, newKey: "not-a-real-credential"); try configurations.select(configuration.id)
-            let record = question(); store.save(record); store.send(record.id, library: library, local: true)
+            let record = try await availableQuestion(library); store.save(record); store.send(record.id, library: library, local: true)
             for _ in 0..<100 where store.record(record.id)?.state != .incomplete { try await Task.sleep(nanoseconds: 50_000_000) }
             let saved = QuestionStore(root: root, secrets: secrets).record(record.id)
             XCTAssertEqual(saved?.state, .incomplete); XCTAssertTrue(saved?.answer.isEmpty == true)
@@ -497,7 +704,7 @@ extension QuestionTests {
         let configurations = try AIConfigurationStore(root: root, secrets: secrets)
         var configuration = AIConfiguration(name: "BG14", format: .openAI, address: "http://127.0.0.1:18774/v1", model: "bg-4")
         try configurations.save(configuration, newKey: "not-a-real-credential")
-        let store = QuestionStore(root: root, secrets: secrets), record = question()
+        let store = QuestionStore(root: root, secrets: secrets), record = try await availableQuestion(library)
         XCTAssertTrue(store.save(record)); store.send(record.id, library: library, local: true)
         try await Task.sleep(nanoseconds: 300_000_000)
         store.interruptAll(reason: "Injected expiry branch")
@@ -518,7 +725,7 @@ extension QuestionTests {
         let secrets = BackgroundTestSecrets(), library = try LibraryStore(root: root)
         let configuration = AIConfiguration(name: "BG14", format: .anthropic, address: "http://127.0.0.1:18774/v1", model: "bg-2")
         try AIConfigurationStore(root: root, secrets: secrets).save(configuration, newKey: "not-a-real-credential")
-        let store = QuestionStore(root: root, secrets: secrets), record = question()
+        let store = QuestionStore(root: root, secrets: secrets), record = try await availableQuestion(library)
         XCTAssertTrue(store.save(record)); store.send(record.id, library: library, local: true)
         try await Task.sleep(nanoseconds: 300_000_000)
         let file = root.appendingPathComponent("reading-questions.json"), backup = root.appendingPathComponent("before-fault.json")
@@ -539,11 +746,44 @@ extension QuestionTests {
         let secrets = BackgroundTestSecrets(), library = try LibraryStore(root: root)
         let configuration = AIConfiguration(name: "BG14", format: .openAI, address: "http://127.0.0.1:18774/v1", model: "disconnect")
         try AIConfigurationStore(root: root, secrets: secrets).save(configuration, newKey: "not-a-real-credential")
-        let store = QuestionStore(root: root, secrets: secrets), record = question()
+        let store = QuestionStore(root: root, secrets: secrets), record = try await availableQuestion(library)
         XCTAssertTrue(store.save(record)); store.send(record.id, library: library, local: true)
         try await Task.sleep(nanoseconds: 4_000_000_000)
         let restored = QuestionStore(root: root, secrets: secrets).record(record.id)
         XCTAssertEqual(restored?.state, .incomplete); XCTAssertEqual(restored?.question, record.question)
         XCTAssertEqual(restored?.answer, ""); XCTAssertTrue(restored?.citations.isEmpty == true)
     }
+}
+
+@MainActor
+final class QuestionMaterialTests: XCTestCase {
+    private func question(_ quote: String = "Safety requires review.") -> ReadingQuestion {
+        let book = Book(id: "material-test", title: "Original fixture", author: "")
+        let location = Locator(href: AnyURL(string: "chapter.xhtml")!, mediaType: .xhtml, title: "Chapter", text: .init(highlight: quote))
+        var record = ReadingQuestion(book: book, selection: QuestionEvidence(locator: location), neighbors: [])
+        record.question = "Why review?"; return record
+    }
+
+
+
+
+
+    func testIssue11PromptOmitsOnlyIdenticalContextAndKeepsHistoryAndReferences() throws {
+        var first = question().selection; first.id = "E1"
+        let second = QuestionEvidence(id: "E2", locator: try question("The spare cell was intact.").selection.location(), context: "Before: the cabinet was opened. The spare cell was intact. After: recording resumed.")
+        var record = question()
+        record.history = [QuestionHistoryTurn(id: UUID(), question: "Earlier question", answer: "Earlier explanation", state: .complete)]
+        let prompt = try QuestionPlan.prompt(record, evidence: [first, second], notice: "bounded")
+        let json = try XCTUnwrap(prompt.firstIndex(of: "\n")).utf16Offset(in: prompt)
+        let payload = try JSONSerialization.jsonObject(with: Data((prompt as NSString).substring(from: json + 1).utf8)) as! [String: Any]
+        let material = try XCTUnwrap(payload["evidence"] as? [[String: String]])
+        XCTAssertNil(material[0]["context"]); XCTAssertEqual(material[0]["quote"], first.quote)
+        XCTAssertEqual(material[1]["context"], second.context)
+        XCTAssertEqual(material.map { $0["id"]! }, ["E1", "E2"])
+        XCTAssertTrue(prompt.contains("Earlier question")); XCTAssertTrue(prompt.contains("Earlier explanation"))
+        XCTAssertEqual(try JSONDecoder().decode(QuestionEvidence.self, from: JSONEncoder().encode(second)), second)
+        let reply = String(data: try JSONSerialization.data(withJSONObject: ["answer": "Explanation", "citations": [["id": first.id, "quote": first.quote], ["id": second.id, "quote": second.quote]]]), encoding: .utf8)!
+        XCTAssertEqual(QuestionPlan.validate(reply, evidence: [first, second]).citations, [first, second])
+    }
+
 }

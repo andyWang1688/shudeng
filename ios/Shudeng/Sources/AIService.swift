@@ -196,7 +196,7 @@ final class AIConnection: NSObject, URLSessionTaskDelegate {
     func text(_ configuration: AIConfiguration, key: String, prompt: String, maxTokens: Int, timeout: TimeInterval) async throws -> String {
         try await response(configuration, key: key, prompt: prompt, maxTokens: maxTokens, timeout: timeout, checkingConnection: false).text
     }
-    private func response(_ configuration: AIConfiguration, key: String, prompt: String, maxTokens: Int, timeout: TimeInterval, checkingConnection: Bool) async throws -> (text: String, outputLimited: Bool) {
+    static func request(_ configuration: AIConfiguration, key: String, prompt: String, maxTokens: Int, timeout: TimeInterval) throws -> URLRequest {
         guard !configuration.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AIError.missing }
         guard key.rangeOfCharacter(from: .newlines) == nil else { throw AIError.authentication }
         let url = try Self.endpoint(for: configuration)
@@ -209,9 +209,20 @@ final class AIConnection: NSObject, URLSessionTaskDelegate {
             request.setValue(key, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         }
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
+        var body: [String: Any] = [
             "model": configuration.model, "messages": [["role": "user", "content": prompt]], "max_tokens": maxTokens, "stream": false
-        ])
+        ]
+        if configuration.model == "deepseek-flash",
+           url.scheme == "https", url.host == "api.deepseek.com", url.port == nil || url.port == 443,
+           (configuration.format == .openAI && ["/chat/completions", "/v1/chat/completions"].contains(url.path)) ||
+           (configuration.format == .anthropic && url.path == "/anthropic/v1/messages") {
+            body["thinking"] = ["type": "disabled"]
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+    private func response(_ configuration: AIConfiguration, key: String, prompt: String, maxTokens: Int, timeout: TimeInterval, checkingConnection: Bool) async throws -> (text: String, outputLimited: Bool) {
+        let request = try Self.request(configuration, key: key, prompt: prompt, maxTokens: maxTokens, timeout: timeout)
         let settings = URLSessionConfiguration.ephemeral
         settings.urlCache = nil
         settings.httpCookieStorage = nil
