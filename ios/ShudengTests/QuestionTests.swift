@@ -1,5 +1,6 @@
 import XCTest
 import ReadiumShared
+import ReadiumNavigator
 import UIKit
 @testable import Shudeng
 
@@ -76,6 +77,20 @@ final class QuestionPresentationTests: XCTestCase {
         for _ in 0..<200 where position.text != "阅读位置已保存" { try await Task.sleep(nanoseconds: 100_000_000) }
         XCTAssertEqual(position.text, "阅读位置已保存", "原生阅读器必须确认真实定位后才返回")
         XCTAssertTrue(back.isEnabled, "引用原文必须完成真实定位")
+        // A failed catalogue write must not silently destroy the citation reader.
+        let catalog = root.appendingPathComponent("library.json")
+        let backup = root.appendingPathComponent("library-before-fault.json")
+        try FileManager.default.moveItem(at: catalog, to: backup)
+        try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: false)
+        back.sendActions(for: .touchUpInside)
+        for _ in 0..<20 where reader.presentedViewController == nil { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual((reader.presentedViewController as? UIAlertController)?.title, "位置与设置尚未保存")
+        XCTAssertTrue(page.presentedViewController === reader)
+        try FileManager.default.removeItem(at: catalog)
+        try FileManager.default.moveItem(at: backup, to: catalog)
+        await withCheckedContinuation { continuation in
+            reader.dismiss(animated: false) { continuation.resume() }
+        }
         let readerImage = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) })
         readerImage.name = "native-citation-return-small"; readerImage.lifetime = .keepAlways; add(readerImage)
         back.sendActions(for: .touchUpInside)
@@ -88,6 +103,81 @@ final class QuestionPresentationTests: XCTestCase {
         XCTAssertEqual(library.questions.conversation(turn.conversation)?.turns.count, 2)
         let image = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) })
         image.name = "native-chat-small-returned"; image.lifetime = .keepAlways; add(image)
+    }
+
+    func testReaderReopensSameConversationAndAcceptsImmediateSecondCitation() async throws {
+        let library = try LibraryStore(root: root)
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "original-fixture", withExtension: "epub", subdirectory: "Fixtures"))
+        let book = try await library.importBook(from: fixture).book
+        await library.preparation.stop(bookID: book.id)
+        let publication = try await library.open(book)
+        let reader = try ReaderController(book: book, publication: publication, library: library)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 375, height: 667))
+        window.rootViewController = reader; window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        reader.loadViewIfNeeded()
+        let status = try XCTUnwrap(descendants(reader.view).first { $0.accessibilityIdentifier == "reading-save-status" } as? UILabel)
+        for _ in 0..<200 where status.text != "阅读位置已保存" { try await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertEqual(status.text, "阅读位置已保存")
+        let ask = try XCTUnwrap(descendants(reader.view).first { $0.accessibilityIdentifier == "reader-ask-book" } as? UIButton)
+        ask.sendActions(for: .touchUpInside)
+        try await Task.sleep(nanoseconds: 600_000_000)
+        let navigation = try XCTUnwrap(reader.presentedViewController as? UINavigationController)
+        let page = try XCTUnwrap(navigation.viewControllers.first as? QuestionController)
+        var record = try XCTUnwrap(library.questions.records.first)
+        var locator = Locator(href: AnyURL(string: "OEBPS/ch1.xhtml")!, mediaType: .xhtml, title: "第一章", text: .init(highlight: "C1-P01"))
+        locator.locations.cssSelector = "#c1-p1"
+        record.question = "读到的原文在哪里？"; record.answer = "可以回到原文核查。"; record.state = .complete
+        record.citations = [QuestionEvidence(id: "E1", locator: locator)]
+        XCTAssertTrue(library.questions.save(record))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        for _ in 0..<2 {
+            let source = try XCTUnwrap(descendants(page.view).first { $0.accessibilityIdentifier == "question-reference-0" } as? UIButton)
+            source.sendActions(for: .touchUpInside)
+            for _ in 0..<100 where reader.questionOrigin == nil { try await Task.sleep(nanoseconds: 50_000_000) }
+            XCTAssertNotNil(reader.questionOrigin, "引用必须在问答收起完成后开始定位")
+            for _ in 0..<200 where status.text != "阅读位置已保存" { try await Task.sleep(nanoseconds: 100_000_000) }
+            let back = try XCTUnwrap(descendants(reader.view).first { $0.accessibilityIdentifier == "reader-return-question" } as? UIButton)
+            XCTAssertTrue(back.isEnabled); back.sendActions(for: .touchUpInside)
+            for _ in 0..<200 where reader.presentedViewController == nil || navigation.isBeingPresented { try await Task.sleep(nanoseconds: 50_000_000) }
+            XCTAssertTrue(reader.presentedViewController === navigation)
+            XCTAssertTrue(navigation.viewControllers.first === page)
+        }
+        let close = try XCTUnwrap(page.navigationItem.rightBarButtonItem)
+        UIApplication.shared.sendAction(try XCTUnwrap(close.action), to: close.target, from: close, for: nil)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        ask.sendActions(for: .touchUpInside)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertTrue((reader.presentedViewController as? UINavigationController)?.viewControllers.first === page)
+        XCTAssertEqual(library.questions.conversation(record.conversation)?.turns.count, 1)
+    }
+
+    func testFailedCitationLoadStillOffersReturnToConversation() async throws {
+        let library = try LibraryStore(root: root)
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "original-fixture", withExtension: "epub", subdirectory: "Fixtures"))
+        let book = try await library.importBook(from: fixture).book
+        await library.preparation.stop(bookID: book.id)
+        let publication = try await library.open(book)
+        let reader = try ReaderController(book: book, publication: publication, library: library)
+        reader.questionOrigin = Locator(href: AnyURL(string: "OEBPS/ch1.xhtml")!, mediaType: .xhtml)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 375, height: 667))
+        window.rootViewController = reader; window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        reader.loadViewIfNeeded()
+        let status = try XCTUnwrap(descendants(reader.view).first { $0.accessibilityIdentifier == "reading-save-status" } as? UILabel)
+        for _ in 0..<200 where status.text != "阅读位置已保存" { try await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertEqual(status.text, "阅读位置已保存")
+        let navigator = try XCTUnwrap(reader.children.first as? EPUBNavigatorViewController)
+        reader.navigator(navigator, didFailToLoadResourceAt: RelativeURL(string: "OEBPS/ch1.xhtml")!, withError: .decoding("Fixture resource failure"))
+        XCTAssertEqual((reader.presentedViewController as? UIAlertController)?.title, "原文加载失败")
+        await withCheckedContinuation { continuation in
+            reader.dismiss(animated: false) { continuation.resume() }
+        }
+        let back = try XCTUnwrap(descendants(reader.view).first { $0.accessibilityIdentifier == "reader-return-question" } as? UIButton)
+        back.sendActions(for: .touchUpInside)
+        let confirmation = try XCTUnwrap(reader.presentedViewController as? UIAlertController)
+        XCTAssertEqual(confirmation.title, "位置与设置尚未保存")
+        XCTAssertTrue(confirmation.actions.contains { $0.title == "仍然返回问答" })
     }
 }
 

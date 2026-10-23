@@ -52,7 +52,7 @@ final class AboutController: UIViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     @objc private func aiSettings() { navigationController?.pushViewController(AISettingsController(root: root), animated: true) }
     override func viewDidLoad() {
-        super.viewDidLoad(); title = "我的"; navigationController?.navigationBar.prefersLargeTitles = true
+        super.viewDidLoad(); title = "我的"; navigationController?.navigationBar.prefersLargeTitles = false
         view.backgroundColor = BookDesign.paper
         let icon = UIImageView(image: UIImage(named: "BrandIcon")); icon.contentMode = .scaleAspectFit
         icon.layer.cornerRadius = 16; icon.clipsToBounds = true; icon.accessibilityIdentifier = "brand-icon"
@@ -164,7 +164,9 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "书架"
-        navigationController?.navigationBar.prefersLargeTitles = true
+        // Compact system titles remain visible on the supported small-screen
+        // runtime, where the scroll-edge large-title view can render empty.
+        navigationController?.navigationBar.prefersLargeTitles = false
         navigationItem.rightBarButtonItems = [importButton, sortButton]
         importButton.image = UIImage(systemName: "plus"); importButton.accessibilityLabel = "导入"
         sortButton.image = UIImage(systemName: "ellipsis.circle")

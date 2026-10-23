@@ -24,7 +24,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     private var observer: NSObjectProtocol?
     private var expanded: Set<UUID> = []
     private var rendered = ""
-    private var referenceFocus: UIView?
+    private var referenceFocus: (identifier: String, range: NSRange?)?
     private var returningFromReference = false
 
     init(library: LibraryStore, id: UUID, jump: ((Locator, Locator) -> Void)? = nil) {
@@ -98,7 +98,10 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         super.viewDidAppear(animated)
         if returningFromReference {
             returningFromReference = false
-            UIAccessibility.post(notification: .layoutChanged, argument: referenceFocus)
+            if let focus = referenceFocus, let target = descendant(with: focus.identifier, in: view) {
+                if let text = target as? UITextView, let range = focus.range { text.selectedRange = range }
+                UIAccessibility.post(notification: .layoutChanged, argument: target)
+            }
         }
     }
     private func refresh() {
@@ -168,7 +171,8 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         lamp.contentMode = .scaleAspectFit; lamp.backgroundColor = BookDesign.glow; lamp.layer.cornerRadius = 16
         lamp.widthAnchor.constraint(equalToConstant: 32).isActive = true; lamp.heightAnchor.constraint(equalToConstant: 32).isActive = true
         let heading = UIStackView(arrangedSubviews: [lamp, identity, UIView()]); heading.spacing = 8; heading.alignment = .center
-        let body = CitationAnswerView(answer: turn.answer, citations: turn.citations) { [weak self] evidence in
+        let body = CitationAnswerView(answer: turn.answer, citations: turn.citations) { [weak self] evidence, text, range in
+            self?.referenceFocus = (text.accessibilityIdentifier ?? "", range)
             self?.open(evidence, origin: turn)
         }
         body.textContainerInset = .zero; body.textContainer.lineFragmentPadding = 0
@@ -184,7 +188,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             button.contentHorizontalAlignment = .leading; button.titleLabel?.numberOfLines = 0
             button.accessibilityIdentifier = latest ? "question-reference-\(index)" : "question-reference-\(turn.id)-\(index)"
             button.addAction(UIAction { [weak self, weak button] _ in
-                self?.referenceFocus = button; self?.open(evidence, origin: turn)
+                self?.referenceFocus = (button?.accessibilityIdentifier ?? "", nil); self?.open(evidence, origin: turn)
             }, for: .touchUpInside)
             reply.addArrangedSubview(button)
         }
@@ -269,13 +273,18 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         }
     }
     func restoreReferenceFocus() { returningFromReference = true }
+    private func descendant(with identifier: String, in view: UIView) -> UIView? {
+        if view.accessibilityIdentifier == identifier { return view }
+        for child in view.subviews { if let found = descendant(with: identifier, in: child) { return found } }
+        return nil
+    }
 }
 
 /// Only verified citation IDs become links. Unverified model text cannot create destinations.
 private final class CitationAnswerView: UITextView, UITextViewDelegate {
     private let citations: [QuestionEvidence]
-    private let open: (QuestionEvidence) -> Void
-    init(answer: String, citations: [QuestionEvidence], open: @escaping (QuestionEvidence) -> Void) {
+    private let open: (QuestionEvidence, UITextView, NSRange) -> Void
+    init(answer: String, citations: [QuestionEvidence], open: @escaping (QuestionEvidence, UITextView, NSRange) -> Void) {
         self.citations = citations; self.open = open
         super.init(frame: .zero, textContainer: nil)
         isEditable = false; isScrollEnabled = false; backgroundColor = .clear; delegate = self
@@ -303,7 +312,7 @@ private final class CitationAnswerView: UITextView, UITextViewDelegate {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
-        if URL.scheme == "shudeng", URL.host == "citation", let index = Int(URL.lastPathComponent), citations.indices.contains(index) { open(citations[index]) }
+        if URL.scheme == "shudeng", URL.host == "citation", let index = Int(URL.lastPathComponent), citations.indices.contains(index) { open(citations[index], self, characterRange) }
         return false
     }
 }
@@ -348,7 +357,7 @@ final class QuestionHistoryController: UITableViewController {
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     override func viewDidLoad() {
         super.viewDidLoad(); title = "对话"; tableView.accessibilityIdentifier = "question-history"
-        navigationController?.navigationBar.prefersLargeTitles = true; BookDesign.table(tableView)
+        navigationController?.navigationBar.prefersLargeTitles = false; BookDesign.table(tableView)
         observer = NotificationCenter.default.addObserver(forName: QuestionStore.changed, object: library.questions, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.tableView.reloadData() }
         }

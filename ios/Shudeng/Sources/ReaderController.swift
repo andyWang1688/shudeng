@@ -56,10 +56,11 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     private static func preferences(_ settings: ReadingSettings) -> EPUBPreferences {
-        EPUBPreferences(backgroundColor: Color(hex: settings.dark ? "#20231F" : "#FCFBF8"),
+        let traits = UITraitCollection(userInterfaceStyle: settings.dark ? .dark : .light)
+        return EPUBPreferences(backgroundColor: Color(uiColor: BookDesign.paper.resolvedColor(with: traits)),
                         fontFamily: .serif, fontSize: Double(settings.fontSize) / 100, publisherStyles: false,
                         scroll: settings.scroll && settings.pageCurl != true,
-                        textColor: Color(hex: settings.dark ? "#F0F1E9" : "#282B26"), theme: settings.dark ? .dark : .light)
+                        textColor: Color(uiColor: BookDesign.ink.resolvedColor(with: traits)), theme: settings.dark ? .dark : .light)
     }
     private static func configuration(_ settings: ReadingSettings) -> EPUBNavigatorViewController.Configuration {
         .init(preferences: preferences(settings), editingActions: [
@@ -413,9 +414,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         present(sheet, animated: true)
     }
 
-    private func navigate(to target: Locator) {
-        guard (try? library.checkRevision(bookRevision, for: book.id)) != nil, library.sourceAvailable(for: book.id) else { return }
-        guard !loading, !navigating else { return }
+    private func navigate(to target: Locator, completion: ((Bool) -> Void)? = nil) {
+        guard (try? library.checkRevision(bookRevision, for: book.id)) != nil, library.sourceAvailable(for: book.id) else { completion?(false); return }
+        guard !loading, !navigating else { completion?(false); return }
         stopCurl()
         navigating = true
         navigationFailed = false
@@ -461,7 +462,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             if arrived { try? await Task.sleep(nanoseconds: 350_000_000) }
             navigating = false
             close.isEnabled = true
-            guard !loadFailed else { return }
+            guard !loadFailed else { completion?(false); return }
             browse.isEnabled = true
             configure.isEnabled = arrived
             content.isUserInteractionEnabled = arrived
@@ -477,6 +478,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 alert.addAction(UIAlertAction(title: "知道了", style: .default))
                 present(alert, animated: true)
             }
+            completion?(arrived)
         }
     }
 
@@ -647,12 +649,44 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         navigate(to: target)
     }
     @objc private func backToQuestion() {
-        if let referenceReturn { referenceReturn(); return }
+        guard loadFailed || (!loading && !navigating && !curlBusy) else { return }
+        persistPending()
+        if saveFailed {
+            let alert = UIAlertController(title: "位置与设置尚未保存", message: "返回问答后，未保存的阅读位置或设置可能丢失。", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "留在阅读页", style: .cancel))
+            alert.addAction(UIAlertAction(title: "仍然返回问答", style: .destructive) { [weak self] _ in self?.finishQuestionReturn() })
+            present(alert, animated: true)
+            return
+        }
+        finishQuestionReturn()
+    }
+    private func finishQuestionReturn() {
+        if let referenceReturn {
+            leaving = true
+            navigator.delegate = nil
+            stopCurl()
+            referenceReturn()
+            return
+        }
         guard let origin = questionOrigin, let activeQuestion else { return }
+        // A broken resource must not trap the conversation behind a successful
+        // navigation requirement. Its saved messages and draft remain usable.
+        if loadFailed { reopenQuestion(activeQuestion); return }
+        navigate(to: origin) { [weak self] arrived in
+            guard let self, arrived else { return }
+            Task { @MainActor in
+                // Curl mode prepares neighbours after Readium has arrived. Do not
+                // reopen the sheet until a second citation can actually navigate.
+                for _ in 0..<200 where self.curlBusy { try? await Task.sleep(nanoseconds: 50_000_000) }
+                guard !self.loading, !self.curlBusy else { return }
+                self.reopenQuestion(activeQuestion)
+            }
+        }
+    }
+    private func reopenQuestion(_ question: UINavigationController) {
         questionOrigin = nil
-        navigate(to: origin)
-        (activeQuestion.viewControllers.first as? QuestionController)?.restoreReferenceFocus()
-        present(activeQuestion, animated: true)
+        (question.viewControllers.first as? QuestionController)?.restoreReferenceFocus()
+        present(question, animated: true)
     }
     override var keyCommands: [UIKeyCommand]? {
         questionOrigin == nil ? super.keyCommands : [UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(backToQuestion))]

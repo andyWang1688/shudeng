@@ -11,7 +11,7 @@ final class NotesController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "笔记"
-        navigationController?.navigationBar.prefersLargeTitles = true
+        navigationController?.navigationBar.prefersLargeTitles = false
         BookDesign.table(tableView)
         tableView.accessibilityIdentifier = "notes"
         filter.accessibilityIdentifier = "note-filter"; filter.selectedSegmentIndex = 0
