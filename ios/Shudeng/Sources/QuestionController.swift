@@ -229,7 +229,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         guard let record = library.questions.record(id) else { return }
         do {
             guard library.sourceAvailable(for: record.bookID) else { throw LibraryError.missing }
-            let store = try AIConfigurationStore(root: library.root)
+            let store = try AIConfigurationStore(root: library.root, secrets: library.secrets)
             guard let configuration = store.configurations.first(where: { $0.id == store.selectedID }) else { throw QuestionError.configuration }
             let ready = library.preparation.states[record.bookID]?.ready == true
             let continuing = (record.turnIndex ?? 0) > 0

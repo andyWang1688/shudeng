@@ -7,8 +7,31 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         BookDesign.install()
         let window = UIWindow(frame: UIScreen.main.bounds)
-        window.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: UserDefaults.standard.integer(forKey: "interface-style")) ?? .unspecified
         self.window = window
+        if let fixture = DesignFixture.request(in: CommandLine.arguments) {
+            do {
+                let session = try DesignFixture.makeSession(fixture)
+                window.overrideUserInterfaceStyle = fixture.theme
+                window.rootViewController = makeApplicationTabs(
+                    library: session.library,
+                    root: session.root,
+                    secrets: session.secrets
+                )
+                window.makeKeyAndVisible()
+                Task { @MainActor in
+                    do { try await DesignFixture.seed(session) }
+                    catch { print("DESIGN_FIXTURE_ERROR \(error.localizedDescription)") }
+                }
+            } catch {
+                let controller = UIViewController()
+                controller.view.backgroundColor = BookDesign.paper
+                window.rootViewController = controller
+                window.makeKeyAndVisible()
+                print("DESIGN_FIXTURE_ERROR \(error.localizedDescription)")
+            }
+            return true
+        }
+        window.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: UserDefaults.standard.integer(forKey: "interface-style")) ?? .unspecified
         do {
             var root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Shudeng")
 #if DEBUG
@@ -17,19 +40,10 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                 root = FileManager.default.temporaryDirectory.appendingPathComponent("ShudengReadingTests")
             }
 #endif
-            let library = try LibraryStore(root: root)
+            let secrets = KeychainSecrets()
+            let library = try LibraryStore(root: root, secrets: secrets)
             library.prepareBooks()
-            let tabs = UITabBarController()
-            let shelf = UINavigationController(rootViewController: LibraryController(library: library))
-            shelf.tabBarItem = UITabBarItem(title: "书架", image: UIImage(systemName: "books.vertical"), tag: 0)
-            let notes = UINavigationController(rootViewController: NotesController(library: library))
-            notes.tabBarItem = UITabBarItem(title: "笔记", image: UIImage(systemName: "square.and.pencil"), tag: 1)
-            let chats = UINavigationController(rootViewController: QuestionHistoryController(library: library))
-            chats.tabBarItem = UITabBarItem(title: "对话", image: UIImage(systemName: "bubble.left.and.bubble.right"), tag: 2)
-            let about = AboutController(root: root)
-            about.tabBarItem = UITabBarItem(title: "我的", image: UIImage(systemName: "person.crop.circle"), tag: 3)
-            tabs.viewControllers = [shelf, notes, chats, UINavigationController(rootViewController: about)]
-            window.rootViewController = tabs
+            window.rootViewController = makeApplicationTabs(library: library, root: root, secrets: secrets)
         } catch {
             let controller = UIViewController()
             controller.view.backgroundColor = .systemBackground
@@ -45,15 +59,43 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 }
 
+@MainActor
+func makeApplicationTabs(library: LibraryStore, root: URL, secrets: AISecrets) -> UITabBarController {
+    let tabs = UITabBarController()
+    tabs.view.accessibilityIdentifier = "app-tabs"
+    let shelf = UINavigationController(rootViewController: LibraryController(library: library))
+    shelf.tabBarItem = UITabBarItem(title: "书架", image: UIImage(systemName: "books.vertical"), tag: 0)
+    shelf.tabBarItem.accessibilityIdentifier = "tab-library"
+    let notes = UINavigationController(rootViewController: NotesController(library: library))
+    notes.tabBarItem = UITabBarItem(title: "笔记", image: UIImage(systemName: "square.and.pencil"), tag: 1)
+    notes.tabBarItem.accessibilityIdentifier = "tab-notes"
+    let chats = UINavigationController(rootViewController: QuestionHistoryController(library: library))
+    chats.tabBarItem = UITabBarItem(title: "对话", image: UIImage(systemName: "bubble.left.and.bubble.right"), tag: 2)
+    chats.tabBarItem.accessibilityIdentifier = "tab-conversations"
+    let profile = AboutController(root: root, secrets: secrets)
+    profile.tabBarItem = UITabBarItem(title: "我的", image: UIImage(systemName: "person.crop.circle"), tag: 3)
+    profile.tabBarItem.accessibilityIdentifier = "tab-profile"
+    tabs.viewControllers = [shelf, notes, chats, UINavigationController(rootViewController: profile)]
+    return tabs
+}
+
 final class AboutController: UIViewController {
     private let root: URL
+    private let secrets: AISecrets
     private let service = BookDesign.label(nil, size: 14, colour: BookDesign.secondary)
-    init(root: URL) { self.root = root; super.init(nibName: nil, bundle: nil) }
+    init(root: URL, secrets: AISecrets = KeychainSecrets()) {
+        self.root = root
+        self.secrets = secrets
+        super.init(nibName: nil, bundle: nil)
+    }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    @objc private func aiSettings() { navigationController?.pushViewController(AISettingsController(root: root), animated: true) }
+    @objc private func aiSettings() {
+        navigationController?.pushViewController(AISettingsController(root: root, secrets: secrets), animated: true)
+    }
     override func viewDidLoad() {
         super.viewDidLoad(); title = "我的"; navigationController?.navigationBar.prefersLargeTitles = false
         view.backgroundColor = BookDesign.paper
+        view.accessibilityIdentifier = "profile-surface"
         let icon = UIImageView(image: UIImage(named: "BrandIcon")); icon.contentMode = .scaleAspectFit
         icon.layer.cornerRadius = 16; icon.clipsToBounds = true; icon.accessibilityIdentifier = "brand-icon"
         icon.widthAnchor.constraint(equalToConstant: 68).isActive = true; icon.heightAnchor.constraint(equalToConstant: 68).isActive = true
@@ -95,7 +137,7 @@ final class AboutController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         do {
-            let store = try AIConfigurationStore(root: root)
+            let store = try AIConfigurationStore(root: root, secrets: secrets)
             let current = store.configurations.first { $0.id == store.selectedID }
             service.text = current.map { $0.name + " · " + $0.model } ?? "尚未配置，阅读仍可使用"
         } catch { service.text = "服务配置暂时无法读取；已有配置未覆盖" }

@@ -95,6 +95,7 @@ final class LibraryStore {
     static let changed = Notification.Name("LibraryChanged")
     private(set) var books: [Book] = []
     let root: URL
+    let secrets: AISecrets
     lazy var preparation = BookPreparation(root: root)
     let questions: QuestionStore
     private var operations: Set<String> = []
@@ -111,6 +112,7 @@ final class LibraryStore {
 
     init(root: URL, secrets: AISecrets = KeychainSecrets()) throws {
         self.root = root
+        self.secrets = secrets
         let filesURL = root.appendingPathComponent("Books", isDirectory: true)
         try fileManager.createDirectory(at: filesURL, withIntermediateDirectories: true)
         questions = QuestionStore(root: root, secrets: secrets)

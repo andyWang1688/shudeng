@@ -2,10 +2,15 @@ import UIKit
 
 final class AISettingsController: UITableViewController {
     private let root: URL
+    private let secrets: AISecrets
     private var store: AIConfigurationStore?
     private var failure: String?
     private let disclosure = "阅读问答时，你的问题、必要书内原文（可能来自其他章节）及所需对话会发送到你所选的服务地址。本地检索不代表问答全离线。连接检查仅发送固定短文字，也可能产生服务费用。书灯不提供或代付 AI 服务。"
-    init(root: URL) { self.root = root; super.init(style: .insetGrouped) }
+    init(root: URL, secrets: AISecrets = KeychainSecrets()) {
+        self.root = root
+        self.secrets = secrets
+        super.init(style: .insetGrouped)
+    }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -16,7 +21,7 @@ final class AISettingsController: UITableViewController {
         load()
     }
     private func load() {
-        do { store = try AIConfigurationStore(root: root); failure = nil }
+        do { store = try AIConfigurationStore(root: root, secrets: secrets); failure = nil }
         catch { failure = "配置读取失败，已有内容未覆盖。点此重试；阅读仍可使用。" }
         navigationItem.rightBarButtonItem?.isEnabled = store != nil
         tableView.reloadData()

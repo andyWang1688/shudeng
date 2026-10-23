@@ -18,6 +18,14 @@
 		<dict><key>isa</key><string>PBXFileReference</string><key>lastKnownFileType</key><string>folder.assetcatalog</string><key>path</key><string>Shudeng/Resources/Assets.xcassets</string><key>sourceTree</key><string>SOURCE_ROOT</string></dict>
 		<key>A23000000000000000000003</key>
 		<dict><key>isa</key><string>PBXBuildFile</string><key>fileRef</key><string>A23000000000000000000002</string></dict>
+		<key>A24000000000000000000000</key>
+		<dict><key>isa</key><string>PBXFileReference</string><key>lastKnownFileType</key><string>sourcecode.swift</string><key>path</key><string>Shudeng/Sources/DesignFixture.swift</string><key>sourceTree</key><string>SOURCE_ROOT</string></dict>
+		<key>A24000000000000000000001</key>
+		<dict><key>isa</key><string>PBXBuildFile</string><key>fileRef</key><string>A24000000000000000000000</string></dict>
+		<key>A24000000000000000000002</key>
+		<dict><key>isa</key><string>PBXFileReference</string><key>lastKnownFileType</key><string>sourcecode.swift</string><key>path</key><string>DesignFixtureTests.swift</string><key>sourceTree</key><string>&lt;group&gt;</string></dict>
+		<key>A24000000000000000000003</key>
+		<dict><key>isa</key><string>PBXBuildFile</string><key>fileRef</key><string>A24000000000000000000002</string></dict>
 	<key>A10000000000000000000007</key>
 	<dict>
 		<key>fileRef</key>
@@ -870,6 +878,7 @@
 				<string>8DA87EC64F9B436498C342F7</string>
 
 <string>A10000000000000000000003</string>
+<string>A24000000000000000000003</string>
 </array>
 			<key>isa</key>
 			<string>PBXSourcesBuildPhase</string>
@@ -1219,6 +1228,7 @@
 <string>A10000000000000000000001</string>
 
 <string>A10000000000000000000007</string>
+<string>A24000000000000000000001</string>
 </array>
 			<key>isa</key>
 			<string>PBXSourcesBuildPhase</string>
@@ -1279,6 +1289,7 @@
 <string>A10000000000000000000000</string>
 
 <string>A10000000000000000000006</string>
+<string>A24000000000000000000000</string>
 </array>
 			<key>isa</key>
 			<string>PBXGroup</string>
@@ -1447,6 +1458,7 @@
 				<string>000000000000000000000700</string>
 
 <string>A10000000000000000000002</string>
+<string>A24000000000000000000002</string>
 </array>
 			<key>isa</key>
 			<string>PBXGroup</string>

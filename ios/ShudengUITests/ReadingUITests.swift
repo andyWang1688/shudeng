@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 extension ReadingUITests {
     // The host backs up the original data, explicitly launches the isolated app,
@@ -233,6 +234,75 @@ extension ReadingUITests {
         XCTAssertLessThanOrEqual(input.frame.maxY, keyboard.frame.minY)
         let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         shot.name = "issue17-small-question-keyboard-visible"; shot.lifetime = .keepAlways; add(shot)
+    }
+}
+
+extension ReadingUITests {
+    func testIssue24IsolatedDesignFixtureSurface() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["红楼梦"].waitForExistence(timeout: 15))
+        attachDesignSurface("issue24-shelf-375-light", app)
+
+        tab("tab-notes", label: "笔记", in: app).tap()
+        XCTAssertTrue(
+            app.tables["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", "灯把书页照亮，也把问题留在纸上。"))
+                .firstMatch.waitForExistence(timeout: 5)
+        )
+        attachDesignSurface("issue24-notes-375-light", app)
+
+        tab("tab-conversations", label: "对话", in: app).tap()
+        XCTAssertTrue(
+            app.tables["question-history"].cells.containing(
+                NSPredicate(format: "label CONTAINS %@", "这句话里的“灯”指什么？")
+            ).firstMatch.waitForExistence(timeout: 5)
+        )
+        attachDesignSurface("issue24-conversations-375-light", app)
+
+        tab("tab-profile", label: "我的", in: app).tap()
+        XCTAssertTrue(app.otherElements["profile-surface"].waitForExistence(timeout: 5))
+        attachDesignSurface("issue24-profile-375-light", app)
+
+        tab("tab-library", label: "书架", in: app).tap()
+        let book = app.collectionViews["library"].cells
+            .containing(NSPredicate(format: "label CONTAINS %@", "红楼梦"))
+            .firstMatch
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        waitForBody(app)
+        XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 5))
+        attachDesignSurface("issue24-reader-375-light", app)
+        app.buttons["reader-ask-book"].tap()
+        XCTAssertTrue(app.textViews["question-input"].waitForExistence(timeout: 5))
+        attachDesignSurface("issue24-question-375-light", app)
+
+        app.terminate()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["红楼梦"].waitForExistence(timeout: 15))
+        attachDesignSurface("issue24-shelf-375-dark-baseline", app)
+    }
+
+    private func tab(_ identifier: String, label: String, in app: XCUIApplication) -> XCUIElement {
+        let identified = app.buttons[identifier].firstMatch
+        return identified.exists ? identified : app.tabBars.buttons[label].firstMatch
+    }
+
+    /// The status bar is not part of the designed application surface.
+    private func attachDesignSurface(_ name: String, _ app: XCUIApplication) {
+        let source = XCUIScreen.main.screenshot().image
+        let statusHeight: CGFloat = 20
+        let size = CGSize(width: source.size.width, height: max(0, source.size.height - statusHeight))
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            source.draw(at: CGPoint(x: 0, y: -statusHeight))
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 }
 
