@@ -2,6 +2,7 @@ import Foundation
 import ReadiumShared
 import UIKit
 
+#if DEBUG
 /// Deterministic, disposable data for interface acceptance tests.
 ///
 /// The fixture is only created when an explicit launch argument is present.
@@ -412,3 +413,4 @@ private extension Data {
         Swift.withUnsafeBytes(of: &value) { append(contentsOf: $0) }
     }
 }
+#endif

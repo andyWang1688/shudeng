@@ -8,6 +8,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         BookDesign.install()
         let window = UIWindow(frame: UIScreen.main.bounds)
         self.window = window
+#if DEBUG
         if let fixture = DesignFixture.request(in: CommandLine.arguments) {
             do {
                 let session = try DesignFixture.makeSession(fixture)
@@ -31,6 +32,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             }
             return true
         }
+#endif
         window.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: UserDefaults.standard.integer(forKey: "interface-style")) ?? .unspecified
         do {
             var root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Shudeng")

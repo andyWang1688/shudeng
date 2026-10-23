@@ -293,7 +293,12 @@ extension ReadingUITests {
 
     /// The status bar is not part of the designed application surface.
     private func attachDesignSurface(_ name: String, _ app: XCUIApplication) {
+        // The design's longest state transition is 240 ms. Capture only after
+        // it has completed so navigation and sheet screenshots are stable.
+        Thread.sleep(forTimeInterval: 0.35)
         let source = XCUIScreen.main.screenshot().image
+        // UIImage sizes and drawing coordinates are points. Cropping 20 pt
+        // removes the 40-pixel status bar on the 2x Shudeng Small display.
         let statusHeight: CGFloat = 20
         let size = CGSize(width: source.size.width, height: max(0, source.size.height - statusHeight))
         let image = UIGraphicsImageRenderer(size: size).image { _ in

@@ -10,12 +10,12 @@
 
 2026-10-23 已建立显式测试接缝：
 
-- 启动参数 `--design-fixture=normal` 生成隔离的临时 EPUB 书库、封面回退、笔记、书签、两组对话和仅内存 AI 配置；`--design-fixture=empty` 生成空书架状态。
+- 启动参数 `--design-fixture=normal` 仅存在于 DEBUG 测试构建，生成隔离的临时 EPUB 书库、封面回退、笔记、书签、两组对话和仅内存 AI 配置；`--design-fixture=empty` 生成空书架状态。
 - 设计夹具使用内存密钥实现，不读取真实 Keychain；生产启动路径不读取夹具。
 - 四栏保留稳定测试标识 `tab-library`、`tab-notes`、`tab-conversations`、`tab-profile`，后续自定义底栏必须继续提供同一接缝。
 - 单元测试使用同一组真实 UIKit 页面控制器渲染 375 × 667 和 390 × 844、浅色和深色共 16 张固定尺寸截图；应用级测试在唯一 Shudeng Small 上覆盖四栏、阅读和问答入口。
 
-当前证据保存在本机 `.scratch/test-evidence/issue24/final3.xcresult`：3 tests / 0 failures，包含 16 张固定尺寸渲染、夹具显式启用和 Shudeng Small 应用级接缝。这些截图记录的是**视觉未通过基线**，不改变下方任何页面的失败状态，也不证明 390 内容尺寸下的安全区和状态栏已验收。
+当前证据保存在本机 `.scratch/test-evidence/issue24/final4.xcresult`：3 tests / 0 failures，包含 16 张固定尺寸渲染、夹具显式启用和 Shudeng Small 应用级接缝。应用级截图在 240ms 设计动效结束后取得，并按 point 裁掉 20pt 系统状态栏。Release 模拟器构建通过，二进制中不存在 `design-fixture` 或夹具根目录日志。这些截图记录的是**视觉未通过基线**，不改变下方任何页面的失败状态，也不证明 390 内容尺寸下的安全区和状态栏已验收。
 
 ## 当前结论
 
