@@ -43,8 +43,9 @@ final class QuestionPresentationTests: XCTestCase {
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "original-fixture", withExtension: "epub", subdirectory: "Fixtures"))
         let book = try await library.importBook(from: fixture).book
         await library.preparation.stop(bookID: book.id)
-        let locator = Locator(href: AnyURL(string: "OEBPS/ch1.xhtml")!, mediaType: .xhtml, title: "第一章",
-                              locations: .init(cssSelector: "#c1-p1"), text: .init(highlight: "C1-P01"))
+        var locator = Locator(href: AnyURL(string: "OEBPS/ch1.xhtml")!, mediaType: .xhtml, title: "第一章",
+                              text: .init(highlight: "C1-P01"))
+        locator.locations.cssSelector = "#c1-p1"
         let evidence = QuestionEvidence(id: "E1", locator: locator)
         var turn = ReadingQuestion(book: book, selection: evidence, neighbors: [])
         turn.question = "原文为何要保留上下文？"; turn.answer = String(repeating: "阅读需要核查原文，而不是只看解释。", count: 18)
@@ -68,9 +69,12 @@ final class QuestionPresentationTests: XCTestCase {
         for _ in 0..<100 where page.presentedViewController == nil { try await Task.sleep(nanoseconds: 100_000_000) }
         let reader = try XCTUnwrap(page.presentedViewController as? ReaderController)
         reader.loadViewIfNeeded()
+        try await Task.sleep(nanoseconds: 700_000_000)
         let back = try XCTUnwrap(descendants(reader.view).first { $0.accessibilityIdentifier == "reader-return-question" } as? UIButton)
         XCTAssertEqual(back.title(for: .normal), "返回问答")
-        for _ in 0..<150 where !back.isEnabled { try await Task.sleep(nanoseconds: 100_000_000) }
+        let position = try XCTUnwrap(descendants(reader.view).first { $0.accessibilityIdentifier == "reading-save-status" } as? UILabel)
+        for _ in 0..<200 where position.text != "阅读位置已保存" { try await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertEqual(position.text, "阅读位置已保存", "原生阅读器必须确认真实定位后才返回")
         XCTAssertTrue(back.isEnabled, "引用原文必须完成真实定位")
         let readerImage = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) })
         readerImage.name = "native-citation-return-small"; readerImage.lifetime = .keepAlways; add(readerImage)
