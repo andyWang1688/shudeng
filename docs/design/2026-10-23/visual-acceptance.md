@@ -15,7 +15,7 @@
 - 四栏保留稳定测试标识 `tab-library`、`tab-notes`、`tab-conversations`、`tab-profile`，后续自定义底栏必须继续提供同一接缝。
 - 单元测试使用同一组真实 UIKit 页面控制器渲染 375 × 667 和 390 × 844、浅色和深色共 16 张固定尺寸截图；应用级测试在唯一 Shudeng Small 上覆盖四栏、阅读和问答入口。
 
-当前证据保存在本机 `.scratch/test-evidence/issue24/final4.xcresult`：3 tests / 0 failures，包含 16 张固定尺寸渲染、夹具显式启用和 Shudeng Small 应用级接缝。应用级截图在 240ms 设计动效结束后取得，并按 point 裁掉 20pt 系统状态栏。Release 模拟器构建通过，二进制中不存在 `design-fixture` 或夹具根目录日志。这些截图记录的是**视觉未通过基线**，不改变下方任何页面的失败状态，也不证明 390 内容尺寸下的安全区和状态栏已验收。
+当前证据保存在本机 `.scratch/test-evidence/issue24/final5.xcresult`：3 tests / 0 failures，包含 16 张固定尺寸渲染、7 张 Shudeng Small 应用级截图和夹具显式启用。应用级截图在 240ms 设计动效结束后取得，并按 point 裁掉 20pt 系统状态栏。Release 模拟器构建通过，二进制中不存在 `design-fixture`、`DESIGN_FIXTURE_ROOT` 或 `ShudengDesignFixture`。这些截图记录的是**视觉未通过基线**，不改变下方任何页面的失败状态，也不证明 390 内容尺寸下的安全区和状态栏已验收。
 
 ## 当前结论
 
