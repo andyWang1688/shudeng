@@ -10,6 +10,14 @@
 	<string>46</string>
 	<key>objects</key>
 	<dict>
+		<key>A23000000000000000000000</key>
+		<dict><key>isa</key><string>PBXFileReference</string><key>lastKnownFileType</key><string>sourcecode.swift</string><key>path</key><string>Shudeng/Sources/DesignSystem.swift</string><key>sourceTree</key><string>SOURCE_ROOT</string></dict>
+		<key>A23000000000000000000001</key>
+		<dict><key>isa</key><string>PBXBuildFile</string><key>fileRef</key><string>A23000000000000000000000</string></dict>
+		<key>A23000000000000000000002</key>
+		<dict><key>isa</key><string>PBXFileReference</string><key>lastKnownFileType</key><string>folder.assetcatalog</string><key>path</key><string>Shudeng/Resources/Assets.xcassets</string><key>sourceTree</key><string>SOURCE_ROOT</string></dict>
+		<key>A23000000000000000000003</key>
+		<dict><key>isa</key><string>PBXBuildFile</string><key>fileRef</key><string>A23000000000000000000002</string></dict>
 	<key>A10000000000000000000007</key>
 	<dict>
 		<key>fileRef</key>
@@ -975,6 +983,7 @@
 			<string>2147483647</string>
 			<key>files</key>
 			<array>
+				<string>A23000000000000000000003</string>
 				<string>F837CFB7248AAD60FD365496</string>
 
 <string>A10000000000000000000005</string>
@@ -1196,6 +1205,7 @@
 			<key>files</key>
 			<array>
 				<string>A17000000000000000000003</string>
+				<string>A23000000000000000000001</string>
 				<string>A17000000000000000000001</string>
 				<string>2CFBA6EF4529AF2B90C53EB3</string>
 				<string>0000000000000000000001F5</string>

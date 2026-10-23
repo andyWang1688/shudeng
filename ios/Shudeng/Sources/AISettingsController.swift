@@ -10,6 +10,7 @@ final class AISettingsController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "AI 服务"
+        BookDesign.table(tableView)
         tableView.accessibilityIdentifier = "ai-services"
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "添加", style: .plain, target: self, action: #selector(add))
         load()

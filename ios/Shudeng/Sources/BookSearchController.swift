@@ -26,6 +26,7 @@ final class BookSearchController: UITableViewController, UISearchBarDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "书内搜索"
+        BookDesign.table(tableView)
         search.placeholder = "当前书关键词"
         search.accessibilityIdentifier = "book-search-query"
         search.searchTextField.accessibilityIdentifier = "book-search-query"

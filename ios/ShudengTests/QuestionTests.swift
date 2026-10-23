@@ -1,6 +1,91 @@
 import XCTest
 import ReadiumShared
+import UIKit
 @testable import Shudeng
+
+/// Exercise the visible UIKit surface; the library is a disposable test library.
+@MainActor
+final class QuestionPresentationTests: XCTestCase {
+    private var root: URL!
+    override func setUp() async throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    }
+    override func tearDown() async throws { try? FileManager.default.removeItem(at: root) }
+
+    func testSavedTurnSeparatesQuestionFromAIAndKeepsFollowUpDraft() async throws {
+        let library = try LibraryStore(root: root)
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "original-fixture", withExtension: "epub", subdirectory: "Fixtures"))
+        let book = try await library.importBook(from: fixture).book
+        await library.preparation.stop(bookID: book.id)
+        let location = Locator(href: AnyURL(string: "chapter.xhtml")!, mediaType: .xhtml,
+                               title: "第一章", text: .init(highlight: "可核查的原文"))
+        var record = ReadingQuestion(book: book, selection: QuestionEvidence(locator: location), neighbors: [])
+        record.question = "这句话是什么意思？"; record.answer = "这里是书灯的解释。"; record.state = .complete
+        XCTAssertTrue(library.questions.save(record), "测试必须先经真实保存边界创建记录")
+        let page = QuestionController(library: library, id: record.id)
+        page.loadViewIfNeeded()
+        let visible = descendants(page.view)
+        let question = try XCTUnwrap(visible.first { $0.accessibilityIdentifier == "question-user-\(record.id)" } as? UILabel)
+        XCTAssertEqual(question.text, "这句话是什么意思？")
+        XCTAssertTrue(visible.contains { ($0 as? UILabel)?.text == "书灯 · AI" })
+        XCTAssertFalse(visible.contains { ($0 as? UILabel)?.text == "你" })
+        XCTAssertEqual((visible.first { $0.accessibilityIdentifier == "question-answer" } as? UITextView)?.text,
+                       "这里是书灯的解释。")
+        XCTAssertTrue((visible.first { $0.accessibilityIdentifier == "question-input" } as? UITextView)?.text.isEmpty == true,
+                      "已发送的问题不能再次占用追问输入框")
+    }
+    private func descendants(_ view: UIView) -> [UIView] {
+        [view] + view.subviews.flatMap(descendants)
+    }
+
+    func testCitationRoundtripPreservesFollowUpDraftAttachmentAndScroll() async throws {
+        let library = try LibraryStore(root: root)
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "original-fixture", withExtension: "epub", subdirectory: "Fixtures"))
+        let book = try await library.importBook(from: fixture).book
+        await library.preparation.stop(bookID: book.id)
+        let locator = Locator(href: AnyURL(string: "OEBPS/ch1.xhtml")!, mediaType: .xhtml, title: "第一章",
+                              locations: .init(cssSelector: "#c1-p1"), text: .init(highlight: "C1-P01"))
+        let evidence = QuestionEvidence(id: "E1", locator: locator)
+        var turn = ReadingQuestion(book: book, selection: evidence, neighbors: [])
+        turn.question = "原文为何要保留上下文？"; turn.answer = String(repeating: "阅读需要核查原文，而不是只看解释。", count: 18)
+        turn.state = .complete; turn.citations = [evidence]
+        XCTAssertTrue(library.questions.save(turn))
+        let draft = try XCTUnwrap(library.questions.followUp(turn.conversation))
+        library.questions.edit(draft, text: "还没发送的追问")
+        let page = QuestionController(library: library, id: draft)
+        let navigation = UINavigationController(rootViewController: page)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 375, height: 667))
+        window.rootViewController = navigation; window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        page.loadViewIfNeeded(); window.layoutIfNeeded()
+        let attachment = try XCTUnwrap(descendants(page.view).first { $0.accessibilityIdentifier == "question-attachment-\(turn.id)" } as? UIButton)
+        attachment.sendActions(for: .touchUpInside)
+        let scroll = try XCTUnwrap(descendants(page.view).first { $0.accessibilityIdentifier == "question-scroll" } as? UIScrollView)
+        window.layoutIfNeeded(); scroll.setContentOffset(CGPoint(x: 0, y: 100), animated: false)
+        let offset = scroll.contentOffset
+        let source = try XCTUnwrap(descendants(page.view).first { $0.accessibilityIdentifier == "question-reference-\(turn.id)-0" } as? UIButton)
+        source.sendActions(for: .touchUpInside)
+        for _ in 0..<100 where page.presentedViewController == nil { try await Task.sleep(nanoseconds: 100_000_000) }
+        let reader = try XCTUnwrap(page.presentedViewController as? ReaderController)
+        reader.loadViewIfNeeded()
+        let back = try XCTUnwrap(descendants(reader.view).first { $0.accessibilityIdentifier == "reader-return-question" } as? UIButton)
+        XCTAssertEqual(back.title(for: .normal), "返回问答")
+        for _ in 0..<150 where !back.isEnabled { try await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertTrue(back.isEnabled, "引用原文必须完成真实定位")
+        let readerImage = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) })
+        readerImage.name = "native-citation-return-small"; readerImage.lifetime = .keepAlways; add(readerImage)
+        back.sendActions(for: .touchUpInside)
+        for _ in 0..<30 where page.presentedViewController != nil { try await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertNil(page.presentedViewController)
+        let input = try XCTUnwrap(descendants(page.view).first { $0.accessibilityIdentifier == "question-input" } as? UITextView)
+        XCTAssertEqual(input.text, "还没发送的追问")
+        XCTAssertEqual(scroll.contentOffset.y, offset.y, accuracy: 1)
+        XCTAssertTrue(descendants(page.view).contains { $0.accessibilityIdentifier == "question-selection-\(turn.id)" })
+        XCTAssertEqual(library.questions.conversation(turn.conversation)?.turns.count, 2)
+        let image = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) })
+        image.name = "native-chat-small-returned"; image.lifetime = .keepAlways; add(image)
+    }
+}
 
 final class QuestionKeywordTests: XCTestCase {
     func testKeywordsKeepExactChineseTermsAtEndOfQuestion() {

@@ -5,7 +5,9 @@ import UniformTypeIdentifiers
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        BookDesign.install()
         let window = UIWindow(frame: UIScreen.main.bounds)
+        window.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: UserDefaults.standard.integer(forKey: "interface-style")) ?? .unspecified
         self.window = window
         do {
             var root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Shudeng")
@@ -45,35 +47,68 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
 final class AboutController: UIViewController {
     private let root: URL
+    private let service = BookDesign.label(nil, size: 14, colour: BookDesign.secondary)
     init(root: URL) { self.root = root; super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     @objc private func aiSettings() { navigationController?.pushViewController(AISettingsController(root: root), animated: true) }
     override func viewDidLoad() {
-        super.viewDidLoad()
-        title = "我的"
-        view.backgroundColor = .systemBackground
-        let button = UIButton(type: .system)
-        button.setTitle("第三方许可", for: .normal)
-        button.addTarget(self, action: #selector(licenses), for: .touchUpInside)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        let ai = UIButton(type: .system)
-        ai.setTitle("AI 服务", for: .normal)
-        ai.addTarget(self, action: #selector(aiSettings), for: .touchUpInside)
-        ai.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(ai)
-        NSLayoutConstraint.activate([ai.centerXAnchor.constraint(equalTo: view.centerXAnchor), ai.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 24)])
-        view.addSubview(button)
-        NSLayoutConstraint.activate([button.centerXAnchor.constraint(equalTo: view.centerXAnchor), button.topAnchor.constraint(equalTo: ai.bottomAnchor, constant: 24)])
+        super.viewDidLoad(); title = "我的"; navigationController?.navigationBar.prefersLargeTitles = true
+        view.backgroundColor = BookDesign.paper
+        let icon = UIImageView(image: UIImage(named: "BrandIcon")); icon.contentMode = .scaleAspectFit
+        icon.layer.cornerRadius = 16; icon.clipsToBounds = true; icon.accessibilityIdentifier = "brand-icon"
+        icon.widthAnchor.constraint(equalToConstant: 68).isActive = true; icon.heightAnchor.constraint(equalToConstant: 68).isActive = true
+        let wordmark = BookDesign.label("书灯", size: 26, weight: .semibold)
+        let identity = UIStackView(arrangedSubviews: [icon, wordmark, UIView()]); identity.spacing = 16; identity.alignment = .center
+        let motto = BookDesign.label("一盏照书的灯，\nAI 照亮你读不懂的地方。", size: 19)
+        motto.font = BookDesign.readingFont(19)
+        let ai = UIButton(type: .system); BookDesign.button(ai, title: "AI 服务", symbol: "sparkle")
+        ai.contentHorizontalAlignment = .leading; ai.addTarget(self, action: #selector(aiSettings), for: .touchUpInside)
+        service.accessibilityIdentifier = "current-ai-service"
+        let disclosure = BookDesign.label("阅读内容留在本机。提问时，问题、必要书内原文和所需对话会发送到你选择的 AI 服务；书灯不提供或代付服务。", size: 13, colour: BookDesign.secondary)
+        let appearance = UISegmentedControl(items: ["跟随系统", "浅色", "深色"])
+        let values: [UIUserInterfaceStyle] = [.unspecified, .light, .dark]
+        appearance.selectedSegmentIndex = values.firstIndex(of: UIUserInterfaceStyle(rawValue: UserDefaults.standard.integer(forKey: "interface-style")) ?? .unspecified) ?? 0
+        appearance.accessibilityIdentifier = "app-appearance"
+        appearance.addAction(UIAction { [weak self, weak appearance] _ in
+            guard let self, let appearance else { return }
+            let choice = values[appearance.selectedSegmentIndex]
+            UserDefaults.standard.set(choice.rawValue, forKey: "interface-style")
+            self.view.window?.overrideUserInterfaceStyle = choice
+        }, for: .valueChanged)
+        let button = UIButton(type: .system); BookDesign.button(button, title: "第三方许可", symbol: "doc.text")
+        button.contentHorizontalAlignment = .leading; button.addTarget(self, action: #selector(licenses), for: .touchUpInside)
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let stack = UIStackView(arrangedSubviews: [identity, motto, separator(), ai, service, disclosure,
+            separator(), BookDesign.label("外观", size: 16, weight: .medium), appearance, separator(), button,
+            BookDesign.label("书灯 " + version + " · 以阅读为中心", size: 12, colour: BookDesign.secondary)])
+        stack.axis = .vertical; stack.spacing = 18
+        let scroll = UIScrollView(); scroll.translatesAutoresizingMaskIntoConstraints = false; stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scroll); scroll.addSubview(stack)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), scroll.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 24), stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -32),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -24),
+            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -48)
+        ])
+    }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        do {
+            let store = try AIConfigurationStore(root: root)
+            let current = store.configurations.first { $0.id == store.selectedID }
+            service.text = current.map { $0.name + " · " + $0.model } ?? "尚未配置，阅读仍可使用"
+        } catch { service.text = "服务配置暂时无法读取；已有配置未覆盖" }
+    }
+    private func separator() -> UIView {
+        let line = UIView(); line.backgroundColor = BookDesign.line; line.heightAnchor.constraint(equalToConstant: 1).isActive = true; return line
     }
     @objc private func licenses() {
-        let controller = UIViewController()
-        controller.title = "第三方许可"
-        let text = UITextView()
-        text.isEditable = false
-        text.font = .preferredFont(forTextStyle: .body)
+        let controller = UIViewController(); controller.title = "第三方许可"
+        let text = UITextView(); text.isEditable = false; text.font = .preferredFont(forTextStyle: .body)
+        text.adjustsFontForContentSizeCategory = true; text.backgroundColor = BookDesign.paper; text.textColor = BookDesign.ink
         text.text = Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "许可文件无法读取"
-        controller.view = text
-        navigationController?.pushViewController(controller, animated: true)
+        controller.view = text; navigationController?.pushViewController(controller, animated: true)
     }
 }
 
@@ -97,6 +132,7 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
     private let search = UISearchController(searchResultsController: nil)
     private var order = ShelfOrder.imported
     private var displayed: [Book] = []
+    private let covers = BookCoverStore()
     private lazy var importButton = UIBarButtonItem(title: "导入", style: .plain, target: self, action: #selector(importFile))
     private let sortButton = UIBarButtonItem(title: "排序", image: UIImage(systemName: "arrow.up.arrow.down"))
     private var busy = false
@@ -108,13 +144,14 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
         self.library = library
         let layout = UICollectionViewCompositionalLayout { _, environment in
             let columns = environment.traitCollection.preferredContentSizeCategory.isAccessibilityCategory ? 1 : 2
-            let width = (environment.container.effectiveContentSize.width - 32 - CGFloat(columns - 1) * 12) / CGFloat(columns)
+            let width = (environment.container.effectiveContentSize.width - 48 - CGFloat(columns - 1) * 22) / CGFloat(columns)
             let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .absolute(width), heightDimension: .estimated(240)))
             let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(240)), repeatingSubitem: item, count: columns)
-            group.interItemSpacing = .fixed(12)
+            group.interItemSpacing = .fixed(22)
             let section = NSCollectionLayoutSection(group: group)
-            section.interGroupSpacing = 12
-            section.contentInsets = .init(top: 12, leading: 16, bottom: 24, trailing: 16)
+            section.interGroupSpacing = 24
+            section.contentInsets = .init(top: 12, leading: 24, bottom: 32, trailing: 24)
+            section.boundarySupplementaryItems = [.init(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(240)), elementKind: UICollectionView.elementKindSectionHeader, alignment: .top)]
             return section
         }
         super.init(collectionViewLayout: layout)
@@ -128,7 +165,9 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
         super.viewDidLoad()
         title = "书架"
         navigationController?.navigationBar.prefersLargeTitles = true
-        navigationItem.rightBarButtonItems = [importButton, sortButton, removedButton]
+        navigationItem.rightBarButtonItems = [importButton, sortButton]
+        importButton.image = UIImage(systemName: "plus"); importButton.accessibilityLabel = "导入"
+        sortButton.image = UIImage(systemName: "ellipsis.circle")
         sortButton.accessibilityLabel = "排序"
         search.searchResultsUpdater = self
         search.obscuresBackgroundDuringPresentation = false
@@ -138,9 +177,10 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
         navigationItem.hidesSearchBarWhenScrolling = false
         definesPresentationContext = true
         collectionView.accessibilityIdentifier = "library"
-        collectionView.backgroundColor = .systemGroupedBackground
+        collectionView.backgroundColor = BookDesign.paper
         collectionView.keyboardDismissMode = .onDrag
         collectionView.register(ShelfCell.self, forCellWithReuseIdentifier: "book")
+        collectionView.register(ShelfHeader.self, forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader, withReuseIdentifier: "header")
         preparationObserver = NotificationCenter.default.addObserver(forName: BookPreparation.changed, object: library.preparation, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -155,12 +195,12 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
         displayed = order.books(library.books.filter { showingRemoved ? $0.removal != nil : $0.removal == nil }, matching: search.searchBar.text ?? "")
         title = showingRemoved ? "已移除的书籍" : "书架"
         removedButton.title = showingRemoved ? "返回书架" : "已移除"
-        sortButton.menu = UIMenu(title: "排序", children: ShelfOrder.allCases.map { choice in
+        sortButton.menu = UIMenu(children: [UIMenu(title: "排序", children: ShelfOrder.allCases.map { choice in
             UIAction(title: choice.rawValue, state: order == choice ? .on : .off) { [weak self] _ in
                 self?.order = choice
                 self?.refresh()
             }
-        })
+        }), UIAction(title: showingRemoved ? "返回书架" : "已移除的书籍", image: UIImage(systemName: "archivebox")) { [weak self] _ in self?.toggleRemoved() }])
         collectionView.reloadData()
         if displayed.isEmpty {
             let label = UILabel()
@@ -170,7 +210,15 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
             label.numberOfLines = 0
             label.textAlignment = .center
             label.textColor = .secondaryLabel
-            collectionView.backgroundView = label
+            let box = UIStackView(arrangedSubviews: [label]); box.axis = .vertical; box.alignment = .center; box.spacing = 16
+            if !showingRemoved && library.books.filter({ $0.removal == nil }).isEmpty {
+                let button = UIButton(type: .system); BookDesign.button(button, title: "导入 EPUB", symbol: "plus", filled: true)
+                button.addTarget(self, action: #selector(importFile), for: .touchUpInside); box.addArrangedSubview(button)
+            }
+            let empty = UIView(); box.translatesAutoresizingMaskIntoConstraints = false; empty.addSubview(box)
+            NSLayoutConstraint.activate([box.centerXAnchor.constraint(equalTo: empty.centerXAnchor), box.centerYAnchor.constraint(equalTo: empty.centerYAnchor),
+                box.leadingAnchor.constraint(greaterThanOrEqualTo: empty.leadingAnchor, constant: 24), box.trailingAnchor.constraint(lessThanOrEqualTo: empty.trailingAnchor, constant: -24)])
+            collectionView.backgroundView = empty
         } else { collectionView.backgroundView = nil }
     }
     @objc private func toggleRemoved() { showingRemoved.toggle(); refresh() }
@@ -240,6 +288,10 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
         let state = library.preparation.states[book.id] ?? BookPreparationState()
         let message = book.removal?.pending == true ? "移除尚未完成，点此重试" : book.removal == .removed ? "原书已移除，笔记与对话仍保留" : state.message
         cell.configure(book, preparation: message)
+        cell.coverTask = Task { [weak cell, covers, library] in
+            let image = await covers.image(for: book, library: library)
+            guard !Task.isCancelled else { return }; cell?.setCover(image, for: book)
+        }
         cell.accessibilityValue = message
         cell.accessibilityIdentifier = "book-\(book.id)"
         return cell
@@ -247,7 +299,10 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
     override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
         guard !busy else { return }
-        let id = displayed[indexPath.item].id
+        openBook(displayed[indexPath.item].id)
+    }
+    private func openBook(_ id: String) {
+        guard !busy else { return }
         guard let book = library.books.first(where: { $0.id == id }) else { return }
         if let removal = book.removal {
             confirmRemoval(id, deleteRecords: removal != .removing)
@@ -259,11 +314,27 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
             defer { busy = false }
             do {
                 let publication = try await library.open(book)
+                UserDefaults.standard.set(book.id, forKey: "last-read-" + library.root.path)
                 let reader = try ReaderController(book: book, publication: publication, library: library)
                 reader.modalPresentationStyle = .fullScreen
                 present(reader, animated: true)
             } catch { message(title: "无法打开书籍", text: error.localizedDescription) }
         }
+    }
+    override func collectionView(_ collectionView: UICollectionView, viewForSupplementaryElementOfKind kind: String, at indexPath: IndexPath) -> UICollectionReusableView {
+        let header = collectionView.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: "header", for: indexPath) as! ShelfHeader
+        let preferred = UserDefaults.standard.string(forKey: "last-read-" + library.root.path)
+        let continuing = showingRemoved || !(search.searchBar.text ?? "").isEmpty ? nil :
+            displayed.first(where: { $0.id == preferred }) ?? displayed.first(where: { $0.locatorJSON != nil })
+        header.configure(continuing, count: displayed.count)
+        if let continuing {
+            header.open = { [weak self] in self?.openBook(continuing.id) }
+            header.coverTask = Task { [weak header, covers, library] in
+                let image = await covers.image(for: continuing, library: library)
+                guard !Task.isCancelled else { return }; header?.setCover(image, for: continuing)
+            }
+        } else { header.open = nil }
+        return header
     }
     private func message(title: String, text: String) {
         let alert = UIAlertController(title: title, message: text, preferredStyle: .alert)
@@ -273,49 +344,70 @@ final class LibraryController: UICollectionViewController, UIDocumentPickerDeleg
 }
 
 private final class ShelfCell: UICollectionViewCell {
-    private let title = UILabel()
-    private let author = UILabel()
-    private let action = UILabel()
-    private let preparation = UILabel()
+    private let cover = BookCoverView()
+    private let title = BookDesign.label(nil, size: 16, weight: .medium)
+    private let author = BookDesign.label(nil, size: 12, colour: BookDesign.secondary)
+    private let preparation = BookDesign.label(nil, size: 11, colour: BookDesign.secondary)
+    private var represented: String?
+    var coverTask: Task<Void, Never>?
     override init(frame: CGRect) {
         super.init(frame: frame)
-        contentView.backgroundColor = .secondarySystemGroupedBackground
-        contentView.layer.cornerRadius = 12
-        let cover = UIImageView(image: UIImage(systemName: "book.closed"))
-        cover.contentMode = .scaleAspectFit
-        cover.tintColor = .secondaryLabel
-        cover.heightAnchor.constraint(equalToConstant: 72).isActive = true
-        title.font = .preferredFont(forTextStyle: .headline)
-        author.font = .preferredFont(forTextStyle: .subheadline)
-        author.textColor = .secondaryLabel
-        action.font = .preferredFont(forTextStyle: .caption1)
-        action.textColor = .tintColor
-        preparation.font = .preferredFont(forTextStyle: .caption1)
-        preparation.textColor = .secondaryLabel
-        for label in [title, author, action, preparation] {
-            label.numberOfLines = 0
-            label.adjustsFontForContentSizeCategory = true
-        }
-        let stack = UIStackView(arrangedSubviews: [cover, title, author, action, preparation])
-        stack.axis = .vertical
-        stack.spacing = 8
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
-            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16)
-        ])
-        isAccessibilityElement = true
-        accessibilityTraits = .button
+        title.numberOfLines = 2; author.numberOfLines = 1; preparation.numberOfLines = 2
+        let stack = UIStackView(arrangedSubviews: [cover, title, author, preparation]); stack.axis = .vertical; stack.spacing = 6
+        stack.setCustomSpacing(12, after: cover); stack.translatesAutoresizingMaskIntoConstraints = false; contentView.addSubview(stack)
+        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor), stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor), stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            cover.heightAnchor.constraint(equalTo: cover.widthAnchor, multiplier: 1.4)])
+        isAccessibilityElement = true; accessibilityTraits = .button
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override func prepareForReuse() { super.prepareForReuse(); coverTask?.cancel(); represented = nil }
     func configure(_ book: Book, preparation: String) {
-        title.text = book.title
-        author.text = book.author.isEmpty ? "作者未知" : book.author
-        action.text = book.removal == nil ? (book.locatorJSON == nil ? "开始阅读" : "继续阅读") : "管理保留记录"
-        self.preparation.text = preparation
-        accessibilityLabel = [title.text, author.text, action.text].compactMap { $0 }.joined(separator: "，")
+        coverTask?.cancel(); represented = book.id; title.text = book.title
+        author.text = book.author.isEmpty ? "作者未知" : book.author; self.preparation.text = preparation
+        cover.configure(book, image: nil)
+        accessibilityLabel = [book.title, author.text ?? "", book.removal == nil ? (book.locatorJSON == nil ? "开始阅读" : "继续阅读") : "管理保留记录"].joined(separator: "，")
     }
+    func setCover(_ image: UIImage?, for book: Book) { if represented == book.id { cover.configure(book, image: image) } }
+}
+
+private final class ShelfHeader: UICollectionReusableView {
+    private let heading = BookDesign.label("继续阅读", size: 13, colour: BookDesign.secondary)
+    private let cover = BookCoverView()
+    private let title = BookDesign.label(nil, size: 20, weight: .medium)
+    private let detail = BookDesign.label(nil, size: 13, colour: BookDesign.secondary)
+    private let count = BookDesign.label(nil, size: 18, weight: .semibold)
+    private let card = UIButton(type: .system)
+    private var represented: String?
+    var coverTask: Task<Void, Never>?
+    var open: (() -> Void)?
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        cover.widthAnchor.constraint(equalToConstant: 64).isActive = true
+        cover.heightAnchor.constraint(equalToConstant: 92).isActive = true
+        let text = UIStackView(arrangedSubviews: [title, detail]); text.axis = .vertical; text.spacing = 8
+        let arrow = UIImageView(image: UIImage(systemName: "arrow.right")); arrow.tintColor = BookDesign.lamp
+        arrow.setContentHuggingPriority(.required, for: .horizontal)
+        let content = UIStackView(arrangedSubviews: [cover, text, arrow]); content.spacing = 16; content.alignment = .center
+        content.isUserInteractionEnabled = false; content.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(content); card.backgroundColor = BookDesign.surface; card.layer.cornerRadius = 16
+        card.addAction(UIAction { [weak self] _ in self?.open?() }, for: .touchUpInside)
+        let stack = UIStackView(arrangedSubviews: [heading, card, count]); stack.axis = .vertical; stack.spacing = 12
+        stack.setCustomSpacing(28, after: card); stack.translatesAutoresizingMaskIntoConstraints = false; addSubview(stack)
+        NSLayoutConstraint.activate([stack.topAnchor.constraint(equalTo: topAnchor, constant: 8), stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            content.topAnchor.constraint(equalTo: card.topAnchor, constant: 16), content.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -16),
+            content.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16), content.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16)])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    func configure(_ book: Book?, count: Int) {
+        represented = book?.id; coverTask?.cancel()
+        heading.isHidden = book == nil; card.isHidden = book == nil
+        self.count.text = "书库 · " + String(count) + " 本"
+        if let book {
+            cover.configure(book, image: nil); title.text = book.title; detail.text = "从上次读到的地方继续"
+            card.accessibilityLabel = "继续阅读，" + book.title; card.accessibilityIdentifier = "continue-reading"
+        }
+    }
+    func setCover(_ image: UIImage?, for book: Book) { if represented == book.id { cover.configure(book, image: image) } }
 }

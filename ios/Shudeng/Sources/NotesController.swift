@@ -4,13 +4,24 @@ import ReadiumShared
 @MainActor
 final class NotesController: UITableViewController {
     private let library: LibraryStore
-    private var books: [Book] { library.books.filter { !($0.notes ?? []).isEmpty || !($0.noteDrafts ?? []).isEmpty } }
+    private let filter = UISegmentedControl(items: ["全部", "高亮", "笔记"])
+    private var books: [Book] { library.books.filter { !rows($0).isEmpty } }
     init(library: LibraryStore) { self.library = library; super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "笔记"
+        navigationController?.navigationBar.prefersLargeTitles = true
+        BookDesign.table(tableView)
         tableView.accessibilityIdentifier = "notes"
+        filter.accessibilityIdentifier = "note-filter"; filter.selectedSegmentIndex = 0
+        filter.addAction(UIAction { [weak self] _ in self?.refresh() }, for: .valueChanged)
+        let header = UIView(frame: CGRect(x: 0, y: 0, width: 320, height: 64))
+        filter.translatesAutoresizingMaskIntoConstraints = false; header.addSubview(filter)
+        NSLayoutConstraint.activate([filter.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 24),
+            filter.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -24), filter.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            filter.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)])
+        tableView.tableHeaderView = header
     }
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
@@ -19,14 +30,16 @@ final class NotesController: UITableViewController {
     private func refresh() {
         tableView.reloadData()
         let empty = UILabel()
-        empty.text = "还没有笔记"
-        empty.textColor = .secondaryLabel
+        empty.text = "还没有这类笔记\n阅读时选中原文，即可高亮或写下想法"
+        empty.font = BookDesign.font(15); empty.numberOfLines = 0; empty.adjustsFontForContentSizeCategory = true
+        empty.textColor = BookDesign.secondary
         empty.textAlignment = .center
         tableView.backgroundView = books.isEmpty ? empty : nil
     }
     private func rows(_ book: Book) -> [BookNote] {
         let drafts = book.noteDrafts ?? []
-        return drafts + (book.notes ?? []).filter { note in !drafts.contains { $0.id == note.id } }
+        let all = drafts + (book.notes ?? []).filter { note in !drafts.contains { $0.id == note.id } }
+        return all.filter { filter.selectedSegmentIndex == 0 || (filter.selectedSegmentIndex == 1 ? $0.body.isEmpty : !$0.body.isEmpty) }
     }
     override func numberOfSections(in tableView: UITableView) -> Int { books.count }
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? { books[section].title }
@@ -35,13 +48,16 @@ final class NotesController: UITableViewController {
         let book = books[indexPath.section], note = rows(book)[indexPath.row]
         let draft = (book.noteDrafts ?? []).contains { $0.id == note.id }
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-        cell.textLabel?.text = (draft ? "草稿 · " : "") + (note.body.isEmpty ? "高亮" : note.body)
+        cell.textLabel?.text = "“" + note.quote + "”"
         cell.textLabel?.numberOfLines = 3
-        cell.textLabel?.font = .preferredFont(forTextStyle: .body)
-        cell.detailTextLabel?.text = "原文：" + note.quote
+        cell.textLabel?.font = BookDesign.readingFont(18)
+        cell.textLabel?.textColor = BookDesign.ink
+        cell.detailTextLabel?.text = (draft ? "草稿 · " : "") + (note.body.isEmpty ? "高亮 · 返回原文" : note.body)
         cell.detailTextLabel?.numberOfLines = 3
-        cell.detailTextLabel?.font = .preferredFont(forTextStyle: .caption1)
-        cell.detailTextLabel?.textColor = .secondaryLabel
+        cell.detailTextLabel?.font = BookDesign.font(15)
+        cell.detailTextLabel?.textColor = BookDesign.secondary
+        cell.contentView.directionalLayoutMargins = .init(top: 18, leading: 0, bottom: 18, trailing: 0)
+        cell.imageView?.image = UIImage(systemName: "quote.opening"); cell.imageView?.tintColor = BookDesign.lamp
         cell.textLabel?.adjustsFontForContentSizeCategory = true
         cell.detailTextLabel?.adjustsFontForContentSizeCategory = true
         cell.accessoryType = .disclosureIndicator
@@ -101,7 +117,7 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = hasSavedDraft ? "恢复笔记草稿" : "笔记"
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = BookDesign.paper
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: "关闭", style: .plain, target: self, action: #selector(closeEditor))
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "保存笔记", style: .done, target: self, action: #selector(save))
         let quoteTitle = UILabel()
@@ -112,9 +128,9 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
         let quote = UITextView()
         quote.isEditable = false
         quote.text = note.quote
-        quote.font = .preferredFont(forTextStyle: .callout)
+        quote.font = BookDesign.readingFont(17)
         quote.adjustsFontForContentSizeCategory = true
-        quote.backgroundColor = .secondarySystemBackground
+        quote.backgroundColor = BookDesign.surface; quote.textColor = BookDesign.ink; quote.layer.cornerRadius = 12
         quote.accessibilityIdentifier = "note-quote"
         let bodyTitle = UILabel()
         bodyTitle.text = "个人笔记"
@@ -123,7 +139,7 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
         body.text = note.body
         body.font = .preferredFont(forTextStyle: .body)
         body.adjustsFontForContentSizeCategory = true
-        body.backgroundColor = .secondarySystemBackground
+        body.backgroundColor = BookDesign.surface; body.textColor = BookDesign.ink; body.layer.cornerRadius = 12
         body.accessibilityIdentifier = "note-body"
         body.delegate = self
         state.font = .preferredFont(forTextStyle: .caption1)

@@ -32,8 +32,15 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private var changingBounds = false
     private var openingTarget: Locator?
     private var highlightedIDs: [UUID] = []
-    var questionOrigin: Locator? { didSet { returnToQuestion.isHidden = questionOrigin == nil } }
-    private let returnToQuestion = UIButton(type: .system)
+    var questionOrigin: Locator? {
+        didSet {
+            updateReferenceNavigation()
+            if questionOrigin == nil { navigator.apply(decorations: [], in: "question-citation") }
+        }
+    }
+    var referenceReturn: (() -> Void)?
+    private var activeQuestion: UINavigationController?
+    private let readerTitle = UILabel()
 
     init(book: Book, publication: Publication, library: LibraryStore, target: Locator? = nil) throws {
         self.book = book
@@ -49,8 +56,10 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     private static func preferences(_ settings: ReadingSettings) -> EPUBPreferences {
-        EPUBPreferences(fontSize: Double(settings.fontSize) / 100, publisherStyles: false,
-                        scroll: settings.scroll && settings.pageCurl != true, theme: settings.dark ? .dark : .light)
+        EPUBPreferences(backgroundColor: Color(hex: settings.dark ? "#20231F" : "#FCFBF8"),
+                        fontFamily: .serif, fontSize: Double(settings.fontSize) / 100, publisherStyles: false,
+                        scroll: settings.scroll && settings.pageCurl != true,
+                        textColor: Color(hex: settings.dark ? "#F0F1E9" : "#282B26"), theme: settings.dark ? .dark : .light)
     }
     private static func configuration(_ settings: ReadingSettings) -> EPUBNavigatorViewController.Configuration {
         .init(preferences: preferences(settings), editingActions: [
@@ -63,8 +72,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         super.viewDidLoad()
         applyTheme()
         close.setTitle("书架", for: .normal)
+        close.setImage(UIImage(systemName: "chevron.left"), for: .normal)
         close.addTarget(self, action: #selector(closeReader), for: .touchUpInside)
-        configure.setTitle("设置", for: .normal)
+        configure.setImage(UIImage(systemName: "ellipsis"), for: .normal)
         configure.accessibilityLabel = "阅读设置"
         configure.addTarget(self, action: #selector(openSettings), for: .touchUpInside)
         configure.isEnabled = false
@@ -76,10 +86,10 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         toggle.setImage(UIImage(systemName: "eye.slash"), for: .normal)
         toggle.accessibilityLabel = "隐藏工具栏"
         toggle.addTarget(self, action: #selector(toggleToolbar), for: .touchUpInside)
-        askBook.setImage(UIImage(systemName: "bubble.left"), for: .normal)
-        askBook.accessibilityLabel = "问这本书"; askBook.accessibilityIdentifier = "reader-ask-book"
+        BookDesign.button(askBook, title: "问问书灯", symbol: "lightbulb")
+        askBook.backgroundColor = BookDesign.glow; askBook.layer.cornerRadius = 18
+        askBook.accessibilityLabel = "问问书灯"; askBook.accessibilityIdentifier = "reader-ask-book"
         askBook.addTarget(self, action: #selector(askCurrentBook), for: .touchUpInside)
-        askBook.widthAnchor.constraint(equalToConstant: 44).isActive = true
         for button in [close, configure, browse, toggle, askBook] {
             button.titleLabel?.font = .preferredFont(forTextStyle: .body)
             button.titleLabel?.adjustsFontForContentSizeCategory = true
@@ -94,13 +104,17 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             button.setPreferredSymbolConfiguration(.init(pointSize: 20), forImageIn: .normal)
         }
         toggle.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        let header = UIStackView(arrangedSubviews: [close, UIView(), askBook, browse, configure, toggle])
-        header.spacing = 12
+        readerTitle.font = BookDesign.font(13, weight: .medium); readerTitle.adjustsFontForContentSizeCategory = true
+        readerTitle.textColor = BookDesign.secondary; readerTitle.textAlignment = .center
+        readerTitle.lineBreakMode = .byTruncatingMiddle
+        readerTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        configure.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        let header = UIStackView(arrangedSubviews: [close, readerTitle, browse, configure, toggle])
+        header.spacing = 4
         status.font = .preferredFont(forTextStyle: .caption1)
         status.adjustsFontForContentSizeCategory = true
         status.textColor = .secondaryLabel
         status.numberOfLines = 0
-        status.heightAnchor.constraint(greaterThanOrEqualToConstant: status.font.lineHeight * 2).isActive = true
         status.accessibilityIdentifier = "reading-save-status"
         status.text = "正在打开…"
         retry.setTitle("重试保存", for: .normal)
@@ -108,11 +122,8 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         retry.titleLabel?.adjustsFontForContentSizeCategory = true
         retry.addTarget(self, action: #selector(retrySave), for: .touchUpInside)
         setRetryVisible(false)
-        returnToQuestion.setTitle("回提问处", for: .normal)
-        returnToQuestion.addTarget(self, action: #selector(backToQuestion), for: .touchUpInside)
-        returnToQuestion.isHidden = questionOrigin == nil
-        returnToQuestion.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        let footer = UIStackView(arrangedSubviews: [status, returnToQuestion, retry])
+        updateReferenceNavigation()
+        let footer = UIStackView(arrangedSubviews: [askBook, status, retry])
         footer.axis = .vertical
         footer.spacing = 4
         content.accessibilityIdentifier = "reading-content"
@@ -136,6 +147,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     deinit { NotificationCenter.default.removeObserver(self) }
     private func attachNavigator() {
         applyHighlights()
+        if questionOrigin != nil, let target = openingTarget {
+            navigator.apply(decorations: [Decoration(id: "citation", locator: target, style: .highlight(tint: BookDesign.glow))], in: "question-citation")
+        }
         navigator.observeDecorationInteractions(inGroup: "notes") { [weak self] event in
             guard let self, !self.loading, !self.curlBusy, !self.navigating,
                   let note = self.library.books.first(where: { $0.id == self.book.id })?.notes?.first(where: { $0.id.uuidString == event.decoration.id }) else { return }
@@ -154,7 +168,13 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     private func applyTheme() {
         overrideUserInterfaceStyle = settings.dark ? .dark : .light
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = BookDesign.paper
+        view.tintColor = BookDesign.lamp
+    }
+    private func updateReferenceNavigation() {
+        close.setTitle(questionOrigin == nil ? "书架" : "返回问答", for: .normal)
+        close.accessibilityIdentifier = questionOrigin == nil ? "reader-close" : "reader-return-question"
+        readerTitle.text = questionOrigin == nil ? book.title : "查看引用"
     }
     @objc private func openSettings() {
         let controller = ReadingSettingsController(settings: settings) { [weak self] changed in
@@ -337,6 +357,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     @objc private func background() { persistPending() }
     @objc private func closeReader() {
+        if questionOrigin != nil { backToQuestion(); return }
         persistPending()
         guard !saveFailed, !loading else {
             let alert = UIAlertController(title: "位置与设置尚未保存", message: "返回书架后，未保存的变更可能丢失。", preferredStyle: .alert)
@@ -598,6 +619,11 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     @objc private func noteSelection() { captureSelection(writeNote: true) }
     @objc private func askSelection() { captureSelection(writeNote: false, question: true) }
     @objc private func askCurrentBook() {
+        if let activeQuestion {
+            (activeQuestion.viewControllers.first as? QuestionController)?.restoreReferenceFocus()
+            present(activeQuestion, animated: true)
+            return
+        }
         guard (try? library.checkRevision(bookRevision, for: book.id)) != nil, library.sourceAvailable(for: book.id) else { return }
         guard !loading, !curlBusy, !navigating, !library.questions.loadFailed, let origin = navigator.currentLocation else { return }
         let record = ReadingQuestion(book: book, origin: origin)
@@ -607,26 +633,30 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             self?.showQuestionReference(target, origin: origin)
         }
         let navigation = UINavigationController(rootViewController: controller)
+        activeQuestion = navigation
+        navigation.overrideUserInterfaceStyle = overrideUserInterfaceStyle
         navigation.modalPresentationStyle = .pageSheet
         navigation.sheetPresentationController?.detents = [.large()]
         present(navigation, animated: true)
     }
     private func showQuestionReference(_ target: Locator, origin: Locator) {
         guard !loading, !navigating, !curlBusy else { return }
-        let changesViewport = questionOrigin == nil
         questionOrigin = origin
-        if changesViewport {
-            // Showing the return button changes the reading viewport. Recreate
-            // Readium with those bounds before resolving the exact occurrence;
-            // UIKit layout alone does not settle its preloaded pagination.
-            view.layoutIfNeeded()
-            openingTarget = target
-            changeSettings(settings, force: true, restoring: target)
-        } else {
-            navigate(to: target)
-        }
+        navigator.clearSelection()
+        navigator.apply(decorations: [Decoration(id: "citation", locator: target, style: .highlight(tint: BookDesign.glow))], in: "question-citation")
+        navigate(to: target)
     }
-    @objc private func backToQuestion() { if let questionOrigin { navigate(to: questionOrigin) } }
+    @objc private func backToQuestion() {
+        if let referenceReturn { referenceReturn(); return }
+        guard let origin = questionOrigin, let activeQuestion else { return }
+        questionOrigin = nil
+        navigate(to: origin)
+        (activeQuestion.viewControllers.first as? QuestionController)?.restoreReferenceFocus()
+        present(activeQuestion, animated: true)
+    }
+    override var keyCommands: [UIKeyCommand]? {
+        questionOrigin == nil ? super.keyCommands : [UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(backToQuestion))]
+    }
     private func captureSelection(writeNote: Bool, question: Bool = false) {
         guard !loading, !curlBusy, !navigating, let selection = navigator.currentSelection else { return }
         Task {
@@ -662,6 +692,8 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                         self?.showQuestionReference(target, origin: origin)
                     }
                     let sheet = UINavigationController(rootViewController: controller)
+                    activeQuestion = sheet
+                    sheet.overrideUserInterfaceStyle = overrideUserInterfaceStyle
                     sheet.sheetPresentationController?.detents = [.large()]
                     present(sheet, animated: true)
                     return
