@@ -6,6 +6,24 @@
 
 返工执行规格：[GitHub Issue #23](https://github.com/andyWang1688/shudeng/issues/23)。
 
+## 执行工单与依赖
+
+规格母任务为 #23，以下原生子 Issue 按 GitHub 原生阻塞关系推进。只有前置票关闭后才取下一票；每票独立实现、独立验收，完成不等于母任务完成。
+
+| 工单 | 交付 | 阻塞于 |
+| --- | --- | --- |
+| [#24](https://github.com/andyWang1688/shudeng/issues/24) | 固定设计夹具与视觉验收接缝 | 无；已完成 |
+| [#25](https://github.com/andyWang1688/shudeng/issues/25) | 四栏共享外壳与书架 | #24；已完成 |
+| [#26](https://github.com/andyWang1688/shudeng/issues/26) | 笔记页闭环 | #25；已完成 |
+| [#27](https://github.com/andyWang1688/shudeng/issues/27) | 对话页闭环 | #25；已完成 |
+| [#28](https://github.com/andyWang1688/shudeng/issues/28) | 我的页闭环 | #25 |
+| [#29](https://github.com/andyWang1688/shudeng/issues/29) | 阅读页与选文闭环 | #25 |
+| [#30](https://github.com/andyWang1688/shudeng/issues/30) | 问答底部面板闭环 | #29 |
+| [#31](https://github.com/andyWang1688/shudeng/issues/31) | 引用原文与往返闭环 | #29、#30 |
+| [#32](https://github.com/andyWang1688/shudeng/issues/32) | 整应用视觉与 Release 验收 | #26–#31 |
+
+实现代理不得自行关闭 Issue；独立验收通过后，由统筹代理更新验收矩阵并关闭对应子 Issue。#23 在所有子 Issue 与 Release 收尾通过后再关闭。
+
 品牌文案：**一盏照书的灯，AI 照亮你读不懂的地方。**
 
 ## 产品与设计判断
