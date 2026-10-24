@@ -563,6 +563,80 @@ extension ReadingUITests {
         attachDesignSurface("issue28-profile-normal-375-dark", app)
     }
 
+    func testIssue29ReaderToolbarSelectionAndAskEntry() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+
+        let continueReading = app.buttons["continue-reading"]
+        XCTAssertTrue(continueReading.waitForExistence(timeout: 15))
+        continueReading.tap()
+        let ask = app.buttons["reader-ask-book"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15))
+
+        let toolbar = app.otherElements["reader-toolbar"]
+        XCTAssertTrue(toolbar.exists)
+        XCTAssertEqual(toolbar.frame.height, 51, accuracy: 0.5)
+        XCTAssertEqual(app.staticTexts["reader-title"].label, "红楼梦")
+        XCTAssertTrue(app.staticTexts["reader-chapter"].label.contains("第三回"))
+
+        let back = app.buttons["reader-close"]
+        let contents = app.buttons["reader-contents"]
+        let settings = app.buttons["reader-settings"]
+        XCTAssertTrue(back.exists)
+        XCTAssertTrue(contents.exists)
+        XCTAssertTrue(settings.exists)
+        XCTAssertEqual(back.frame.width, 44, accuracy: 0.5)
+        XCTAssertEqual(back.frame.minX, 13, accuracy: 0.5)
+        XCTAssertEqual(contents.frame.width, 44, accuracy: 0.5)
+        XCTAssertEqual(settings.frame.width, 44, accuracy: 0.5)
+        XCTAssertEqual(settings.frame.maxX, app.frame.maxX - 13, accuracy: 0.5)
+        XCTAssertEqual(ask.frame.height, 44, accuracy: 0.5)
+        XCTAssertEqual(ask.frame.midX, app.frame.midX, accuracy: 0.5)
+        attachDesignSurface("issue29-reader-375-light", app)
+
+        contents.tap()
+        XCTAssertTrue(app.tables["book-navigation"].waitForExistence(timeout: 5))
+        app.buttons["完成"].tap()
+        XCTAssertTrue(ask.waitForExistence(timeout: 5))
+
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["阅读设置"].waitForExistence(timeout: 5))
+        app.navigationBars["阅读设置"].buttons["取消"].tap()
+        XCTAssertTrue(ask.waitForExistence(timeout: 5))
+
+        let paragraph = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")
+        ).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 10))
+        paragraph.press(forDuration: 1.3)
+        attachDesignSurface("issue29-selection-375-light", app)
+        for identifier in ["selection-highlight", "selection-note", "selection-ask"] {
+            XCTAssertTrue(app.buttons[identifier].waitForExistence(timeout: 5), identifier)
+        }
+        app.buttons["selection-note"].tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 10))
+        app.buttons["关闭"].tap()
+        XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 5))
+
+        app.terminate()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
+        app.launch()
+        XCTAssertTrue(app.buttons["continue-reading"].waitForExistence(timeout: 15))
+        app.buttons["continue-reading"].tap()
+        XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15))
+        let darkParagraph = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")
+        ).firstMatch
+        XCTAssertTrue(darkParagraph.waitForExistence(timeout: 10))
+        darkParagraph.press(forDuration: 1.3)
+        XCTAssertTrue(app.buttons["selection-ask"].waitForExistence(timeout: 5))
+        attachDesignSurface("issue29-selection-375-dark", app)
+    }
+
     private func tab(_ identifier: String, label: String, in app: XCUIApplication) -> XCUIElement {
         let identified = app.buttons[identifier].firstMatch
         return identified.exists ? identified : app.tabBars.buttons[label].firstMatch

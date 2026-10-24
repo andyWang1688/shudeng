@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import ReadiumNavigator
 @testable import Shudeng
 
 @MainActor
@@ -577,6 +578,197 @@ final class DesignFixtureTests: XCTestCase {
         attachment.name = "profile-unconfigured-375x667-light"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    func testReaderUsesDesignedTypographyMarginsAndWarmSelection() throws {
+        let light = ReaderController.readingPreferences(
+            ReadingSettings(scroll: false, fontSize: 100, dark: false)
+        )
+        XCTAssertEqual(light.fontFamily?.rawValue, "Songti SC")
+        XCTAssertEqual(light.fontSize ?? 0, 20 / 14, accuracy: 0.0001)
+        XCTAssertEqual(light.lineHeight ?? 0, 1.95, accuracy: 0.0001)
+        XCTAssertEqual(light.paragraphIndent ?? 0, 2, accuracy: 0.0001)
+        XCTAssertEqual(light.textAlign, .justify)
+
+        let lightConfiguration = ReaderController.configuration(
+            ReadingSettings(scroll: false, fontSize: 100, dark: false)
+        )
+        XCTAssertEqual(
+            lightConfiguration.readiumCSSRSProperties.pageGutter?.css(),
+            "29.00000px"
+        )
+        XCTAssertEqual(
+            lightConfiguration.readiumCSSRSProperties.selectionBackgroundColor?.css(),
+            "#F4E3AC"
+        )
+        let compactInset = try XCTUnwrap(lightConfiguration.contentInset[.compact])
+        XCTAssertEqual(compactInset.top, 29)
+        XCTAssertEqual(compactInset.bottom, 22)
+
+        let darkConfiguration = ReaderController.configuration(
+            ReadingSettings(scroll: false, fontSize: 100, dark: true)
+        )
+        XCTAssertEqual(
+            darkConfiguration.readiumCSSRSProperties.selectionBackgroundColor?.css(),
+            "#5B4D2D"
+        )
+        XCTAssertEqual(
+            darkConfiguration.readiumCSSRSProperties.selectionTextColor?.css(),
+            "#F0F1E9"
+        )
+    }
+
+    func testReaderChromeMatchesDesignedMetrics() async throws {
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        let primary = try XCTUnwrap(
+            session.library.books.first { $0.title == DesignFixture.fixtureTitle }
+        )
+        let publication = try await session.library.open(primary)
+        let reader = try ReaderController(
+            book: primary,
+            publication: publication,
+            library: session.library
+        )
+        _ = DesignFixture.renderRoot(
+            reader,
+            size: CGSize(width: 375, height: 667),
+            style: .light
+        )
+
+        let views = reader.view.allViews
+        let toolbar = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-toolbar" })
+        let back = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-close" })
+        let contents = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-contents" })
+        let settings = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-settings" })
+        let title = try XCTUnwrap(
+            views.first { $0.accessibilityIdentifier == "reader-title" } as? UILabel
+        )
+        let ask = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-ask-book" })
+        XCTAssertEqual(toolbar.frame.height, 51, accuracy: 0.5)
+        let backFrame = back.convert(back.bounds, to: reader.view)
+        let contentsFrame = contents.convert(contents.bounds, to: reader.view)
+        let settingsFrame = settings.convert(settings.bounds, to: reader.view)
+        let titleCenter = title.convert(title.bounds, to: reader.view).midX
+        let askFrame = ask.convert(ask.bounds, to: reader.view)
+        XCTAssertEqual(backFrame.width, 44, accuracy: 0.5)
+        XCTAssertEqual(backFrame.minX, 13, accuracy: 0.5)
+        XCTAssertEqual(contentsFrame.width, 44, accuracy: 0.5)
+        XCTAssertEqual(settingsFrame.width, 44, accuracy: 0.5)
+        XCTAssertEqual(settingsFrame.maxX, 362, accuracy: 0.5)
+        XCTAssertEqual(titleCenter, 187.5, accuracy: 0.5)
+        XCTAssertEqual(title.font.pointSize, 13, accuracy: 0.5)
+        XCTAssertEqual(askFrame.height, 44, accuracy: 0.5)
+        XCTAssertEqual(askFrame.midX, 187.5, accuracy: 0.5)
+
+        let host = UIView(frame: CGRect(x: 0, y: 0, width: 375, height: 667))
+        let menu = ReaderSelectionMenu()
+        menu.place(in: host, above: CGRect(x: 100, y: 300, width: 150, height: 24))
+        XCTAssertEqual(menu.frame.size, CGSize(width: 234, height: 51))
+        XCTAssertLessThanOrEqual(menu.frame.maxX, 367)
+        XCTAssertGreaterThanOrEqual(menu.frame.minX, 8)
+        XCTAssertLessThan(menu.frame.maxY, 300)
+        XCTAssertEqual(menu.accessibilityElements?.count, 3)
+        menu.place(in: host, above: CGRect(x: 100, y: 80, width: 150, height: 20))
+        XCTAssertEqual(menu.frame.height, 46, accuracy: 0.5)
+        XCTAssertGreaterThan(menu.frame.minY, 100)
+    }
+
+    func testReaderRendersBothContentSizesAndThemes() async throws {
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        let primary = try XCTUnwrap(
+            session.library.books.first { $0.title == DesignFixture.fixtureTitle }
+        )
+        let publication = try await session.library.open(primary)
+        let initialLocation = try XCTUnwrap(session.library.location(for: primary.id))
+        func pause(_ seconds: TimeInterval) async {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+                    continuation.resume()
+                }
+            }
+        }
+
+        for size in [CGSize(width: 375, height: 667), CGSize(width: 390, height: 844)] {
+            for (style, theme) in [
+                (UIUserInterfaceStyle.light, "light"),
+                (UIUserInterfaceStyle.dark, "dark")
+            ] {
+                let readingSettings = ReadingSettings(
+                    scroll: false,
+                    fontSize: 100,
+                    dark: style == .dark
+                )
+                try session.library.saveReadingState(
+                    initialLocation,
+                    settings: readingSettings,
+                    for: primary.id
+                )
+                let configuredBook = try XCTUnwrap(
+                    session.library.books.first { $0.id == primary.id }
+                )
+                let reader = try ReaderController(
+                    book: configuredBook,
+                    publication: publication,
+                    library: session.library
+                )
+                reader.loadViewIfNeeded()
+
+                let toolbar = try XCTUnwrap(
+                    reader.view.allViews.first { $0.accessibilityIdentifier == "reader-toolbar" }
+                )
+                let ask = try XCTUnwrap(
+                    reader.view.allViews.first { $0.accessibilityIdentifier == "reader-ask-book" }
+                )
+                let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+                window.overrideUserInterfaceStyle = style
+                window.rootViewController = reader
+                window.makeKeyAndVisible()
+                reader.beginAppearanceTransition(true, animated: false)
+                reader.view.frame = window.bounds
+                reader.view.layoutIfNeeded()
+                reader.endAppearanceTransition()
+
+                let status = try XCTUnwrap(
+                    reader.view.allViews.first {
+                        $0.accessibilityIdentifier == "reading-save-status"
+                    } as? UILabel
+                )
+                var loaded = false
+                for _ in 0..<300 {
+                    if status.text == "阅读位置已保存" {
+                        loaded = true
+                        break
+                    }
+                    await pause(0.1)
+                }
+                XCTAssertTrue(loaded, "Reader did not finish loading at \(size)")
+                await pause(size.width == 375 && style == .light ? 15 : 2)
+                reader.view.setNeedsLayout()
+                reader.view.layoutIfNeeded()
+                CATransaction.flush()
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 1
+                format.opaque = true
+                let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                    reader.view.drawHierarchy(in: reader.view.bounds, afterScreenUpdates: true)
+                }
+                window.isHidden = true
+                XCTAssertEqual(toolbar.convert(toolbar.bounds, to: reader.view).height, 51, accuracy: 0.5)
+                XCTAssertEqual(ask.convert(ask.bounds, to: reader.view).midX, size.width / 2, accuracy: 0.5)
+                XCTAssertEqual(image.size, size)
+                let attachment = XCTAttachment(
+                    data: try XCTUnwrap(image.pngData()),
+                    uniformTypeIdentifier: "public.png"
+                )
+                attachment.name = "reader-\(Int(size.width))x\(Int(size.height))-\(theme)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
     }
 }
 

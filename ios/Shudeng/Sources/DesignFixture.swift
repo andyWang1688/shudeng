@@ -142,7 +142,11 @@ enum DesignFixture {
         )
         try session.library.saveReadingState(
             first,
-            settings: ReadingSettings(scroll: false, fontSize: 100, dark: false),
+            settings: ReadingSettings(
+                scroll: false,
+                fontSize: 100,
+                dark: session.request.theme == .dark
+            ),
             for: primary.id
         )
         try session.library.saveNote(BookNote(locator: first, body: noteText), for: primary.id)

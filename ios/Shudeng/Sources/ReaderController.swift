@@ -11,13 +11,11 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private var navigator: EPUBNavigatorViewController
     private var settings: ReadingSettings
     private let content = UIView()
+    private let toolbar = ReaderToolbarView()
+    private let footer = ReaderFooterView()
+    private let statusPanel = UIView()
     private let status = UILabel()
     private let retry = UIButton(type: .system)
-    private let close = UIButton(type: .system)
-    private let configure = UIButton(type: .system)
-    private let browse = UIButton(type: .system)
-    private let toggle = UIButton(type: .system)
-    private let askBook = UIButton(type: .system)
     private var pendingLocation: Locator?
     private var saveFailed = false
     private var loading = true
@@ -40,7 +38,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     var referenceReturn: (() -> Void)?
     private var activeQuestion: UINavigationController?
-    private let readerTitle = UILabel()
+    private var currentChapter = ""
+    private var selectionMenu: ReaderSelectionMenu?
+    private var menuPresentedAt: CFTimeInterval = 0
 
     init(book: Book, publication: Publication, library: LibraryStore, target: Locator? = nil) throws {
         self.book = book
@@ -55,92 +55,102 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         navigator.delegate = self
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    private static func preferences(_ settings: ReadingSettings) -> EPUBPreferences {
+    static let designedFontSize: CGFloat = 20
+    static let designedLineHeight: Double = 1.95
+    static let designedGutter: CGFloat = 29
+    private static let readiumCJKBaseFontSize: CGFloat = 14
+
+    static func readingPreferences(_ settings: ReadingSettings) -> EPUBPreferences {
         let traits = UITraitCollection(userInterfaceStyle: settings.dark ? .dark : .light)
         return EPUBPreferences(backgroundColor: Color(uiColor: BookDesign.paper.resolvedColor(with: traits)),
-                        fontFamily: .serif, fontSize: Double(settings.fontSize) / 100, publisherStyles: false,
+                        fontFamily: FontFamily(rawValue: "Songti SC"),
+                        fontSize: Double(designedFontSize / readiumCJKBaseFontSize)
+                            * Double(settings.fontSize) / 100,
+                        lineHeight: designedLineHeight,
+                        pageMargins: 1,
+                        paragraphIndent: 2,
+                        paragraphSpacing: 1.5,
+                        publisherStyles: false,
                         scroll: settings.scroll && settings.pageCurl != true,
+                        textAlign: .justify,
                         textColor: Color(uiColor: BookDesign.ink.resolvedColor(with: traits)), theme: settings.dark ? .dark : .light)
     }
-    private static func configuration(_ settings: ReadingSettings) -> EPUBNavigatorViewController.Configuration {
-        .init(preferences: preferences(settings), editingActions: [
+
+    static func configuration(_ settings: ReadingSettings) -> EPUBNavigatorViewController.Configuration {
+        var rs = CSSRSProperties()
+        rs.pageGutter = CSSPxLength(designedGutter)
+        rs.selectionBackgroundColor = CSSIntColor(settings.dark ? 0x5B4D2D : 0xF4E3AC)
+        rs.selectionTextColor = CSSIntColor(settings.dark ? 0xF0F1E9 : 0x282B26)
+        let inset = EPUBContentInsets(top: designedGutter, bottom: 22)
+        return .init(preferences: readingPreferences(settings), editingActions: [
             EditingAction(title: "高亮", action: #selector(highlightSelection)),
-            EditingAction(title: "提问", action: #selector(askSelection)),
-            EditingAction(title: "写笔记", action: #selector(noteSelection))
-        ] + EditingAction.defaultActions)
+            EditingAction(title: "写笔记", action: #selector(noteSelection)),
+            EditingAction(title: "提问", action: #selector(askSelection))
+        ], contentInset: [.compact: inset, .regular: inset], readiumCSSRSProperties: rs)
     }
     override func viewDidLoad() {
         super.viewDidLoad()
         applyTheme()
-        close.setTitle("书架", for: .normal)
-        close.setImage(UIImage(systemName: "chevron.left"), for: .normal)
-        close.addTarget(self, action: #selector(closeReader), for: .touchUpInside)
-        configure.setImage(UIImage(systemName: "ellipsis"), for: .normal)
-        configure.accessibilityLabel = "阅读设置"
-        configure.addTarget(self, action: #selector(openSettings), for: .touchUpInside)
-        configure.isEnabled = false
-        browse.setImage(UIImage(systemName: "list.bullet"), for: .normal)
-        browse.accessibilityLabel = "目录与书签"
-        browse.addTarget(self, action: #selector(openNavigation), for: .touchUpInside)
-        browse.isEnabled = false
-        browse.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        toggle.setImage(UIImage(systemName: "eye.slash"), for: .normal)
-        toggle.accessibilityLabel = "隐藏工具栏"
-        toggle.addTarget(self, action: #selector(toggleToolbar), for: .touchUpInside)
-        BookDesign.button(askBook, title: "问问书灯", symbol: "lightbulb")
-        askBook.backgroundColor = BookDesign.glow; askBook.layer.cornerRadius = 18
-        askBook.accessibilityLabel = "问问书灯"; askBook.accessibilityIdentifier = "reader-ask-book"
-        askBook.addTarget(self, action: #selector(askCurrentBook), for: .touchUpInside)
-        for button in [close, configure, browse, toggle, askBook] {
-            button.titleLabel?.font = .preferredFont(forTextStyle: .body)
-            button.titleLabel?.adjustsFontForContentSizeCategory = true
-            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        }
-        if traitCollection.preferredContentSizeCategory.isAccessibilityCategory {
-            configure.setTitle(nil, for: .normal)
-            configure.setImage(UIImage(systemName: "gearshape"), for: .normal)
-            configure.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        }
-        for button in [browse, configure, toggle] {
-            button.setPreferredSymbolConfiguration(.init(pointSize: 20), forImageIn: .normal)
-        }
-        toggle.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        readerTitle.font = BookDesign.font(13, weight: .medium); readerTitle.adjustsFontForContentSizeCategory = true
-        readerTitle.textColor = BookDesign.secondary; readerTitle.textAlignment = .center
-        readerTitle.lineBreakMode = .byTruncatingMiddle
-        readerTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        configure.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        let header = UIStackView(arrangedSubviews: [close, readerTitle, browse, configure, toggle])
-        header.spacing = 4
-        status.font = .preferredFont(forTextStyle: .caption1)
-        status.adjustsFontForContentSizeCategory = true
-        status.textColor = .secondaryLabel
+        currentChapter = navigator.currentLocation?.title ?? book.title
+
+        toolbar.backButton.addTarget(self, action: #selector(closeReader), for: .touchUpInside)
+        toolbar.contentsButton.addTarget(self, action: #selector(openNavigation), for: .touchUpInside)
+        toolbar.settingsButton.addTarget(self, action: #selector(openSettings), for: .touchUpInside)
+        toolbar.contentsButton.isEnabled = false
+        toolbar.settingsButton.isEnabled = false
+        toolbar.configure(title: book.title, chapter: currentChapter, reference: false)
+
+        footer.update(progress: footerProgress, chapter: currentChapter)
+        footer.askButton.addTarget(self, action: #selector(askCurrentBook), for: .touchUpInside)
+
+        statusPanel.backgroundColor = BookDesign.wash
+        statusPanel.layer.cornerRadius = 12
+        statusPanel.layer.borderWidth = 1
+        statusPanel.layer.borderColor = BookDesign.line.cgColor
+        status.font = BookDesign.font(12, style: .caption1)
+        status.textColor = BookDesign.secondary
         status.numberOfLines = 0
         status.accessibilityIdentifier = "reading-save-status"
         status.text = "正在打开…"
-        retry.setTitle("重试保存", for: .normal)
-        retry.titleLabel?.font = .preferredFont(forTextStyle: .body)
-        retry.titleLabel?.adjustsFontForContentSizeCategory = true
+        BookDesign.button(retry, title: "重试保存")
         retry.addTarget(self, action: #selector(retrySave), for: .touchUpInside)
-        setRetryVisible(false)
-        updateReferenceNavigation()
-        let footer = UIStackView(arrangedSubviews: [askBook, status, retry])
-        footer.axis = .vertical
-        footer.spacing = 4
-        content.accessibilityIdentifier = "reading-content"
-        for child in [header, content, footer] { child.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(child) }
+        retry.isHidden = true
+        let statusStack = UIStackView(arrangedSubviews: [status, retry])
+        statusStack.axis = .vertical
+        statusStack.alignment = .fill
+        statusStack.spacing = 8
+        statusStack.isLayoutMarginsRelativeArrangement = true
+        statusStack.layoutMargins = UIEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        statusStack.translatesAutoresizingMaskIntoConstraints = false
+        statusPanel.addSubview(statusStack)
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4),
-            header.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            header.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            content.topAnchor.constraint(equalTo: header.bottomAnchor),
+            statusStack.topAnchor.constraint(equalTo: statusPanel.topAnchor),
+            statusStack.leadingAnchor.constraint(equalTo: statusPanel.leadingAnchor),
+            statusStack.trailingAnchor.constraint(equalTo: statusPanel.trailingAnchor),
+            statusStack.bottomAnchor.constraint(equalTo: statusPanel.bottomAnchor)
+        ])
+        updateReferenceNavigation()
+        content.accessibilityIdentifier = "reading-content"
+        for child in [toolbar, content, footer, statusPanel] {
+            child.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(child)
+        }
+        NSLayoutConstraint.activate([
+            toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            toolbar.heightAnchor.constraint(equalToConstant: 51),
+            content.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
             content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            content.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -4),
-            footer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            footer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
-            footer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -4),
-            footer.heightAnchor.constraint(greaterThanOrEqualToConstant: 28)
+            content.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            footer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            footer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            footer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            footer.heightAnchor.constraint(equalToConstant: 66),
+            statusPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            statusPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            statusPanel.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8)
         ])
         attachNavigator()
         NotificationCenter.default.addObserver(self, selector: #selector(background), name: UIApplication.willResignActiveNotification, object: nil)
@@ -149,7 +159,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private func attachNavigator() {
         applyHighlights()
         if questionOrigin != nil, let target = openingTarget {
-            navigator.apply(decorations: [Decoration(id: "citation", locator: target, style: .highlight(tint: BookDesign.glow))], in: "question-citation")
+            navigator.apply(decorations: [Decoration(id: "citation", locator: target, style: .highlight(tint: BookDesign.selection))], in: "question-citation")
         }
         navigator.observeDecorationInteractions(inGroup: "notes") { [weak self] event in
             guard let self, !self.loading, !self.curlBusy, !self.navigating,
@@ -173,9 +183,40 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         view.tintColor = BookDesign.lamp
     }
     private func updateReferenceNavigation() {
-        close.setTitle(questionOrigin == nil ? "书架" : "返回问答", for: .normal)
-        close.accessibilityIdentifier = questionOrigin == nil ? "reader-close" : "reader-return-question"
-        readerTitle.text = questionOrigin == nil ? book.title : "查看引用"
+        toolbar.configure(
+            title: book.title,
+            chapter: currentChapter,
+            reference: questionOrigin != nil
+        )
+        toolbar.backButton.accessibilityIdentifier = questionOrigin == nil
+            ? "reader-close"
+            : "reader-return-question"
+        toolbar.backButton.accessibilityLabel = questionOrigin == nil ? "书架" : "返回问答"
+    }
+    private var footerProgress: String {
+        guard let location = pendingLocation ?? navigator.currentLocation else { return "" }
+        let value = location.locations.totalProgression ?? location.locations.progression
+        guard let value else { return "" }
+        return "\(Int((max(0, min(1, value)) * 100).rounded()))%"
+    }
+    private func updateLocationChrome(_ locator: Locator) {
+        if let title = locator.title, !title.isEmpty { currentChapter = title }
+        updateReferenceNavigation()
+        footer.update(progress: footerProgress, chapter: currentChapter)
+    }
+    private func setStatus(
+        _ text: String,
+        error: Bool = false,
+        retryVisible: Bool = false,
+        visible: Bool = true
+    ) {
+        status.text = text
+        status.textColor = error ? BookDesign.error : BookDesign.secondary
+        retry.isHidden = !retryVisible
+        retry.isUserInteractionEnabled = retryVisible
+        statusPanel.alpha = visible ? 1 : 0
+        statusPanel.isUserInteractionEnabled = visible
+        if visible { view.bringSubviewToFront(statusPanel) }
     }
     @objc private func openSettings() {
         let controller = ReadingSettingsController(settings: settings) { [weak self] changed in
@@ -190,10 +231,10 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         guard (changed != settings || force), !loading, !curlBusy else { return }
         stopCurl()
         loading = true
-        configure.isEnabled = false
-        browse.isEnabled = false
+        toolbar.settingsButton.isEnabled = false
+        toolbar.contentsButton.isEnabled = false
         content.isUserInteractionEnabled = false
-        status.text = "正在应用阅读设置…"
+        setStatus("正在应用阅读设置…", visible: true)
         navigator.delegate = nil
         Task {
             do {
@@ -212,10 +253,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                     initialLocation: location,
                     config: Self.configuration(changed))
                 loading = true
-                configure.isEnabled = false
+                toolbar.settingsButton.isEnabled = false
                 setRetryVisible(false)
-                status.text = "正在应用阅读设置…"
-                status.textColor = .secondaryLabel
+                setStatus("正在应用阅读设置…", visible: true)
                 navigator.delegate = nil
                 navigator.willMove(toParent: nil)
                 navigator.view.removeFromSuperview()
@@ -273,18 +313,32 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     """
     @objc private func toggleToolbar() {
         toolbarHidden.toggle()
-        // Reserve the same space: showing controls never covers or repaginates
-        // the text. The reveal button remains accessible without a gesture.
-        close.alpha = toolbarHidden ? 0 : 1
-        configure.alpha = toolbarHidden ? 0 : 1
-        browse.alpha = toolbarHidden ? 0 : 1
-        close.accessibilityElementsHidden = toolbarHidden
-        configure.accessibilityElementsHidden = toolbarHidden
-        browse.accessibilityElementsHidden = toolbarHidden
-        toggle.accessibilityLabel = toolbarHidden ? "显示工具栏" : "隐藏工具栏"
-        toggle.setImage(UIImage(systemName: toolbarHidden ? "eye" : "eye.slash"), for: .normal)
+        // The 51 pt strip always remains reserved so revealing the controls
+        // never repaginates or moves the reader's current line.
+        toolbar.setSideControlsHidden(toolbarHidden)
+        hideSelectionMenu()
+        view.accessibilityCustomActions = [
+            UIAccessibilityCustomAction(
+                name: toolbarHidden ? "显示工具栏" : "隐藏工具栏",
+                target: self,
+                selector: #selector(toggleToolbar)
+            )
+        ]
     }
     func navigator(_ navigator: VisualNavigator, didTapAt point: CGPoint) {
+        // A long-press release is also delivered as a tap before Readium has
+        // finished propagating the selection. Keep the just-presented menu.
+        if selectionMenu != nil {
+            guard CACurrentMediaTime() - menuPresentedAt >= 0.45 else { return }
+            hideSelectionMenu()
+            self.navigator.clearSelection()
+            return
+        }
+        let hasSelection = self.navigator.currentSelection != nil
+        if !hasSelection {
+            hideSelectionMenu()
+        }
+        guard !hasSelection else { return }
         guard point.x > content.bounds.width * 0.3, point.x < content.bounds.width * 0.7 else { return }
         toggleToolbar()
     }
@@ -307,17 +361,16 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         }
         loading = false
         content.isUserInteractionEnabled = true
-        configure.isEnabled = true
-        browse.isEnabled = true
+        toolbar.settingsButton.isEnabled = true
+        toolbar.contentsButton.isEnabled = true
         pendingLocation = locator
+        updateLocationChrome(locator)
+        hideSelectionMenu()
         // Never replace a native pagination location with a paragraph start.
         persistPending()
     }
     private func setRetryVisible(_ visible: Bool) {
-        // Keep a stable footer in curl mode. Collapsing the retry row on every
-        // rebuild would alternately resize the viewport and invalidate itself.
-        retry.isHidden = !visible && settings.pageCurl != true
-        retry.alpha = visible ? 1 : 0
+        retry.isHidden = !visible
         retry.accessibilityElementsHidden = !visible
         retry.isUserInteractionEnabled = visible
     }
@@ -327,14 +380,14 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             try library.checkRevision(bookRevision, for: book.id)
             try library.saveReadingState(pendingLocation, settings: settings, for: book.id)
             saveFailed = false
-            status.text = "阅读位置已保存"
-            status.textColor = .secondaryLabel
-            setRetryVisible(false)
+            setStatus("阅读位置已保存", visible: false)
         } catch {
             saveFailed = true
-            status.text = "位置与设置保存失败，重启将恢复上次已保存状态"
-            status.textColor = .systemRed
-            setRetryVisible(true)
+            setStatus(
+                "位置与设置保存失败，重启将恢复上次已保存状态",
+                error: true,
+                retryVisible: true
+            )
         }
     }
     @objc private func retrySave() {
@@ -343,7 +396,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             loadFailed = false
             loading = true
             setRetryVisible(false)
-            status.text = "正在重新打开…"
+            setStatus("正在重新打开…", visible: true)
             navigator.delegate = nil
             navigator.willMove(toParent: nil)
             navigator.view.removeFromSuperview()
@@ -380,14 +433,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private func showError() {
         guard !leaving else { return }
         stopCurl()
-        status.text = "原文加载失败，未保存此次变更"
-        status.textColor = .systemRed
+        setStatus("原文加载失败，未保存此次变更", error: true, retryVisible: true)
         loadFailed = true
         loading = true
         content.isUserInteractionEnabled = false
-        configure.isEnabled = false
-        browse.isEnabled = false
-        setRetryVisible(true)
+        toolbar.settingsButton.isEnabled = false
+        toolbar.contentsButton.isEnabled = false
         saveFailed = true
         guard presentedViewController == nil else { return }
         let alert = UIAlertController(title: "原文加载失败", message: "无法读取此处内容，请返回书架后重新打开。", preferredStyle: .alert)
@@ -421,9 +472,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         navigating = true
         navigationFailed = false
         content.isUserInteractionEnabled = false
-        for button in [browse, configure, close] { button.isEnabled = false }
-        setRetryVisible(false)
-        status.text = "正在定位原文…"
+        for button in [
+            toolbar.contentsButton,
+            toolbar.settingsButton,
+            toolbar.backButton
+        ] { button.isEnabled = false }
+        setStatus("正在定位原文…", visible: true)
         Task {
             // Do not allow Readium's fallback to a different resource/progression
             // to masquerade as a valid bookmark or table-of-contents destination.
@@ -461,19 +515,19 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             }
             if arrived { try? await Task.sleep(nanoseconds: 350_000_000) }
             navigating = false
-            close.isEnabled = true
+            toolbar.backButton.isEnabled = true
             guard !loadFailed else { completion?(false); return }
-            browse.isEnabled = true
-            configure.isEnabled = arrived
+            toolbar.contentsButton.isEnabled = true
+            toolbar.settingsButton.isEnabled = arrived
             content.isUserInteractionEnabled = arrived
             navigationFailed = !arrived
             if arrived, let actual = navigator.currentLocation {
                 pendingLocation = actual
+                updateLocationChrome(actual)
                 if settings.pageCurl == true { startCurl() }
                 else { persistPending() }
             } else {
-                status.text = "未能到达原文，未保存此次跳转；请重新选择目录或书签"
-                status.textColor = .systemRed
+                setStatus("未能到达原文，未保存此次跳转；请重新选择目录或书签", error: true)
                 let alert = UIAlertController(title: "无法定位原文", message: "目标位置无效或原文未显示，未覆盖上次阅读位置。", preferredStyle: .alert)
                 alert.addAction(UIAlertAction(title: "知道了", style: .default))
                 present(alert, animated: true)
@@ -491,15 +545,25 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             busy: { [weak self] in
                 guard let self else { return }
                 self.curlBusy = true
-                self.configure.isEnabled = false; self.browse.isEnabled = false
-                self.status.text = "正在准备翻页…"
+                self.toolbar.settingsButton.isEnabled = false
+                self.toolbar.contentsButton.isEnabled = false
+                self.setStatus("正在准备翻页…", visible: true)
             }, settled: { [weak self] actual, commit in
                 guard let self else { return }
                 self.curlBusy = false; self.loading = false
                 self.content.isUserInteractionEnabled = true
-                self.configure.isEnabled = true; self.browse.isEnabled = true
-                if commit { self.pendingLocation = actual; self.persistPending() }
-                else { self.status.text = self.saveFailed ? "位置与设置保存失败" : "阅读位置已保存" }
+                self.toolbar.settingsButton.isEnabled = true
+                self.toolbar.contentsButton.isEnabled = true
+                if commit {
+                    self.pendingLocation = actual
+                    self.updateLocationChrome(actual)
+                    self.persistPending()
+                }
+                else if self.saveFailed {
+                    self.setStatus("位置与设置保存失败", error: true, retryVisible: true)
+                } else {
+                    self.setStatus("阅读位置已保存", visible: false)
+                }
                 self.view.setNeedsLayout()
             }, failed: { [weak self] in self?.curlPreparationFailed() })
         curl = controller
@@ -519,10 +583,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         stopCurl()
         loadFailed = true; loading = true
         content.isUserInteractionEnabled = false
-        configure.isEnabled = false; browse.isEnabled = false
-        status.text = "仿真翻页准备失败，请重试或使用分页"
-        status.textColor = .systemRed
-        setRetryVisible(true)
+        toolbar.settingsButton.isEnabled = false
+        toolbar.contentsButton.isEnabled = false
+        setStatus("仿真翻页准备失败，请重试或使用分页", error: true, retryVisible: true)
         let alert = UIAlertController(title: "翻页准备失败", message: "未保存内部准备位置，可重试或恢复普通分页阅读。", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "使用分页", style: .default) { [weak self] _ in
             self?.settings.pageCurl = false
@@ -562,7 +625,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         highlightedIDs = notes.map(\.id)
         navigator.apply(decorations: notes.compactMap { note in
             guard let locator = try? note.location() else { return nil }
-            return Decoration(id: note.id.uuidString, locator: locator, style: .highlight(tint: .systemYellow))
+            return Decoration(id: note.id.uuidString, locator: locator, style: .highlight(tint: BookDesign.selection))
         }, in: "notes")
     }
     // Readium applies decorations asynchronously. Verify actual ranges before
@@ -601,8 +664,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         applyHighlights()
         Task {
             guard await highlightsReady() else {
-                status.text = "高亮未能显示，请返回书架后重试；已保存记录仍在笔记中"
-                status.textColor = .systemRed
+                setStatus("高亮未能显示，请返回书架后重试；已保存记录仍在笔记中", error: true)
                 return
             }
             if wasCurl { startCurl() }
@@ -616,6 +678,59 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         sheet.overrideUserInterfaceStyle = overrideUserInterfaceStyle
         sheet.modalPresentationStyle = .fullScreen
         present(sheet, animated: true)
+    }
+    func navigator(
+        _ navigator: SelectableNavigator,
+        shouldShowMenuForSelection selection: Selection
+    ) -> Bool {
+        guard navigator === self.navigator, questionOrigin == nil,
+              !loading, !curlBusy, !navigating else {
+            hideSelectionMenu()
+            return false
+        }
+        presentSelectionMenu(for: selection)
+        return false
+    }
+    private func presentSelectionMenu(for selection: Selection) {
+        hideSelectionMenu()
+        guard let frame = selection.frame else { return }
+        let menu = ReaderSelectionMenu()
+        menu.onHighlight = { [weak self] in
+            self?.captureSelection(writeNote: false, selection: selection)
+        }
+        menu.onNote = { [weak self] in
+            self?.captureSelection(writeNote: true, selection: selection)
+        }
+        menu.onAsk = { [weak self] in
+            self?.captureSelection(writeNote: false, question: true, selection: selection)
+        }
+        view.addSubview(menu)
+        let selectionFrame = navigator.view.convert(frame, to: view)
+        menu.place(in: view, above: selectionFrame)
+        selectionMenu = menu
+        menuPresentedAt = CACurrentMediaTime()
+        Task { [weak self, weak menu] in
+            guard let self, let menu,
+                  case let .success(bounds as [String: Any]) =
+                    await self.navigator.evaluateJavaScript(Self.selectionBounds),
+                  let x = bounds["x"] as? CGFloat,
+                  let y = bounds["y"] as? CGFloat,
+                  let width = bounds["width"] as? CGFloat,
+                  let height = bounds["height"] as? CGFloat,
+                  width > 0, height > 0,
+                  self.selectionMenu === menu,
+                  self.navigator.currentSelection != nil else { return }
+            let fullSelection = self.navigator.view.convert(
+                CGRect(x: x, y: y, width: width, height: height),
+                to: self.view
+            )
+            menu.place(in: self.view, above: fullSelection)
+        }
+    }
+    private func hideSelectionMenu() {
+        selectionMenu?.removeFromSuperview()
+        selectionMenu = nil
+        menuPresentedAt = 0
     }
     @objc private func highlightSelection() { captureSelection(writeNote: false) }
     @objc private func noteSelection() { captureSelection(writeNote: true) }
@@ -691,8 +806,14 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     override var keyCommands: [UIKeyCommand]? {
         questionOrigin == nil ? super.keyCommands : [UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(backToQuestion))]
     }
-    private func captureSelection(writeNote: Bool, question: Bool = false) {
-        guard !loading, !curlBusy, !navigating, let selection = navigator.currentSelection else { return }
+    private func captureSelection(
+        writeNote: Bool,
+        question: Bool = false,
+        selection capturedSelection: Selection? = nil
+    ) {
+        guard !loading, !curlBusy, !navigating,
+              let selection = capturedSelection ?? navigator.currentSelection else { return }
+        hideSelectionMenu()
         Task {
             do {
                 guard case let .success(anchor as [String: Any]) = await navigator.evaluateJavaScript(Self.selectionAnchor),
@@ -788,6 +909,15 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
       const after = document.createRange(); after.selectNodeContents(root); after.setStart(range.endContainer, range.endOffset);
       return { selector: selector(root), highlight: range.toString(), before: before.toString(), after: after.toString(),
         domRange: { start: point(range.startContainer, range.startOffset), end: point(range.endContainer, range.endOffset) } };
+    })()
+    """
+
+    fileprivate static let selectionBounds = """
+    (() => {
+      const selection = getSelection();
+      if (!selection.rangeCount || selection.isCollapsed) return null;
+      const rect = selection.getRangeAt(0).getBoundingClientRect();
+      return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
     })()
     """
 
@@ -889,6 +1019,313 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         })()
         """
     }
+}
+
+@MainActor
+final class ReaderToolbarView: UIView {
+    let backButton = UIButton(type: .system)
+    let contentsButton = UIButton(type: .system)
+    let settingsButton = UIButton(type: .system)
+    private let titleLabel = BookDesign.label(nil, size: 13, weight: .semibold)
+    private let chapterLabel = BookDesign.label(nil, size: 10, colour: BookDesign.secondary, style: .caption2)
+    private let leadingRegion = UIView()
+    private let trailingRegion = UIView()
+    private var leadingWidth: NSLayoutConstraint!
+    private var backWidth: NSLayoutConstraint!
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = BookDesign.paper
+        accessibilityIdentifier = "reader-toolbar"
+
+        configure(backButton, image: "arrow.left")
+        configure(contentsButton, image: "list.bullet")
+        configure(settingsButton, image: "ellipsis")
+        backButton.accessibilityLabel = "书架"
+        backButton.accessibilityIdentifier = "reader-close"
+        contentsButton.accessibilityLabel = "目录与书签"
+        contentsButton.accessibilityIdentifier = "reader-contents"
+        settingsButton.accessibilityLabel = "阅读设置"
+        settingsButton.accessibilityIdentifier = "reader-settings"
+
+        titleLabel.textAlignment = .center
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.adjustsFontForContentSizeCategory = true
+        titleLabel.accessibilityIdentifier = "reader-title"
+        chapterLabel.textAlignment = .center
+        chapterLabel.lineBreakMode = .byTruncatingTail
+        chapterLabel.adjustsFontForContentSizeCategory = true
+        chapterLabel.accessibilityIdentifier = "reader-chapter"
+
+        let titleStack = UIStackView(arrangedSubviews: [titleLabel, chapterLabel])
+        titleStack.axis = .vertical
+        titleStack.alignment = .fill
+        titleStack.spacing = 1
+
+        let trailingStack = UIStackView(arrangedSubviews: [contentsButton, settingsButton])
+        trailingStack.axis = .horizontal
+        trailingStack.spacing = 0
+
+        for child in [leadingRegion, trailingRegion, titleStack] {
+            child.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(child)
+        }
+        backButton.translatesAutoresizingMaskIntoConstraints = false
+        leadingRegion.addSubview(backButton)
+        trailingStack.translatesAutoresizingMaskIntoConstraints = false
+        trailingRegion.addSubview(trailingStack)
+        leadingWidth = leadingRegion.widthAnchor.constraint(equalToConstant: 88)
+        backWidth = backButton.widthAnchor.constraint(equalToConstant: 44)
+
+        NSLayoutConstraint.activate([
+            leadingWidth,
+            backWidth,
+            leadingRegion.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 13),
+            leadingRegion.centerYAnchor.constraint(equalTo: centerYAnchor),
+            leadingRegion.heightAnchor.constraint(equalToConstant: 44),
+            trailingRegion.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -13),
+            trailingRegion.centerYAnchor.constraint(equalTo: centerYAnchor),
+            trailingRegion.widthAnchor.constraint(equalToConstant: 88),
+            trailingRegion.heightAnchor.constraint(equalToConstant: 44),
+            backButton.leadingAnchor.constraint(equalTo: leadingRegion.leadingAnchor),
+            backButton.centerYAnchor.constraint(equalTo: leadingRegion.centerYAnchor),
+            backButton.heightAnchor.constraint(equalToConstant: 44),
+            backButton.trailingAnchor.constraint(lessThanOrEqualTo: leadingRegion.trailingAnchor),
+            trailingStack.topAnchor.constraint(equalTo: trailingRegion.topAnchor),
+            trailingStack.leadingAnchor.constraint(equalTo: trailingRegion.leadingAnchor),
+            trailingStack.trailingAnchor.constraint(equalTo: trailingRegion.trailingAnchor),
+            trailingStack.bottomAnchor.constraint(equalTo: trailingRegion.bottomAnchor),
+            contentsButton.widthAnchor.constraint(equalToConstant: 44),
+            settingsButton.widthAnchor.constraint(equalToConstant: 44),
+            titleStack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            titleStack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleStack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingRegion.trailingAnchor, constant: 4),
+            titleStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingRegion.leadingAnchor, constant: -4)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func configure(title: String, chapter: String, reference: Bool) {
+        titleLabel.text = title
+        chapterLabel.text = (reference ? "查看引用 1 · " : "") + chapter
+        leadingWidth.constant = reference ? 112 : 88
+        backWidth.constant = reference ? 112 : 44
+        backButton.configuration?.title = reference ? "返回问答" : nil
+        backButton.accessibilityLabel = reference ? "返回问答" : "书架"
+        backButton.accessibilityHint = reference ? nil : "返回书架"
+    }
+
+    func setSideControlsHidden(_ hidden: Bool) {
+        for control in [backButton, contentsButton, settingsButton] {
+            control.alpha = hidden ? 0 : 1
+            control.accessibilityElementsHidden = hidden
+            control.isUserInteractionEnabled = !hidden
+        }
+    }
+
+    private func configure(_ button: UIButton, image: String) {
+        var config = UIButton.Configuration.plain()
+        config.image = BookDesign.symbol(image, size: 20)
+        config.baseForegroundColor = BookDesign.ink
+        config.contentInsets = .zero
+        config.imagePlacement = .leading
+        config.imagePadding = 5
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+            var attributes = $0
+            attributes.font = BookDesign.font(14, weight: .medium)
+            return attributes
+        }
+        button.configuration = config
+        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+    }
+}
+
+@MainActor
+final class ReaderFooterView: UIView {
+    let askButton = UIButton(type: .system)
+    private let progressLabel = BookDesign.label(nil, size: 11, colour: BookDesign.secondary, style: .caption2)
+    private let chapterLabel = BookDesign.label(nil, size: 11, colour: BookDesign.secondary, style: .caption2)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = BookDesign.paper
+        accessibilityIdentifier = "reader-footer"
+
+        var config = UIButton.Configuration.plain()
+        config.title = "问问书灯"
+        config.image = BookDesign.symbol("lightbulb", size: 19)
+        config.imagePadding = 7
+        config.baseForegroundColor = BookDesign.ink
+        config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+        config.background.backgroundColor = BookDesign.surface
+        config.background.strokeColor = BookDesign.line
+        config.background.strokeWidth = 1
+        config.background.cornerRadius = 24
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+            var attributes = $0
+            attributes.font = BookDesign.font(13, weight: .semibold)
+            return attributes
+        }
+        askButton.configuration = config
+        askButton.accessibilityLabel = "问问书灯"
+        askButton.accessibilityIdentifier = "reader-ask-book"
+        askButton.layer.shadowColor = BookDesign.ink.cgColor
+        askButton.layer.shadowOpacity = 0.06
+        askButton.layer.shadowRadius = 5
+        askButton.layer.shadowOffset = CGSize(width: 0, height: 3)
+
+        progressLabel.accessibilityIdentifier = "reader-progress"
+        chapterLabel.accessibilityIdentifier = "reader-footer-chapter"
+        chapterLabel.textAlignment = .right
+        chapterLabel.lineBreakMode = .byTruncatingHead
+
+        for child in [askButton, progressLabel, chapterLabel] {
+            child.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(child)
+        }
+        NSLayoutConstraint.activate([
+            askButton.centerXAnchor.constraint(equalTo: centerXAnchor),
+            askButton.heightAnchor.constraint(equalToConstant: 44),
+            askButton.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            progressLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            progressLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            chapterLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            chapterLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            chapterLabel.leadingAnchor.constraint(greaterThanOrEqualTo: progressLabel.trailingAnchor, constant: 12)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func update(progress: String, chapter: String) {
+        progressLabel.text = progress
+        chapterLabel.text = chapter
+    }
+}
+
+@MainActor
+final class ReaderSelectionMenu: UIView {
+    var onHighlight: (() -> Void)?
+    var onNote: (() -> Void)?
+    var onAsk: (() -> Void)?
+    private let bubble = UIView()
+    private let caret = UIView()
+    private var caretCenter: NSLayoutConstraint!
+
+    override init(frame: CGRect = .zero) {
+        super.init(frame: frame)
+        accessibilityIdentifier = "reader-selection-menu"
+        backgroundColor = .clear
+
+        bubble.backgroundColor = BookDesign.ink
+        bubble.layer.cornerRadius = 12
+        bubble.layer.shadowColor = UIColor.black.cgColor
+        bubble.layer.shadowOpacity = 0.16
+        bubble.layer.shadowRadius = 10
+        bubble.layer.shadowOffset = CGSize(width: 0, height: 5)
+        caret.backgroundColor = BookDesign.ink
+        caret.transform = CGAffineTransform(rotationAngle: .pi / 4)
+
+        let highlight = actionButton("高亮", identifier: "selection-highlight")
+        let note = actionButton("笔记", identifier: "selection-note")
+        let ask = actionButton("提问", identifier: "selection-ask", image: "lightbulb")
+        highlight.addTarget(self, action: #selector(highlightTapped), for: .touchUpInside)
+        note.addTarget(self, action: #selector(noteTapped), for: .touchUpInside)
+        ask.addTarget(self, action: #selector(askTapped), for: .touchUpInside)
+        let actions = UIStackView(arrangedSubviews: [highlight, note, ask])
+        actions.axis = .horizontal
+        actions.distribution = .fillEqually
+
+        let firstLine = UIView()
+        let secondLine = UIView()
+        for line in [firstLine, secondLine] {
+            line.backgroundColor = UIColor.white.withAlphaComponent(0.22)
+        }
+
+        for child in [bubble, caret] {
+            child.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(child)
+        }
+        actions.translatesAutoresizingMaskIntoConstraints = false
+        bubble.addSubview(actions)
+        for line in [firstLine, secondLine] {
+            line.translatesAutoresizingMaskIntoConstraints = false
+            bubble.addSubview(line)
+        }
+        caretCenter = caret.centerXAnchor.constraint(equalTo: leadingAnchor, constant: 117)
+        NSLayoutConstraint.activate([
+            bubble.topAnchor.constraint(equalTo: topAnchor),
+            bubble.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bubble.trailingAnchor.constraint(equalTo: trailingAnchor),
+            bubble.heightAnchor.constraint(equalToConstant: 46),
+            caret.widthAnchor.constraint(equalToConstant: 11),
+            caret.heightAnchor.constraint(equalToConstant: 11),
+            caretCenter,
+            caret.bottomAnchor.constraint(equalTo: bottomAnchor),
+            actions.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 2),
+            actions.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 6),
+            actions.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -6),
+            actions.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -2),
+            firstLine.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 78),
+            firstLine.centerYAnchor.constraint(equalTo: bubble.centerYAnchor),
+            firstLine.widthAnchor.constraint(equalToConstant: 1),
+            firstLine.heightAnchor.constraint(equalToConstant: 28),
+            secondLine.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 156),
+            secondLine.centerYAnchor.constraint(equalTo: bubble.centerYAnchor),
+            secondLine.widthAnchor.constraint(equalToConstant: 1),
+            secondLine.heightAnchor.constraint(equalToConstant: 28)
+        ])
+        isAccessibilityElement = false
+        accessibilityElements = [highlight, note, ask]
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func place(in host: UIView, above selection: CGRect) {
+        var size = CGSize(width: 234, height: 51)
+        let minY = host.safeAreaInsets.top + 55
+        let preferredAbove = selection.minY - size.height - 4
+        let preferredBelow = selection.maxY + 8
+        let useBelow = preferredAbove < minY
+            && preferredBelow + 46 <= host.bounds.height - 82
+        if useBelow {
+            size.height = 46
+        }
+        var y = useBelow ? preferredBelow : preferredAbove
+        if !useBelow, y < minY {
+            y = minY
+        }
+        y = min(y, host.bounds.height - size.height - 82)
+        let x = max(8, min(selection.midX - size.width / 2, host.bounds.width - size.width - 8))
+        frame = CGRect(origin: CGPoint(x: x, y: y), size: size)
+        caret.isHidden = useBelow
+        caretCenter.constant = max(12, min(size.width - 12, selection.midX - x))
+        setNeedsLayout()
+        layoutIfNeeded()
+    }
+
+    private func actionButton(_ title: String, identifier: String, image: String? = nil) -> UIButton {
+        let button = UIButton(type: .system)
+        var config = UIButton.Configuration.plain()
+        config.title = title
+        config.image = image.flatMap { BookDesign.symbol($0, size: 17) }
+        config.imagePadding = 5
+        config.baseForegroundColor = BookDesign.paper
+        config.contentInsets = .zero
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+            var attributes = $0
+            attributes.font = BookDesign.font(13, weight: .medium)
+            return attributes
+        }
+        button.configuration = config
+        button.accessibilityIdentifier = identifier
+        return button
+    }
+
+    @objc private func highlightTapped() { onHighlight?() }
+    @objc private func noteTapped() { onNote?() }
+    @objc private func askTapped() { onAsk?() }
 }
 
 @MainActor
