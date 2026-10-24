@@ -462,9 +462,11 @@ extension ReadingUITests {
                 NSPredicate(format: "label CONTAINS %@", "这句话里的“灯”指什么？")
             ).firstMatch.exists
         )
-        XCTAssertTrue(app.buttons["question-follow-up"].exists)
-        XCTAssertTrue(app.buttons["关闭"].exists)
-        app.buttons["关闭"].tap()
+        // A completed turn continues through the persistent composer; the
+        // redesigned panel intentionally has no separate "continue" button.
+        XCTAssertTrue(app.textViews["question-input"].isEnabled)
+        XCTAssertTrue(app.buttons["question-close"].exists)
+        app.buttons["question-close"].tap()
         XCTAssertTrue(app.staticTexts["conversations-title"].waitForExistence(timeout: 5))
 
         app.terminate()
@@ -1226,14 +1228,17 @@ final class ReadingUITests: XCTestCase {
             .allElementsBoundByIndex.filter { bounds.contains($0.frame) && $0.frame.minX > 5 && $0.frame.width > 0 }.map(\.label)
     }
     private func waitForText(_ app: XCUIApplication) {
-        XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 20))
         let ready = NSPredicate { _, _ in !self.visibleMarkers(app).isEmpty }
         expectation(for: ready, evaluatedWith: app)
         waitForExpectations(timeout: 15)
     }
     private func waitForBody(_ app: XCUIApplication) {
-        XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 20))
-        XCTAssertTrue(app.webViews.staticTexts.firstMatch.waitForExistence(timeout: 15))
+        // Successful save feedback is intentionally hidden in the designed
+        // reader, so readiness must come from the actual rendered body.
+        let body = app.webViews.firstMatch
+        XCTAssertTrue(body.waitForExistence(timeout: 20))
+        XCTAssertTrue(body.staticTexts.firstMatch.waitForExistence(timeout: 15))
     }
     private func settings(_ app: XCUIApplication, mode: String, dark: Bool, font: Int? = nil, wait: Bool = true) {
         app.buttons["阅读设置"].tap()

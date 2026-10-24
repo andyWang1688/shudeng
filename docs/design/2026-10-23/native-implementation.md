@@ -1,12 +1,14 @@
 # 原生设计落地与验收
 
-状态：**整体视觉验收仍未通过，不作为“按设计完成”交付。** 2026-10-24 的 #25 已让书架与四栏共享外壳通过逐页验收，证据见[书架验收](issue25-shelf-acceptance.md)；#26 和 #27 已分别通过笔记页、对话页验收，证据见[笔记验收](issue26-notes-acceptance.md)与[对话验收](issue27-conversations-acceptance.md)。其余页面仍按[视觉验收矩阵](visual-acceptance.md)返工。此轮没有新版本发布。
+状态：**2026-10-25 本轮原生视觉返工已完成。** #24–#31 全部页面逐页验收通过；#32 聚焦 Release 为 30 tests / 0 failures，Release 构建成功并已在唯一 Shudeng Small 正常启动。按用户约定的模拟器正式发布测试标准，本轮通过；未创建新版本、未推送，既有 v0.1.0 未改。完整旧测试集、真机与商店分发仍保留未验证边界。
 
 范围来源：[设计规格](spec.md)、[UIKit 界面开发规范](../ui-development-standard.md) 和用户确认的模拟器验收接缝。审查固定基线：`8666836159e0cc259e1ccfcd883699399561c867`；此前已有的文档与 Python 改动未混入原生提交。
 
 返工执行规格：[GitHub Issue #23](https://github.com/andyWang1688/shudeng/issues/23)。
 
-## 验收更正
+最终整应用证据：[Issue #32 最终验收](issue32-final-acceptance.md)。
+
+## 早期验收更正（历史，已修复）
 
 用户在同尺寸对照后指出实现与确认稿差距明显。复核确认：书架缺品牌行，31pt 左标题被替换为居中小标题，继续阅读信息层级被简化，系统底栏呈悬浮胶囊；“我的”等页面也采用了不同的系统列表结构。此前“Spec 无未关闭问题”只覆盖功能接缝，不能解释为视觉验收通过，现撤回该口径。下面的测试记录继续作为功能证据保留。
 
@@ -20,13 +22,13 @@
 
 原图标 SHA-256：`ed339c5144d408d7a1915e0f82db129769a50ccaa16e807bd31053c44ca6e775`；资源目录两份 PNG 与设计资源一致。
 
-### 小屏兼容调整
+### 早期小屏兼容尝试（历史，已由自定义页头替代）
 
 原 Shudeng Small / iOS 26.5 的正常模式人工检查发现：系统大标题区域空白，虽然 `navigationItem.title` 有值、`prefersLargeTitles` 为真。只读调试确认大标题容器没有呈现标题；显式设置 `largeTitle`、强制 always 未解决，改用紧凑系统标题立即恢复文字并消除空白。
 
 因此四栏根页面统一紧凑导航标题。这与已确认规格的 31pt 左标题不符，只能作为一次失败尝试的故障记录，不能作为允许适配差异延续。返工应使用自定义页头，避免依赖系统大标题容器；调试器已退出。
 
-## Release 行为测试
+## 早期 Release 行为测试（历史基线）
 
 设备唯一：Shudeng Small，`1B9B9A35-F2D7-4D87-AB31-6B07D1B27D66`。构建前可用空间为39 GiB。
 
@@ -45,11 +47,11 @@
 
 导航标题调整前的同组 Release 也通过：4 tests / 0 failures，日志 [native-design-reviewed-2.log](../../../.scratch/native-design-reviewed-2.log)，结果 [e29a9e0326b848ab85c3acf8c503a1da.xcresult](../../../.scratch/test-evidence/native-design-reviewed/e29a9e0326b848ab85c3acf8c503a1da.xcresult)。
 
-## Standards
+## 早期 Standards（历史）
 
 独立只读复核已关闭：引用返回保存失败门禁、原文加载失败时的退出门禁、重复主题色。该项只由代码与功能复核得出；紧凑标题和系统组件替换在视觉规范上不合格。
 
-## Spec
+## 早期 Spec（历史）
 
 引用往返的异步定位竞态和行内引用返回焦点已修复，但“Spec 通过”不成立：实际界面没有达到已确认的视觉与组件结构要求。行内 VoiceOver 焦点仍为代码复核，未执行完整 VoiceOver 手工验收。
 
