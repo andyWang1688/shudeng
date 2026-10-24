@@ -657,6 +657,51 @@ extension ReadingUITests {
         attachDesignSurface("issue29-selection-375-dark", app)
     }
 
+    func testIssue30QuestionSheetLayoutDraftAndIdentity() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
+        tab("tab-conversations", label: "对话", in: app).tap()
+        let conversation = app.tables["question-history"].cells.firstMatch
+        XCTAssertTrue(conversation.waitForExistence(timeout: 10))
+        conversation.tap()
+
+        let sheet = app.otherElements["question-sheet"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(sheet.frame.height, app.frame.height * 0.70)
+        XCTAssertLessThan(sheet.frame.height, app.frame.height * 0.82)
+        XCTAssertTrue(app.otherElements["question-sheet-handle"].exists)
+        XCTAssertTrue(app.buttons["question-close"].exists)
+        XCTAssertTrue(app.textViews["question-input"].exists)
+        XCTAssertTrue(app.buttons["question-send"].exists)
+        XCTAssertTrue(app.staticTexts["书灯 · AI"].exists)
+        XCTAssertTrue(app.staticTexts["这句话里的“灯”指什么？"].exists)
+        XCTAssertFalse(app.staticTexts["你"].exists)
+        XCTAssertEqual(app.staticTexts["question-status"].label, "回答已保存")
+        attachDesignSurface("issue30-question-375-light", app)
+
+        let input = app.textViews["question-input"]
+        XCTAssertTrue(input.exists)
+        input.tap()
+        input.typeText("还没发送的追问")
+        app.buttons["question-close"].tap()
+        XCTAssertFalse(sheet.waitForExistence(timeout: 3))
+
+        conversation.tap()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.textViews["question-input"].value as? String, "还没发送的追问")
+        app.terminate()
+
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
+        app.launch()
+        tab("tab-conversations", label: "对话", in: app).tap()
+        XCTAssertTrue(app.tables["question-history"].cells.firstMatch.waitForExistence(timeout: 10))
+        app.tables["question-history"].cells.firstMatch.tap()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        attachDesignSurface("issue30-question-375-dark", app)
+    }
+
     private func tab(_ identifier: String, label: String, in app: XCUIApplication) -> XCUIElement {
         let identified = app.buttons[identifier].firstMatch
         return identified.exists ? identified : app.tabBars.buttons[label].firstMatch

@@ -774,6 +774,136 @@ final class DesignFixtureTests: XCTestCase {
             }
         }
     }
+
+    func testQuestionSheetUsesDesignedPanelIdentityDraftAndStates() async throws {
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        var record = try XCTUnwrap(session.library.questions.records.first)
+        record.answer = "这里的“灯”既是阅读时的照明，也是理解书中难句的提示。它不替代原文。"
+        record.state = .complete
+        record.failure = nil
+        XCTAssertTrue(session.library.questions.save(record))
+
+        func makePage() -> UINavigationController {
+            let page = QuestionController(library: session.library, id: record.id)
+            let navigation = UINavigationController(rootViewController: page)
+            QuestionSheetPresentation.configure(navigation)
+            return navigation
+        }
+
+        XCTAssertEqual(QuestionSheetPresentation.heightFraction, 0.76, accuracy: 0.0001)
+        let detentPage = makePage()
+        XCTAssertEqual(detentPage.modalPresentationStyle, .pageSheet)
+        XCTAssertEqual(detentPage.sheetPresentationController?.preferredCornerRadius, 23)
+        XCTAssertEqual(detentPage.sheetPresentationController?.detents.count, 1)
+
+        for size in [CGSize(width: 375, height: 667), CGSize(width: 390, height: 844)] {
+            for (style, theme) in [
+                (UIUserInterfaceStyle.light, "light"),
+                (UIUserInterfaceStyle.dark, "dark")
+            ] {
+                let navigation = makePage()
+                let image = DesignFixture.renderRoot(navigation, size: size, style: style)
+                let page = try XCTUnwrap(navigation.topViewController as? QuestionController)
+                let views = page.view.allViews
+                for identifier in [
+                    "question-sheet-header",
+                    "question-sheet-handle",
+                    "question-close",
+                    "question-composer",
+                    "question-composer-field",
+                    "question-input",
+                    "question-user-bubble-\(record.id)",
+                    "question-ai-identity-\(record.id)",
+                    "question-answer"
+                ] {
+                    XCTAssertNotNil(views.first { $0.accessibilityIdentifier == identifier }, identifier)
+                }
+                XCTAssertFalse(views.compactMap { ($0 as? UILabel)?.text }.contains("你"))
+                XCTAssertEqual(
+                    (views.first { $0.accessibilityIdentifier == "question-status" } as? UILabel)?.text,
+                    "回答已保存"
+                )
+                XCTAssertEqual(image.size, size)
+                let attachment = XCTAttachment(
+                    data: try XCTUnwrap(image.pngData()),
+                    uniformTypeIdentifier: "public.png"
+                )
+                attachment.name = "question-\(Int(size.width))x\(Int(size.height))-\(theme)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+
+        let states: [(QuestionState, String, String?)] = [
+            (.generating, "", nil),
+            (.incomplete, "", "暂时没能连接 AI 服务，问题与选文已保留，请重试。"),
+            (.incomplete, "她已经感到这里的生活与自己熟悉的环境不同，", "系统后台时间已结束，回答未完成，请主动重试。")
+        ]
+        for (index, value) in states.enumerated() {
+            record.state = value.0
+            record.answer = value.1
+            record.failure = value.2
+            XCTAssertTrue(session.library.questions.save(record))
+            let navigation = makePage()
+            let image = DesignFixture.renderRoot(
+                navigation,
+                size: CGSize(width: 375, height: 667),
+                style: .light
+            )
+            let page = try XCTUnwrap(navigation.topViewController as? QuestionController)
+            let status = try XCTUnwrap(
+                page.view.allViews.first {
+                    $0.accessibilityIdentifier == "question-status"
+                } as? UILabel
+            )
+            if let failure = value.2 {
+                XCTAssertTrue(status.text?.contains("回答未完成") == true)
+                XCTAssertTrue(status.text?.contains(failure) == true)
+                XCTAssertNotNil(page.view.allViews.first { $0.accessibilityIdentifier == "question-retry-generation" })
+            } else {
+                XCTAssertTrue(status.text?.contains("正在生成") == true)
+                XCTAssertNotNil(page.view.allViews.first { $0.accessibilityIdentifier == "question-skeleton" })
+            }
+            let attachment = XCTAttachment(
+                data: try XCTUnwrap(image.pngData()),
+                uniformTypeIdentifier: "public.png"
+            )
+            attachment.name = "question-state-\(index)-375x667-light"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    func testQuestionSheetKeepsHeaderAndComposerAtAccessibilitySize() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .normal, theme: .light))
+        try await DesignFixture.seed(session)
+        let record = try XCTUnwrap(session.library.questions.records.first)
+        let page = QuestionController(library: session.library, id: record.id)
+        let navigation = UINavigationController(rootViewController: page)
+        QuestionSheetPresentation.configure(navigation)
+        let image = DesignFixture.renderRoot(
+            navigation,
+            size: CGSize(width: 375, height: 667),
+            style: .light,
+            preferredContentSizeCategory: .accessibilityExtraExtraLarge
+        )
+        let views = page.view.allViews
+        let close = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "question-close" })
+        let composer = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "question-composer" })
+        let input = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "question-input" })
+        XCTAssertEqual(close.bounds.width, 44, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(composer.convert(composer.bounds, to: page.view).maxY, page.view.bounds.maxY + 0.5)
+        XCTAssertTrue(input.isUserInteractionEnabled)
+        let attachment = XCTAttachment(
+            data: try XCTUnwrap(image.pngData()),
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = "question-accessibility-xxxl-375x667-light"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
 }
 
 private extension UIView {

@@ -754,8 +754,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         let navigation = UINavigationController(rootViewController: controller)
         activeQuestion = navigation
         navigation.overrideUserInterfaceStyle = overrideUserInterfaceStyle
-        navigation.modalPresentationStyle = .pageSheet
-        navigation.sheetPresentationController?.detents = [.large()]
+        QuestionSheetPresentation.configure(navigation)
         present(navigation, animated: true)
     }
     private func showQuestionReference(_ target: Locator, origin: Locator) {
@@ -851,7 +850,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                     let sheet = UINavigationController(rootViewController: controller)
                     activeQuestion = sheet
                     sheet.overrideUserInterfaceStyle = overrideUserInterfaceStyle
-                    sheet.sheetPresentationController?.detents = [.large()]
+                    QuestionSheetPresentation.configure(sheet)
                     present(sheet, animated: true)
                     return
                 }
