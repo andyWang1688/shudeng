@@ -1,6 +1,6 @@
 # Issue #27：对话页视觉闭环实施记录
 
-状态：2026-10-24，实现与专项回归完成，**等待独立验收**。本记录不代替 #27 的验收结论，也不把其他页面并入本页。
+状态：2026-10-24，实现完成，独立验收通过。验收结论见[对话页视觉闭环](issue27-conversations-acceptance.md)；本记录不把其他页面并入本页。
 
 基准：[高保真原型](standalone.html)、[设计规格](spec.md)、[UIKit 界面开发规范](../ui-development-standard.md)。执行单：[GitHub Issue #27](https://github.com/andyWang1688/shudeng/issues/27)。
 

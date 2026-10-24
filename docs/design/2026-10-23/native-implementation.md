@@ -1,6 +1,6 @@
 # 原生设计落地与验收
 
-状态：**整体视觉验收仍未通过，不作为“按设计完成”交付。** 2026-10-24 的 #25 已让书架与四栏共享外壳通过逐页验收，证据见[书架验收](issue25-shelf-acceptance.md)；其余页面仍按[视觉验收矩阵](visual-acceptance.md)返工。此轮没有新版本发布。
+状态：**整体视觉验收仍未通过，不作为“按设计完成”交付。** 2026-10-24 的 #25 已让书架与四栏共享外壳通过逐页验收，证据见[书架验收](issue25-shelf-acceptance.md)；#26 和 #27 已分别通过笔记页、对话页验收，证据见[笔记验收](issue26-notes-acceptance.md)与[对话验收](issue27-conversations-acceptance.md)。其余页面仍按[视觉验收矩阵](visual-acceptance.md)返工。此轮没有新版本发布。
 
 范围来源：[设计规格](spec.md)、[UIKit 界面开发规范](../ui-development-standard.md) 和用户确认的模拟器验收接缝。审查固定基线：`8666836159e0cc259e1ccfcd883699399561c867`；此前已有的文档与 Python 改动未混入原生提交。
 
