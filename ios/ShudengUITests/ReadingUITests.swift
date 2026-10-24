@@ -286,6 +286,46 @@ extension ReadingUITests {
         attachDesignSurface("issue24-shelf-375-dark-baseline", app)
     }
 
+    func testIssue25ShelfNormalSearchEmptyAndPreparing() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["书灯"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["书架"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["一盏照书的灯"].exists)
+        XCTAssertTrue(app.staticTexts["继续阅读"].exists)
+        XCTAssertTrue(app.buttons["library-import"].exists)
+        XCTAssertTrue(app.buttons["tab-library"].exists)
+        attachDesignSurface("issue25-shelf-375-light", app)
+
+        app.buttons["continue-reading"].tap()
+        XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 15))
+        app.buttons["书架"].tap()
+        XCTAssertTrue(app.staticTexts["继续阅读"].waitForExistence(timeout: 10))
+
+        let search = app.textFields["library-search"]
+        XCTAssertTrue(search.exists)
+        search.tap()
+        search.typeText("不存在的书")
+        XCTAssertTrue(app.staticTexts["没有找到这本书"].waitForExistence(timeout: 5))
+        XCTAssertEqual(search.value as? String, "不存在的书")
+        attachDesignSurface("issue25-search-empty-375-light", app)
+
+        app.terminate()
+        app.launchArguments = ["--design-fixture=empty", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["从一本书开始"].waitForExistence(timeout: 15))
+        attachDesignSurface("issue25-shelf-empty-375-light", app)
+
+        app.terminate()
+        app.launchArguments = ["--design-fixture=preparing", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["正在准备《红楼梦》的问答资料"].waitForExistence(timeout: 15))
+        attachDesignSurface("issue25-shelf-preparing-375-light", app)
+        app.buttons["continue-reading"].tap()
+        XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 15))
+    }
+
     private func tab(_ identifier: String, label: String, in app: XCUIApplication) -> XCUIElement {
         let identified = app.buttons[identifier].firstMatch
         return identified.exists ? identified : app.tabBars.buttons[label].firstMatch
@@ -557,7 +597,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(shelf.waitForExistence(timeout: 10))
         evidence("issue15-small-dark-large-grid", app)
         func query(_ value: String) {
-            let field = app.searchFields["library-search"]
+            let field = app.textFields["library-search"]
             if !field.isHittable { shelf.swipeDown() }
             field.tap()
             if field.buttons.firstMatch.exists { field.buttons.firstMatch.tap() }
@@ -619,7 +659,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(shelf.waitForExistence(timeout: 10))
         func ids() -> [String] { shelf.cells.allElementsBoundByIndex.map(\.identifier) }
         func query(_ text: String) {
-            let field = app.searchFields["library-search"]
+            let field = app.textFields["library-search"]
             field.tap()
             if field.buttons.firstMatch.exists { field.buttons.firstMatch.tap() }
             if !text.isEmpty { field.typeText(text) }

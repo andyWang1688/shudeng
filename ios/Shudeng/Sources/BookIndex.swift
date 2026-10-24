@@ -87,6 +87,12 @@ final class BookPreparation {
     func waitForCurrentWork() async {
         for job in Array(jobs.values) { await job.value }
     }
+#if DEBUG
+    func setDesignState(_ state: BookPreparationState, for bookID: String) {
+        states[bookID] = state
+        notify()
+    }
+#endif
     private func update(_ state: BookPreparationState, for id: String) { states[id] = state; notify() }
     private func notify() { NotificationCenter.default.post(name: Self.changed, object: self) }
 }

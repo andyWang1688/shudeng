@@ -9,6 +9,7 @@ final class DesignFixtureTests: XCTestCase {
         XCTAssertNil(DesignFixture.request(in: ["--isolated-reading-test"]))
         XCTAssertEqual(DesignFixture.request(in: ["--design-fixture"])?.scenario, .normal)
         XCTAssertEqual(DesignFixture.request(in: ["--design-fixture=empty", "--design-theme=dark"])?.scenario, .empty)
+        XCTAssertEqual(DesignFixture.request(in: ["--design-fixture=preparing"])?.scenario, .preparing)
         XCTAssertEqual(DesignFixture.request(in: ["--design-fixture=normal", "--design-theme=dark"])?.theme, .dark)
     }
 
@@ -36,7 +37,7 @@ final class DesignFixtureTests: XCTestCase {
             for (theme, themeName) in themes {
                 let root = makeApplicationTabs(library: session.library, root: session.root, secrets: session.secrets)
                 for (index, tab) in tabs.enumerated() {
-                    root.selectedIndex = index
+                    root.select(index)
                     let image = DesignFixture.renderRoot(root, size: size, style: theme)
                     XCTAssertEqual(image.size, size)
                     let attachment = XCTAttachment(
@@ -49,5 +50,78 @@ final class DesignFixtureTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testRootShellUsesFlatNavigationAndStableTabTargets() throws {
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        let root = makeApplicationTabs(library: session.library, root: session.root, secrets: session.secrets)
+        root.loadViewIfNeeded()
+        root.view.frame = CGRect(x: 0, y: 0, width: 375, height: 667)
+        root.view.layoutIfNeeded()
+
+        XCTAssertEqual(root.tabBar.frame.height, 81)
+        let identifiers = Set(root.tabBar.allControls.map(\.accessibilityIdentifier).compactMap { $0 })
+        XCTAssertEqual(
+            identifiers,
+            Set(RootDestination.allCases.map(\.accessibilityIdentifier))
+        )
+        XCTAssertEqual(root.selectedIndex, RootDestination.library.rawValue)
+    }
+
+    func testShelfEmptyAndPreparingStatesRenderAtSmallSize() async throws {
+        for scenario in [DesignFixture.Scenario.empty, .preparing] {
+            let request = DesignFixture.Request(scenario: scenario, theme: .light)
+            let session = try DesignFixture.makeSession(request)
+            try await DesignFixture.seed(session)
+            let root = makeApplicationTabs(library: session.library, root: session.root, secrets: session.secrets)
+            let image = DesignFixture.renderRoot(root, size: CGSize(width: 375, height: 667), style: .light)
+            let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
+            attachment.name = "shelf-\(scenario.rawValue)-375x667-light"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    func testShelfSupportsAccessibilityTextWithoutDroppingChrome() async throws {
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        let root = makeApplicationTabs(library: session.library, root: session.root, secrets: session.secrets)
+        let image = DesignFixture.renderRoot(
+            root,
+            size: CGSize(width: 375, height: 667),
+            style: .light,
+            preferredContentSizeCategory: .accessibilityExtraExtraLarge
+        )
+        let views = root.view.allViews
+        for identifier in ["brand-wordmark", "page-title", "library-import", "tab-library", "tab-profile"] {
+            XCTAssertNotNil(views.first { $0.accessibilityIdentifier == identifier }, identifier)
+        }
+        let collection = try XCTUnwrap(
+            views.compactMap { $0 as? UICollectionView }.first { $0.accessibilityIdentifier == "library" }
+        )
+        collection.layoutIfNeeded()
+        let first = try XCTUnwrap(collection.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: 0, section: 0)))
+        let second = try XCTUnwrap(collection.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: 1, section: 0)))
+        XCTAssertEqual(first.frame.minX, second.frame.minX, accuracy: 0.5)
+        XCTAssertGreaterThan(second.frame.minY, first.frame.maxY)
+
+        let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
+        attachment.name = "shelf-accessibility-xxxl-375x667-light"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+}
+
+private extension UIView {
+    var allControls: [UIControl] {
+        subviews.flatMap { view in
+            (view as? UIControl).map { [$0] + view.allControls } ?? view.allControls
+        }
+    }
+
+    var allViews: [UIView] {
+        [self] + subviews.flatMap(\.allViews)
     }
 }

@@ -13,6 +13,7 @@ enum DesignFixture {
     enum Scenario: String, Equatable {
         case normal
         case empty
+        case preparing
     }
 
     struct Request {
@@ -125,8 +126,18 @@ enum DesignFixture {
         }
 
         guard let primary = books.first else { return }
-        let first = locator(chapter: specifications[0].chapter, quote: specifications[0].paragraphs[1], progression: 0.18)
-        let second = locator(chapter: specifications[0].chapter, quote: specifications[0].paragraphs[0], progression: 0.08)
+        let first = locator(
+            chapter: specifications[0].chapter,
+            quote: specifications[0].paragraphs[1],
+            progression: 0.18,
+            totalProgression: 0.12
+        )
+        let second = locator(
+            chapter: specifications[0].chapter,
+            quote: specifications[0].paragraphs[0],
+            progression: 0.08,
+            totalProgression: 0.04
+        )
         try session.library.saveReadingState(
             first,
             settings: ReadingSettings(scroll: false, fontSize: 100, dark: false),
@@ -144,15 +155,28 @@ enum DesignFixture {
         for book in session.library.books {
             await session.library.preparation.stop(bookID: book.id)
         }
+        if session.request.scenario == .preparing {
+            var state = BookPreparationState()
+            state.preparing = true
+            state.completed = 2
+            state.total = 9
+            state.vectorsCompleted = 6
+            state.vectorsTotal = 40
+            session.library.preparation.setDesignState(state, for: primary.id)
+        }
     }
 
     static func renderRoot(
         _ root: UIViewController,
         size: CGSize,
-        style: UIUserInterfaceStyle
+        style: UIUserInterfaceStyle,
+        preferredContentSizeCategory: UIContentSizeCategory? = nil
     ) -> UIImage {
         let window = UIWindow(frame: CGRect(origin: .zero, size: size))
         window.overrideUserInterfaceStyle = style
+        if #available(iOS 17.0, *), let preferredContentSizeCategory {
+            window.traitOverrides.preferredContentSizeCategory = preferredContentSizeCategory
+        }
         window.rootViewController = root
         window.isHidden = false
         root.beginAppearanceTransition(true, animated: false)
@@ -216,10 +240,15 @@ enum DesignFixture {
         try store.save(configuration, newKey: "fixture-placeholder-not-a-real-key")
     }
 
-    private static func locator(chapter: String, quote: String, progression: Double) -> Locator {
+    private static func locator(
+        chapter: String,
+        quote: String,
+        progression: Double,
+        totalProgression: Double? = nil
+    ) -> Locator {
         var locations = Locator.Locations(
             progression: progression,
-            totalProgression: progression / 3,
+            totalProgression: totalProgression ?? progression / 3,
             position: max(1, Int(progression * 100))
         )
         locations.cssSelector = "#fixture-paragraph"
