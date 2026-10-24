@@ -20,6 +20,12 @@ final class AISettingsController: UITableViewController {
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "添加", style: .plain, target: self, action: #selector(add))
         load()
     }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(false, animated: false)
+    }
+
     private func load() {
         do { store = try AIConfigurationStore(root: root, secrets: secrets); failure = nil }
         catch { failure = "配置读取失败，已有内容未覆盖。点此重试；阅读仍可使用。" }

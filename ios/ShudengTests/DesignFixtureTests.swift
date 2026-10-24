@@ -387,6 +387,197 @@ final class DesignFixtureTests: XCTestCase {
             "conversations-failed"
         )
     }
+
+    func testProfileUsesCenteredBrandDesignedSettingsAndPersistentAppearance() async throws {
+        let appearanceKey = "interface-style"
+        let previousAppearance = UserDefaults.standard.object(forKey: appearanceKey)
+        defer {
+            if let previousAppearance {
+                UserDefaults.standard.set(previousAppearance, forKey: appearanceKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: appearanceKey)
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: appearanceKey)
+
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        let root = makeApplicationTabs(
+            library: session.library,
+            root: session.root,
+            secrets: session.secrets
+        )
+        root.select(RootDestination.profile.rawValue)
+        root.loadViewIfNeeded()
+        root.view.frame = CGRect(x: 0, y: 0, width: 375, height: 667)
+        root.view.layoutIfNeeded()
+
+        let views = root.view.allViews
+        let title = try XCTUnwrap(
+            views.first { $0.accessibilityIdentifier == "profile-title" }
+        )
+        XCTAssertEqual((title as? UILabel)?.text, "我的")
+        let titleFrame = root.view.convert(title.bounds, from: title)
+        XCTAssertLessThanOrEqual(titleFrame.minX, 25)
+        XCTAssertGreaterThanOrEqual(titleFrame.minX, 23)
+        let icon = try XCTUnwrap(
+            views.first { $0.accessibilityIdentifier == "profile-brand-icon" }
+        )
+        XCTAssertEqual(icon.bounds.width, 70, accuracy: 0.5)
+        XCTAssertEqual(icon.bounds.height, 70, accuracy: 0.5)
+        let iconFrame = root.view.convert(icon.bounds, from: icon)
+        XCTAssertEqual(iconFrame.midX, root.view.bounds.midX, accuracy: 0.5)
+        let wordmark = try XCTUnwrap(
+            views.first { $0.accessibilityIdentifier == "profile-wordmark" }
+        )
+        let wordmarkFrame = root.view.convert(wordmark.bounds, from: wordmark)
+        XCTAssertEqual(wordmarkFrame.midX, root.view.bounds.midX, accuracy: 0.5)
+        let motto = try XCTUnwrap(
+            views.first { $0.accessibilityIdentifier == "profile-motto" }
+        )
+        let mottoFrame = root.view.convert(motto.bounds, from: motto)
+        XCTAssertEqual(mottoFrame.midX, root.view.bounds.midX, accuracy: 0.5)
+
+        for identifier in [
+            "profile-ai-service",
+            "profile-appearance",
+            "profile-about",
+            "profile-storage-disclosure"
+        ] {
+            XCTAssertNotNil(views.first { $0.accessibilityIdentifier == identifier }, identifier)
+        }
+        let service = try XCTUnwrap(
+            views.compactMap { $0 as? UIControl }
+                .first { $0.accessibilityIdentifier == "profile-ai-service" }
+        )
+        XCTAssertEqual(service.accessibilityValue, "DeepSeek · deepseek-flash")
+        XCTAssertGreaterThanOrEqual(service.frame.height, 66)
+        let appearance = try XCTUnwrap(
+            views.compactMap { $0 as? UIControl }
+                .first { $0.accessibilityIdentifier == "profile-appearance" }
+        )
+        XCTAssertEqual(appearance.accessibilityValue, "跟随系统")
+        let about = try XCTUnwrap(
+            views.compactMap { $0 as? UIControl }
+                .first { $0.accessibilityIdentifier == "profile-about" }
+        )
+        XCTAssertFalse((about.accessibilityValue ?? "").isEmpty)
+
+        let navigation = try XCTUnwrap(root.viewControllers.last as? UINavigationController)
+        let profile = try XCTUnwrap(navigation.topViewController as? ProfileController)
+        profile.setAppearance(.dark)
+        XCTAssertEqual(
+            UserDefaults.standard.integer(forKey: appearanceKey),
+            UIUserInterfaceStyle.dark.rawValue
+        )
+        XCTAssertEqual(appearance.accessibilityValue, "深色")
+
+        let reopened = makeApplicationTabs(
+            library: session.library,
+            root: session.root,
+            secrets: session.secrets
+        )
+        reopened.select(RootDestination.profile.rawValue)
+        reopened.loadViewIfNeeded()
+        reopened.view.frame = CGRect(x: 0, y: 0, width: 375, height: 667)
+        reopened.view.layoutIfNeeded()
+        let reopenedAppearance = try XCTUnwrap(
+            reopened.view.allViews.compactMap { $0 as? UIControl }
+                .first { $0.accessibilityIdentifier == "profile-appearance" }
+        )
+        XCTAssertEqual(reopenedAppearance.accessibilityValue, "深色")
+        profile.setAppearance(.unspecified)
+        XCTAssertEqual(appearance.accessibilityValue, "跟随系统")
+
+        for size in [CGSize(width: 375, height: 667), CGSize(width: 390, height: 844)] {
+            for (style, theme) in [
+                (UIUserInterfaceStyle.light, "light"),
+                (UIUserInterfaceStyle.dark, "dark")
+            ] {
+                let rendered = makeApplicationTabs(
+                    library: session.library,
+                    root: session.root,
+                    secrets: session.secrets
+                )
+                rendered.select(RootDestination.profile.rawValue)
+                let image = DesignFixture.renderRoot(rendered, size: size, style: style)
+                let attachment = XCTAttachment(
+                    data: try XCTUnwrap(image.pngData()),
+                    uniformTypeIdentifier: "public.png"
+                )
+                attachment.name = "profile-\(Int(size.width))x\(Int(size.height))-\(theme)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+
+        let accessible = makeApplicationTabs(
+            library: session.library,
+            root: session.root,
+            secrets: session.secrets
+        )
+        accessible.select(RootDestination.profile.rawValue)
+        let accessibleImage = DesignFixture.renderRoot(
+            accessible,
+            size: CGSize(width: 375, height: 667),
+            style: .light,
+            preferredContentSizeCategory: .accessibilityExtraExtraLarge
+        )
+        let accessibleViews = accessible.view.allViews
+        for identifier in [
+            "profile-title",
+            "profile-brand-icon",
+            "profile-ai-service",
+            "profile-appearance",
+            "profile-about"
+        ] {
+            let view = try XCTUnwrap(
+                accessibleViews.first { $0.accessibilityIdentifier == identifier },
+                identifier
+            )
+            XCTAssertGreaterThan(view.bounds.height, 0)
+            XCTAssertLessThanOrEqual(view.frame.maxX, 375.5)
+        }
+        let accessibleAttachment = XCTAttachment(
+            data: try XCTUnwrap(accessibleImage.pngData()),
+            uniformTypeIdentifier: "public.png"
+        )
+        accessibleAttachment.name = "profile-accessibility-xxxl-375x667-light"
+        accessibleAttachment.lifetime = .keepAlways
+        add(accessibleAttachment)
+    }
+
+    func testProfileShowsUnconfiguredServiceWithoutReadingAKey() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ShudengProfileUnconfigured-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let profile = ProfileController(root: root, secrets: EphemeralSecrets())
+        let navigation = UINavigationController(rootViewController: profile)
+        navigation.loadViewIfNeeded()
+        navigation.view.frame = CGRect(x: 0, y: 0, width: 375, height: 667)
+        navigation.view.layoutIfNeeded()
+
+        let service = try XCTUnwrap(
+            navigation.view.allViews.compactMap { $0 as? UIControl }
+                .first { $0.accessibilityIdentifier == "profile-ai-service" }
+        )
+        XCTAssertEqual(service.accessibilityValue, "尚未配置，阅读仍可使用")
+        let image = DesignFixture.renderRoot(
+            navigation,
+            size: CGSize(width: 375, height: 667),
+            style: .light
+        )
+        let attachment = XCTAttachment(
+            data: try XCTUnwrap(image.pngData()),
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = "profile-unconfigured-375x667-light"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
 }
 
 private extension UIView {

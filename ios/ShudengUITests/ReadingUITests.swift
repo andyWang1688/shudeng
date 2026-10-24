@@ -485,6 +485,84 @@ extension ReadingUITests {
         attachDesignSurface("issue27-conversations-empty-375-light", app)
     }
 
+    func testIssue28ProfileBrandSettingsAndAbout() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-profile", label: "我的", in: app).waitForExistence(timeout: 15))
+        tab("tab-profile", label: "我的", in: app).tap()
+
+        let title = app.staticTexts["profile-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, "我的")
+        XCTAssertLessThanOrEqual(title.frame.minX, 25)
+        let icon = app.images["profile-brand-icon"]
+        XCTAssertTrue(icon.exists)
+        XCTAssertEqual(icon.frame.width, 70, accuracy: 0.5)
+        XCTAssertEqual(icon.frame.midX, app.frame.midX, accuracy: 0.5)
+        XCTAssertTrue(app.staticTexts["profile-wordmark"].exists)
+        XCTAssertEqual(
+            app.staticTexts["profile-motto"].label,
+            "一盏照书的灯，AI 照亮你读不懂的地方"
+        )
+
+        let service = app.buttons["profile-ai-service"]
+        XCTAssertTrue(service.exists)
+        XCTAssertEqual(service.value as? String, "DeepSeek · deepseek-flash")
+        XCTAssertGreaterThanOrEqual(service.frame.height, 66)
+        let appearance = app.buttons["profile-appearance"]
+        XCTAssertTrue(appearance.exists)
+        XCTAssertGreaterThanOrEqual(appearance.frame.height, 66)
+        let about = app.buttons["profile-about"]
+        XCTAssertTrue(about.exists)
+        XCTAssertGreaterThanOrEqual(about.frame.height, 66)
+        XCTAssertTrue(app.staticTexts["profile-storage-disclosure"].exists)
+        attachDesignSurface("issue28-profile-normal-375-light", app)
+
+        appearance.tap()
+        let systemAppearance = app.sheets.buttons.matching(
+            NSPredicate(format: "label ENDSWITH %@", "跟随系统")
+        ).firstMatch
+        XCTAssertTrue(systemAppearance.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.sheets.buttons.matching(NSPredicate(format: "label == %@", "浅色")).firstMatch.exists
+        )
+        XCTAssertTrue(
+            app.sheets.buttons.matching(NSPredicate(format: "label == %@", "深色")).firstMatch.exists
+        )
+        app.sheets.buttons.matching(NSPredicate(format: "label == %@", "深色")).firstMatch.tap()
+        XCTAssertEqual(appearance.value as? String, "深色")
+        appearance.tap()
+        let restoreSystem = app.sheets.buttons.matching(
+            NSPredicate(format: "label ENDSWITH %@", "跟随系统")
+        ).firstMatch
+        XCTAssertTrue(restoreSystem.waitForExistence(timeout: 3))
+        restoreSystem.tap()
+        XCTAssertEqual(appearance.value as? String, "跟随系统")
+
+        service.tap()
+        XCTAssertTrue(app.tables["ai-services"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+
+        about.tap()
+        XCTAssertTrue(app.navigationBars["关于书灯"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["about-third-party"].exists)
+        attachDesignSurface("issue28-about-375-light", app)
+        app.buttons["about-third-party"].tap()
+        XCTAssertTrue(app.navigationBars["第三方许可"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews.firstMatch.exists)
+
+        app.terminate()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
+        app.launch()
+        XCTAssertTrue(tab("tab-profile", label: "我的", in: app).waitForExistence(timeout: 15))
+        tab("tab-profile", label: "我的", in: app).tap()
+        XCTAssertTrue(app.staticTexts["profile-title"].waitForExistence(timeout: 5))
+        attachDesignSurface("issue28-profile-normal-375-dark", app)
+    }
+
     private func tab(_ identifier: String, label: String, in app: XCUIApplication) -> XCUIElement {
         let identified = app.buttons[identifier].firstMatch
         return identified.exists ? identified : app.tabBars.buttons[label].firstMatch

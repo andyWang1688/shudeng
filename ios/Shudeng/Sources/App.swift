@@ -67,82 +67,445 @@ func makeApplicationTabs(library: LibraryStore, root: URL, secrets: AISecrets) -
     let shelf = UINavigationController(rootViewController: ShelfController(library: library))
     let notes = UINavigationController(rootViewController: NotesController(library: library))
     let chats = UINavigationController(rootViewController: QuestionHistoryController(library: library))
-    let profile = AboutController(root: root, secrets: secrets)
+    let profile = ProfileController(root: root, secrets: secrets)
     return RootTabController(viewControllers: [shelf, notes, chats, UINavigationController(rootViewController: profile)])
 }
 
-final class AboutController: UIViewController {
+final class ProfileController: UIViewController {
     private let root: URL
     private let secrets: AISecrets
-    private let service = BookDesign.label(nil, size: 14, colour: BookDesign.secondary)
+    private let serviceRow = ProfileSettingsRow(
+        symbol: "lightbulb",
+        title: "AI 服务",
+        identifier: "profile-ai-service"
+    )
+    private let appearanceRow = ProfileSettingsRow(
+        symbol: "sun.max",
+        title: "外观",
+        identifier: "profile-appearance"
+    )
+    private let aboutRow = ProfileSettingsRow(
+        symbol: "doc.text",
+        title: "关于书灯",
+        identifier: "profile-about"
+    )
+
     init(root: URL, secrets: AISecrets = KeychainSecrets()) {
         self.root = root
         self.secrets = secrets
         super.init(nibName: nil, bundle: nil)
     }
+
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
     @objc private func aiSettings() {
         navigationController?.pushViewController(AISettingsController(root: root, secrets: secrets), animated: true)
     }
+
     override func viewDidLoad() {
-        super.viewDidLoad(); title = "我的"; navigationController?.navigationBar.prefersLargeTitles = false
+        super.viewDidLoad()
         view.backgroundColor = BookDesign.paper
         view.accessibilityIdentifier = "profile-surface"
-        let icon = UIImageView(image: UIImage(named: "BrandIcon")); icon.contentMode = .scaleAspectFit
-        icon.layer.cornerRadius = 16; icon.clipsToBounds = true; icon.accessibilityIdentifier = "brand-icon"
-        icon.widthAnchor.constraint(equalToConstant: 68).isActive = true; icon.heightAnchor.constraint(equalToConstant: 68).isActive = true
-        let wordmark = BookDesign.label("书灯", size: 26, weight: .semibold)
-        let identity = UIStackView(arrangedSubviews: [icon, wordmark, UIView()]); identity.spacing = 16; identity.alignment = .center
-        let motto = BookDesign.label("一盏照书的灯，\nAI 照亮你读不懂的地方。", size: 19)
+
+        let title = BookDesign.label("我的", size: 31, weight: .bold, style: .largeTitle)
+        title.accessibilityIdentifier = "profile-title"
+
+        let icon = ProfileBrandIconView(image: UIImage(named: "BrandIcon"))
+        icon.isAccessibilityElement = true
+        icon.accessibilityLabel = "书灯图标"
+        icon.accessibilityIdentifier = "profile-brand-icon"
+
+        let wordmark = BookDesign.label("书灯", size: 20, weight: .semibold)
+        wordmark.textAlignment = .center
+        wordmark.accessibilityIdentifier = "profile-wordmark"
+
+        let motto = BookDesign.label("一盏照书的灯", size: 19)
         motto.font = BookDesign.readingFont(19)
-        let ai = UIButton(type: .system); BookDesign.button(ai, title: "AI 服务", symbol: "sparkle")
-        ai.contentHorizontalAlignment = .leading; ai.addTarget(self, action: #selector(aiSettings), for: .touchUpInside)
-        service.accessibilityIdentifier = "current-ai-service"
-        let disclosure = BookDesign.label("阅读内容留在本机。提问时，问题、必要书内原文和所需对话会发送到你选择的 AI 服务；书灯不提供或代付服务。", size: 13, colour: BookDesign.secondary)
-        let appearance = UISegmentedControl(items: ["跟随系统", "浅色", "深色"])
-        let values: [UIUserInterfaceStyle] = [.unspecified, .light, .dark]
-        appearance.selectedSegmentIndex = values.firstIndex(of: UIUserInterfaceStyle(rawValue: UserDefaults.standard.integer(forKey: "interface-style")) ?? .unspecified) ?? 0
-        appearance.accessibilityIdentifier = "app-appearance"
-        appearance.addAction(UIAction { [weak self, weak appearance] _ in
-            guard let self, let appearance else { return }
-            let choice = values[appearance.selectedSegmentIndex]
-            UserDefaults.standard.set(choice.rawValue, forKey: "interface-style")
-            self.view.window?.overrideUserInterfaceStyle = choice
-        }, for: .valueChanged)
-        let button = UIButton(type: .system); BookDesign.button(button, title: "第三方许可", symbol: "doc.text")
-        button.contentHorizontalAlignment = .leading; button.addTarget(self, action: #selector(licenses), for: .touchUpInside)
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-        let stack = UIStackView(arrangedSubviews: [identity, motto, separator(), ai, service, disclosure,
-            separator(), BookDesign.label("外观", size: 16, weight: .medium), appearance, separator(), button,
-            BookDesign.label("书灯 " + version + " · 以阅读为中心", size: 12, colour: BookDesign.secondary)])
-        stack.axis = .vertical; stack.spacing = 18
-        let scroll = UIScrollView(); scroll.translatesAutoresizingMaskIntoConstraints = false; stack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(scroll); scroll.addSubview(stack)
+        motto.textAlignment = .center
+
+        let subtitle = BookDesign.label("AI 照亮你读不懂的地方", size: 12, colour: BookDesign.secondary)
+        subtitle.textAlignment = .center
+        motto.accessibilityLabel = "一盏照书的灯，AI 照亮你读不懂的地方"
+        motto.accessibilityIdentifier = "profile-motto"
+        subtitle.isAccessibilityElement = false
+
+        let identity = UIStackView(arrangedSubviews: [icon, wordmark, motto, subtitle])
+        identity.axis = .vertical
+        identity.alignment = .center
+        identity.spacing = 13
+        identity.setCustomSpacing(12, after: wordmark)
+        identity.setCustomSpacing(4, after: motto)
+        identity.accessibilityIdentifier = "profile-brand"
+
+        let settings = UIStackView()
+        settings.axis = .vertical
+        settings.spacing = 0
+        settings.addArrangedSubview(separator())
+        settings.addArrangedSubview(serviceRow)
+        settings.addArrangedSubview(separator())
+        settings.addArrangedSubview(appearanceRow)
+        settings.addArrangedSubview(separator())
+        settings.addArrangedSubview(aboutRow)
+        settings.addArrangedSubview(separator())
+        settings.accessibilityIdentifier = "profile-settings"
+
+        let caption = BookDesign.label(
+            "阅读进度、笔记与对话保存在本机。\n提问时，问题与必要原文会发送给你选择的 AI 服务。",
+            size: 11,
+            colour: BookDesign.secondary
+        )
+        caption.accessibilityIdentifier = "profile-storage-disclosure"
+
+        let page = UIStackView(arrangedSubviews: [title, identity, settings, caption])
+        page.axis = .vertical
+        page.spacing = 0
+        page.setCustomSpacing(28, after: title)
+        page.setCustomSpacing(30, after: identity)
+        page.setCustomSpacing(20, after: settings)
+
+        let scroll = UIScrollView()
+        scroll.alwaysBounceVertical = true
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        page.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scroll)
+        scroll.addSubview(page)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), scroll.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 24), stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -32),
-            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -24),
-            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -48)
+            page.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 9),
+            page.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
+            page.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 24),
+            page.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -24),
+            page.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -48),
+            icon.widthAnchor.constraint(equalToConstant: 70),
+            icon.heightAnchor.constraint(equalToConstant: 70)
         ])
+
+        serviceRow.addTarget(self, action: #selector(aiSettings), for: .touchUpInside)
+        appearanceRow.addTarget(self, action: #selector(showAppearance), for: .touchUpInside)
+        aboutRow.addTarget(self, action: #selector(showAbout), for: .touchUpInside)
+        aboutRow.setValue(version)
+        updateAppearanceRow()
+        reloadService()
     }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(true, animated: false)
+        reloadService()
+        updateAppearanceRow()
+    }
+
+    private func reloadService() {
         do {
             let store = try AIConfigurationStore(root: root, secrets: secrets)
             let current = store.configurations.first { $0.id == store.selectedID }
-            service.text = current.map { $0.name + " · " + $0.model } ?? "尚未配置，阅读仍可使用"
-        } catch { service.text = "服务配置暂时无法读取；已有配置未覆盖" }
+            if let current {
+                let separator = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+                    ? "\n"
+                    : " · "
+                serviceRow.setDetail(current.name + separator + current.model)
+            } else {
+                serviceRow.setDetail("尚未配置，阅读仍可使用")
+            }
+        } catch {
+            serviceRow.setDetail("服务配置暂时无法读取；已有配置未覆盖")
+        }
     }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.preferredContentSizeCategory
+            != traitCollection.preferredContentSizeCategory {
+            reloadService()
+        }
+    }
+
     private func separator() -> UIView {
-        let line = UIView(); line.backgroundColor = BookDesign.line; line.heightAnchor.constraint(equalToConstant: 1).isActive = true; return line
+        let line = UIView()
+        line.backgroundColor = BookDesign.line
+        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        return line
     }
-    @objc private func licenses() {
-        let controller = UIViewController(); controller.title = "第三方许可"
-        let text = UITextView(); text.isEditable = false; text.font = .preferredFont(forTextStyle: .body)
-        text.adjustsFontForContentSizeCategory = true; text.backgroundColor = BookDesign.paper; text.textColor = BookDesign.ink
-        text.text = Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "许可文件无法读取"
-        controller.view = text; navigationController?.pushViewController(controller, animated: true)
+
+    private var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+    }
+
+    private var selectedAppearance: UIUserInterfaceStyle {
+        UIUserInterfaceStyle(
+            rawValue: UserDefaults.standard.integer(forKey: "interface-style")
+        ) ?? .unspecified
+    }
+
+    private func updateAppearanceRow() {
+        switch selectedAppearance {
+        case .light: appearanceRow.setValue("浅色")
+        case .dark: appearanceRow.setValue("深色")
+        default: appearanceRow.setValue("跟随系统")
+        }
+    }
+
+    @objc private func showAppearance() {
+        let sheet = UIAlertController(
+            title: "外观",
+            message: "选择适合此刻阅读的界面外观。",
+            preferredStyle: .actionSheet
+        )
+        for (style, name) in [
+            (UIUserInterfaceStyle.unspecified, "跟随系统"),
+            (.light, "浅色"),
+            (.dark, "深色")
+        ] {
+            let prefix = selectedAppearance == style ? "✓ " : ""
+            sheet.addAction(UIAlertAction(title: prefix + name, style: .default) { [weak self] _ in
+                self?.setAppearance(style)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
+        sheet.popoverPresentationController?.sourceView = appearanceRow
+        sheet.popoverPresentationController?.sourceRect = appearanceRow.bounds
+        present(sheet, animated: true)
+    }
+
+    func setAppearance(_ style: UIUserInterfaceStyle) {
+        UserDefaults.standard.set(style.rawValue, forKey: "interface-style")
+        view.window?.overrideUserInterfaceStyle = style
+        updateAppearanceRow()
+    }
+
+    @objc private func showAbout() {
+        navigationController?.pushViewController(
+            AboutController(),
+            animated: true
+        )
+    }
+}
+
+private final class ProfileBrandIconView: UIImageView {
+    override init(image: UIImage?) {
+        super.init(image: image)
+        contentMode = .scaleAspectFit
+        backgroundColor = BookDesign.surface
+        layer.cornerRadius = 18
+        layer.borderWidth = 1
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.04
+        layer.shadowRadius = 6
+        layer.shadowOffset = CGSize(width: 0, height: 3)
+        updateDecoration()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateDecoration()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            updateDecoration()
+        }
+    }
+
+    private func updateDecoration() {
+        layer.borderColor = BookDesign.line.resolvedColor(with: traitCollection).cgColor
+    }
+}
+
+private final class ProfileSettingsRow: UIControl {
+    private let symbolView = UIImageView()
+    private let titleLabel = BookDesign.label(nil, size: 15, weight: .medium)
+    private let detailLabel = BookDesign.label(nil, size: 12, colour: BookDesign.secondary)
+    private let valueLabel = BookDesign.label(nil, size: 12, colour: BookDesign.secondary)
+    private let chevron = UIImageView(image: BookDesign.symbol("chevron.right", size: 15, weight: .medium))
+    private let title: String
+    private var detail: String?
+    private var value: String?
+
+    init(symbol: String, title: String, identifier: String) {
+        self.title = title
+        super.init(frame: .zero)
+        accessibilityIdentifier = identifier
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+
+        symbolView.image = BookDesign.symbol(symbol, size: 20)
+        symbolView.tintColor = BookDesign.accent
+        symbolView.contentMode = .scaleAspectFit
+        symbolView.isAccessibilityElement = false
+        titleLabel.text = title
+        detailLabel.isHidden = true
+        valueLabel.textAlignment = .right
+        chevron.tintColor = BookDesign.secondary
+        chevron.contentMode = .scaleAspectFit
+        chevron.isAccessibilityElement = false
+
+        let text = UIStackView(arrangedSubviews: [titleLabel, detailLabel])
+        text.axis = .vertical
+        text.alignment = .leading
+        text.spacing = 2
+        text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let row = UIStackView(arrangedSubviews: [symbolView, text, UIView(), valueLabel, chevron])
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = 12
+        row.isUserInteractionEnabled = false
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+
+        NSLayoutConstraint.activate([
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 66),
+            symbolView.widthAnchor.constraint(equalToConstant: 20),
+            symbolView.heightAnchor.constraint(equalToConstant: 20),
+            chevron.widthAnchor.constraint(equalToConstant: 15),
+            chevron.heightAnchor.constraint(equalToConstant: 15)
+        ])
+        updateAccessibility()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func setDetail(_ detail: String?) {
+        self.detail = detail
+        detailLabel.text = detail
+        detailLabel.isHidden = detail == nil
+        updateAccessibility()
+    }
+
+    func setValue(_ value: String?) {
+        self.value = value
+        valueLabel.text = value
+        updateAccessibility()
+    }
+
+    private func updateAccessibility() {
+        accessibilityLabel = title
+        accessibilityValue = detail ?? value
+    }
+
+    override var isHighlighted: Bool {
+        didSet { alpha = isHighlighted ? 0.72 : 1 }
+    }
+}
+
+private final class AboutController: UIViewController {
+    init() {
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "关于书灯"
+        navigationItem.largeTitleDisplayMode = .never
+        view.backgroundColor = BookDesign.paper
+        view.accessibilityIdentifier = "about-surface"
+
+        let icon = ProfileBrandIconView(image: UIImage(named: "BrandIcon"))
+        icon.isAccessibilityElement = false
+
+        let wordmark = BookDesign.label("书灯", size: 20, weight: .semibold)
+        wordmark.textAlignment = .center
+        let motto = BookDesign.label("一盏照书的灯，AI 照亮你读不懂的地方", size: 15)
+        motto.font = BookDesign.readingFont(15)
+        motto.textAlignment = .center
+
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+        let release = BookDesign.label("版本 " + version, size: 12, colour: BookDesign.secondary)
+        release.textAlignment = .center
+
+        let thirdParty = ProfileSettingsRow(
+            symbol: "doc.text",
+            title: "第三方许可",
+            identifier: "about-third-party"
+        )
+        thirdParty.addTarget(self, action: #selector(showLicenses), for: .touchUpInside)
+
+        let group = UIStackView(arrangedSubviews: [separator(), thirdParty, separator()])
+        group.axis = .vertical
+        group.spacing = 0
+
+        let identity = UIStackView(arrangedSubviews: [icon, wordmark, motto, release])
+        identity.axis = .vertical
+        identity.alignment = .center
+        identity.spacing = 12
+
+        let page = UIStackView(arrangedSubviews: [identity, group])
+        page.axis = .vertical
+        page.spacing = 30
+
+        let scroll = UIScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        page.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scroll)
+        scroll.addSubview(page)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            page.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 28),
+            page.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -32),
+            page.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 24),
+            page.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -24),
+            page.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -48),
+            icon.widthAnchor.constraint(equalToConstant: 70),
+            icon.heightAnchor.constraint(equalToConstant: 70)
+        ])
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(false, animated: false)
+    }
+
+    private func separator() -> UIView {
+        let line = UIView()
+        line.backgroundColor = BookDesign.line
+        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        return line
+    }
+
+    @objc private func showLicenses() {
+        navigationController?.pushViewController(
+            LicensesController(),
+            animated: true
+        )
+    }
+}
+
+private final class LicensesController: UIViewController {
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "第三方许可"
+        view.backgroundColor = BookDesign.paper
+        let text = UITextView()
+        text.isEditable = false
+        text.font = .preferredFont(forTextStyle: .body)
+        text.adjustsFontForContentSizeCategory = true
+        text.backgroundColor = BookDesign.paper
+        text.textColor = BookDesign.ink
+        text.text = Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt")
+            .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+            ?? "许可文件无法读取"
+        text.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(text)
+        NSLayoutConstraint.activate([
+            text.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            text.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            text.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            text.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20)
+        ])
     }
 }
 
