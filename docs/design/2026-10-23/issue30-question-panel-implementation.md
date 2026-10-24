@@ -1,6 +1,6 @@
 # Issue #30：问答底部面板实施记录
 
-状态：2026-10-24，独立验收发现的问题已修复，等待复审。本记录只覆盖阅读问答面板，不把引用原文视觉或整应用验收并入通过范围。
+状态：2026-10-24，独立验收发现的问题已修复并复测通过。本记录只覆盖阅读问答面板，不把引用原文视觉或整应用验收并入通过范围。
 
 基准：[高保真原型](standalone.html)、[设计规格](spec.md)、[UIKit 界面开发规范](../ui-development-standard.md)。执行单：[GitHub Issue #30](https://github.com/andyWang1688/shudeng/issues/30)。
 
