@@ -726,6 +726,48 @@ extension ReadingUITests {
         attachDesignSurface("issue30-question-375-dark", app)
     }
 
+    func testIssue31CitationVisualAndReturnToConversation() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+
+        func openCitation(_ theme: String) {
+            app.launchArguments = ["--design-fixture=normal", "--design-theme=\(theme)"]
+            app.launch()
+            XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
+            tab("tab-conversations", label: "对话", in: app).tap()
+            let conversation = app.tables["question-history"].cells.containing(
+                NSPredicate(format: "label CONTAINS %@", "这句话里的“灯”指什么？")
+            ).firstMatch
+            XCTAssertTrue(conversation.waitForExistence(timeout: 5))
+            conversation.tap()
+            XCTAssertTrue(app.buttons["question-close"].waitForExistence(timeout: 5))
+
+            let source = app.buttons["question-reference-0"]
+            XCTAssertTrue(source.waitForExistence(timeout: 5))
+            if !source.isHittable { app.swipeUp() }
+            XCTAssertTrue(source.isHittable)
+            source.tap()
+
+            let back = app.buttons["reader-return-question"]
+            XCTAssertTrue(back.waitForExistence(timeout: 20))
+            XCTAssertEqual(back.label, "返回问答")
+            XCTAssertTrue(
+                app.staticTexts["reader-chapter"].label.contains("查看引用 1")
+            )
+            XCTAssertFalse(app.otherElements["reader-selection-menu"].exists)
+            attachDesignSurface("issue31-citation-375-\(theme)", app)
+
+            back.tap()
+            XCTAssertTrue(app.buttons["question-close"].waitForExistence(timeout: 20))
+            XCTAssertTrue(app.textViews["question-input"].exists)
+            attachDesignSurface("issue31-returned-375-\(theme)", app)
+            app.terminate()
+        }
+
+        openCitation("light")
+        openCitation("dark")
+    }
+
     private func tab(_ identifier: String, label: String, in app: XCUIApplication) -> XCUIElement {
         let identified = app.buttons[identifier].firstMatch
         return identified.exists ? identified : app.tabBars.buttons[label].firstMatch

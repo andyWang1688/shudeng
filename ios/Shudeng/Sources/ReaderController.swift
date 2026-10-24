@@ -760,8 +760,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private func showQuestionReference(_ target: Locator, origin: Locator) {
         guard !loading, !navigating, !curlBusy else { return }
         questionOrigin = origin
+        hideSelectionMenu()
         navigator.clearSelection()
-        navigator.apply(decorations: [Decoration(id: "citation", locator: target, style: .highlight(tint: BookDesign.glow))], in: "question-citation")
+        navigator.apply(decorations: [Decoration(id: "citation", locator: target, style: .highlight(tint: BookDesign.selection))], in: "question-citation")
         navigate(to: target)
     }
     @objc private func backToQuestion() {

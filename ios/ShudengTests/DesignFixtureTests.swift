@@ -775,6 +775,116 @@ final class DesignFixtureTests: XCTestCase {
         }
     }
 
+    func testCitationRendersBothContentSizesAndThemesWithReturnChrome() async throws {
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        let record = try XCTUnwrap(
+            session.library.questions.records.first { !$0.citations.isEmpty }
+        )
+        let target = try XCTUnwrap(record.citations.first?.location())
+        let origin = try XCTUnwrap(record.origin())
+        let primary = try XCTUnwrap(
+            session.library.books.first { $0.id == record.bookID }
+        )
+        let publication = try await session.library.open(primary)
+        let initialLocation = try XCTUnwrap(session.library.location(for: primary.id))
+
+        func pause(_ seconds: TimeInterval) async {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+                    continuation.resume()
+                }
+            }
+        }
+
+        for size in [CGSize(width: 375, height: 667), CGSize(width: 390, height: 844)] {
+            for (style, theme) in [
+                (UIUserInterfaceStyle.light, "light"),
+                (UIUserInterfaceStyle.dark, "dark")
+            ] {
+                let readingSettings = ReadingSettings(
+                    scroll: false,
+                    fontSize: 100,
+                    dark: style == .dark
+                )
+                try session.library.saveReadingState(
+                    initialLocation,
+                    settings: readingSettings,
+                    for: primary.id
+                )
+                let configuredBook = try XCTUnwrap(
+                    session.library.books.first { $0.id == primary.id }
+                )
+                let reader = try ReaderController(
+                    book: configuredBook,
+                    publication: publication,
+                    library: session.library,
+                    target: target
+                )
+                reader.questionOrigin = origin
+                reader.loadViewIfNeeded()
+                let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+                window.overrideUserInterfaceStyle = style
+                window.rootViewController = reader
+                window.makeKeyAndVisible()
+                reader.beginAppearanceTransition(true, animated: false)
+                reader.view.frame = window.bounds
+                reader.view.layoutIfNeeded()
+                reader.endAppearanceTransition()
+
+                let status = try XCTUnwrap(
+                    reader.view.allViews.first {
+                        $0.accessibilityIdentifier == "reading-save-status"
+                    } as? UILabel
+                )
+                var loaded = false
+                for _ in 0..<300 {
+                    if status.text == "阅读位置已保存" {
+                        loaded = true
+                        break
+                    }
+                    await pause(0.1)
+                }
+                XCTAssertTrue(loaded, "Citation reader did not finish loading at \(size)")
+                await pause(2)
+                reader.view.layoutIfNeeded()
+
+                let views = reader.view.allViews
+                let back = try XCTUnwrap(
+                    views.first { $0.accessibilityIdentifier == "reader-return-question" } as? UIButton
+                )
+                let chapter = try XCTUnwrap(
+                    views.first { $0.accessibilityIdentifier == "reader-chapter" } as? UILabel
+                )
+                XCTAssertEqual(back.accessibilityLabel, "返回问答")
+                XCTAssertTrue(chapter.text?.contains("查看引用 1") == true)
+                XCTAssertNotNil(views.first { $0.accessibilityIdentifier == "reader-contents" })
+                XCTAssertNotNil(views.first { $0.accessibilityIdentifier == "reader-settings" })
+                XCTAssertNil(views.first { $0.accessibilityIdentifier == "reader-selection-menu" })
+
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 1
+                format.opaque = true
+                let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                    reader.view.drawHierarchy(
+                        in: reader.view.bounds,
+                        afterScreenUpdates: true
+                    )
+                }
+                window.isHidden = true
+                XCTAssertEqual(image.size, size)
+                let attachment = XCTAttachment(
+                    data: try XCTUnwrap(image.pngData()),
+                    uniformTypeIdentifier: "public.png"
+                )
+                attachment.name = "citation-\(Int(size.width))x\(Int(size.height))-\(theme)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
     func testQuestionSheetUsesDesignedPanelIdentityDraftAndStates() async throws {
         let request = DesignFixture.Request(scenario: .normal, theme: .light)
         let session = try DesignFixture.makeSession(request)

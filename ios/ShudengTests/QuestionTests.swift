@@ -35,6 +35,83 @@ final class QuestionPresentationTests: XCTestCase {
         XCTAssertTrue((visible.first { $0.accessibilityIdentifier == "question-input" } as? UITextView)?.text.isEmpty == true,
                       "已发送的问题不能再次占用追问输入框")
     }
+
+    func testInlineCitationOpensReaderFromVerifiedLink() async throws {
+        let library = try LibraryStore(root: root)
+        let fixture = try XCTUnwrap(
+            Bundle(for: Self.self).url(
+                forResource: "original-fixture",
+                withExtension: "epub",
+                subdirectory: "Fixtures"
+            )
+        )
+        let book = try await library.importBook(from: fixture).book
+        await library.preparation.stop(bookID: book.id)
+        var locator = Locator(
+            href: AnyURL(string: "OEBPS/ch1.xhtml")!,
+            mediaType: .xhtml,
+            title: "第一章",
+            text: .init(highlight: "C1-P01")
+        )
+        locator.locations.cssSelector = "#c1-p1"
+        let evidence = QuestionEvidence(id: "E1", locator: locator)
+        var record = ReadingQuestion(
+            book: book,
+            selection: evidence,
+            neighbors: []
+        )
+        record.question = "原文在哪里？"
+        record.answer = "可以回到原文核查。"
+        record.state = .complete
+        record.citations = [evidence]
+        XCTAssertTrue(library.questions.save(record))
+
+        let page = QuestionController(library: library, id: record.id)
+        let navigation = UINavigationController(rootViewController: page)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 375, height: 667))
+        window.rootViewController = navigation
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        page.loadViewIfNeeded()
+        window.layoutIfNeeded()
+
+        let answer = try XCTUnwrap(
+            descendants(page.view).first { $0.accessibilityIdentifier == "question-answer" } as? UITextView
+        )
+        var citationURL: URL?
+        var citationRange: NSRange?
+        answer.attributedText.enumerateAttribute(
+            .link,
+            in: NSRange(location: 0, length: answer.attributedText.length)
+        ) { value, range, stop in
+            let raw = (value as? URL)?.absoluteString ?? value as? String
+            guard raw == "shudeng://citation/0" else { return }
+            citationURL = URL(string: raw!)
+            citationRange = range
+            stop.pointee = true
+        }
+        let url = try XCTUnwrap(citationURL, "回答必须提供已验证的行内引用链接")
+        let range = try XCTUnwrap(citationRange)
+        let delegate = try XCTUnwrap(answer.delegate)
+        XCTAssertEqual(
+            delegate.textView?(
+                answer,
+                shouldInteractWith: url,
+                in: range,
+                interaction: .invokeDefaultAction
+            ),
+            false
+        )
+        for _ in 0..<100 where page.presentedViewController == nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let reader = try XCTUnwrap(page.presentedViewController as? ReaderController)
+        XCTAssertNotNil(reader.questionOrigin)
+        reader.loadViewIfNeeded()
+        XCTAssertNotNil(
+            descendants(reader.view).first { $0.accessibilityIdentifier == "reader-return-question" }
+        )
+    }
     private func descendants(_ view: UIView) -> [UIView] {
         [view] + view.subviews.flatMap(descendants)
     }
