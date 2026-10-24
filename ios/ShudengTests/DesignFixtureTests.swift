@@ -112,6 +112,112 @@ final class DesignFixtureTests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
+
+    func testNotesPageUsesDesignedHeaderGroupingAndFourFilters() async throws {
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        let root = makeApplicationTabs(library: session.library, root: session.root, secrets: session.secrets)
+        root.select(RootDestination.notes.rawValue)
+        root.loadViewIfNeeded()
+        root.view.frame = CGRect(x: 0, y: 0, width: 375, height: 667)
+        root.view.layoutIfNeeded()
+
+        let views = root.view.allViews
+        for identifier in [
+            "notes-title",
+            "notes-description",
+            "notes-export",
+            "note-filter-all",
+            "note-filter-highlights",
+            "note-filter-notes",
+            "note-filter-bookmarks"
+        ] {
+            XCTAssertNotNil(views.first { $0.accessibilityIdentifier == identifier }, identifier)
+        }
+        let table = try XCTUnwrap(
+            views.compactMap { $0 as? UITableView }.first { $0.accessibilityIdentifier == "notes" }
+        )
+        XCTAssertEqual(table.numberOfSections, 1)
+        XCTAssertEqual(table.numberOfRows(inSection: 0), 3)
+        XCTAssertTrue(
+            views.contains { view in
+                view.accessibilityIdentifier?.hasPrefix("notes-book-") == true
+            }
+        )
+        let primary = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.fixtureTitle })
+        let note = try XCTUnwrap(primary.notes?.first)
+        let bookmark = try XCTUnwrap(primary.bookmarks?.first)
+        XCTAssertNotNil(
+            session.library.recordTimestamp(kind: .note, bookID: primary.id, recordID: note.id)
+        )
+        XCTAssertNotNil(
+            session.library.recordTimestamp(kind: .bookmark, bookID: primary.id, recordID: bookmark.id)
+        )
+        let catalog = try String(
+            contentsOf: session.root.appendingPathComponent("library.json"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(catalog.contains("recordTimestamp"))
+        XCTAssertFalse(catalog.contains("createdAt"))
+
+        let expectedRows = [
+            "note-filter-all": 3,
+            "note-filter-highlights": 1,
+            "note-filter-notes": 1,
+            "note-filter-bookmarks": 1
+        ]
+        for (identifier, count) in expectedRows {
+            let button = try XCTUnwrap(
+                views.compactMap { $0 as? UIControl }.first { $0.accessibilityIdentifier == identifier },
+                identifier
+            )
+            button.sendActions(for: .touchUpInside)
+            XCTAssertEqual(table.numberOfRows(inSection: 0), count, identifier)
+        }
+
+        for size in [CGSize(width: 375, height: 667), CGSize(width: 390, height: 844)] {
+            for (style, theme) in [(UIUserInterfaceStyle.light, "light"), (.dark, "dark")] {
+                let rendered = makeApplicationTabs(library: session.library, root: session.root, secrets: session.secrets)
+                rendered.select(RootDestination.notes.rawValue)
+                let image = DesignFixture.renderRoot(rendered, size: size, style: style)
+                let attachment = XCTAttachment(
+                    data: try XCTUnwrap(image.pngData()),
+                    uniformTypeIdentifier: "public.png"
+                )
+                attachment.name = "notes-\(Int(size.width))x\(Int(size.height))-\(theme)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
+    func testNotesEmptyStateOffersAReadableNextAction() async throws {
+        let request = DesignFixture.Request(scenario: .empty, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        let root = makeApplicationTabs(library: session.library, root: session.root, secrets: session.secrets)
+        root.select(RootDestination.notes.rawValue)
+        root.loadViewIfNeeded()
+        root.view.frame = CGRect(x: 0, y: 0, width: 375, height: 667)
+        root.view.layoutIfNeeded()
+
+        let views = root.view.allViews
+        let table = try XCTUnwrap(
+            views.compactMap { $0 as? UITableView }.first { $0.accessibilityIdentifier == "notes" }
+        )
+        let empty = try XCTUnwrap(table.backgroundView)
+        XCTAssertEqual(empty.accessibilityIdentifier, "notes-empty")
+        XCTAssertNotNil(empty.allViews.first { $0.accessibilityIdentifier == "notes-empty-title" })
+        XCTAssertNotNil(empty.allViews.first { $0.accessibilityIdentifier == "notes-empty-detail" })
+        XCTAssertNotNil(empty.allViews.first { $0.accessibilityIdentifier == "notes-empty-action" })
+
+        let image = DesignFixture.renderRoot(root, size: CGSize(width: 375, height: 667), style: .light)
+        let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
+        attachment.name = "notes-empty-375x667-light"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
 }
 
 private extension UIView {

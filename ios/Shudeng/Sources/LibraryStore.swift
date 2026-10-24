@@ -76,6 +76,63 @@ struct ImportedBook {
     let isDuplicate: Bool
 }
 
+enum SavedRecordKind: String {
+    case note, bookmark
+}
+
+/// Additive display metadata kept outside the existing catalogue schema.
+/// Existing note, draft, bookmark and book JSON remains byte-compatible with
+/// the previous model; no synthetic timestamps are invented when this file is
+/// absent or unreadable.
+@MainActor
+private final class RecordTimestampStore {
+    private let file: URL
+    private var values: [String: Date]
+    private var canWrite: Bool
+
+    init(root: URL) {
+        file = root.appendingPathComponent("record-timestamps.json")
+        do {
+            let data = try Data(contentsOf: file)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            values = try decoder.decode([String: Date].self, from: data)
+            canWrite = true
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            values = [:]
+            canWrite = true
+        } catch {
+            values = [:]
+            canWrite = false
+        }
+    }
+
+    func timestamp(kind: SavedRecordKind, bookID: String, recordID: UUID) -> Date? {
+        values[key(kind: kind, bookID: bookID, recordID: recordID)]
+    }
+
+    func recordIfAbsent(kind: SavedRecordKind, bookID: String, recordID: UUID, at date: Date = Date()) {
+        guard canWrite else { return }
+        let key = key(kind: kind, bookID: bookID, recordID: recordID)
+        guard values[key] == nil else { return }
+        var updated = values
+        updated[key] = date
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(updated).write(to: file, options: .atomic)
+            values = updated
+        } catch {
+            canWrite = false
+        }
+    }
+
+    private func key(kind: SavedRecordKind, bookID: String, recordID: UUID) -> String {
+        kind.rawValue + ":" + bookID + ":" + recordID.uuidString
+    }
+}
+
 enum LibraryError: LocalizedError {
     case unsupported, invalid, save, missing, invalidLocation, busy
     var errorDescription: String? {
@@ -101,6 +158,7 @@ final class LibraryStore {
     private var operations: Set<String> = []
     private var revisions: [String: UUID] = [:]
     private let fileManager = FileManager.default
+    private lazy var recordTimestamps = RecordTimestampStore(root: root)
     private let http = DefaultHTTPClient()
     private lazy var retriever = AssetRetriever(httpClient: http)
     private lazy var opener = PublicationOpener(
@@ -278,6 +336,7 @@ final class LibraryStore {
         var updated = books
         updated[index].bookmarks = existing + [bookmark]
         do { try commit(updated) } catch { throw LibraryError.save }
+        recordTimestamps.recordIfAbsent(kind: .bookmark, bookID: id, recordID: bookmark.id)
     }
 
     func removeBookmark(_ bookmarkID: UUID, for id: String) throws {
@@ -319,6 +378,11 @@ final class LibraryStore {
             if !highlightOnly { updated[index].noteDrafts = (updated[index].noteDrafts ?? []).filter { $0.id != note.id } }
         }
         do { try commit(updated) } catch { throw LibraryError.save }
+        recordTimestamps.recordIfAbsent(kind: .note, bookID: id, recordID: note.id)
+    }
+
+    func recordTimestamp(kind: SavedRecordKind, bookID: String, recordID: UUID) -> Date? {
+        recordTimestamps.timestamp(kind: kind, bookID: bookID, recordID: recordID)
     }
 
     private func validatedPublication(at url: URL) async throws -> Publication {

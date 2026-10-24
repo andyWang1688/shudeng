@@ -326,6 +326,85 @@ extension ReadingUITests {
         XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 15))
     }
 
+    func testIssue26NotesFiltersVisualAndReturnToOriginal() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
+        tab("tab-notes", label: "笔记", in: app).tap()
+
+        XCTAssertTrue(app.staticTexts["notes-title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["notes-description"].exists)
+        XCTAssertTrue(app.buttons["notes-export"].exists)
+        for identifier in [
+            "note-filter-all",
+            "note-filter-highlights",
+            "note-filter-notes",
+            "note-filter-bookmarks"
+        ] {
+            XCTAssertTrue(app.buttons[identifier].exists, identifier)
+        }
+        let table = app.tables["notes"]
+        XCTAssertEqual(table.cells.count, 3)
+        XCTAssertTrue(
+            table.cells.containing(NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")).firstMatch.exists
+        )
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "今天")).firstMatch.exists
+        )
+        attachDesignSurface("issue26-notes-normal-375-light", app)
+
+        app.buttons["note-filter-bookmarks"].tap()
+        XCTAssertEqual(table.cells.count, 1)
+        XCTAssertTrue(
+            table.cells.containing(NSPredicate(format: "label CONTAINS %@", "书签")).firstMatch.exists
+        )
+        attachDesignSurface("issue26-notes-bookmarks-375-light", app)
+
+        app.buttons["note-filter-notes"].tap()
+        XCTAssertEqual(table.cells.count, 1)
+        app.buttons["note-filter-all"].tap()
+        XCTAssertEqual(table.cells.count, 3)
+
+        let returnButton = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "return-")
+        ).firstMatch
+        XCTAssertTrue(returnButton.waitForExistence(timeout: 5))
+        returnButton.tap()
+        waitForBody(app)
+        attachDesignSurface("issue26-notes-original-375-light", app)
+        app.buttons["书架"].tap()
+        XCTAssertTrue(app.staticTexts["notes-title"].waitForExistence(timeout: 10))
+
+        let noteCell = app.tables["notes"].cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "note-")
+        ).firstMatch
+        XCTAssertTrue(noteCell.exists)
+        noteCell.tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["保存草稿"].exists)
+        app.buttons["关闭"].tap()
+        XCTAssertTrue(app.staticTexts["notes-title"].waitForExistence(timeout: 5))
+
+        app.terminate()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
+        app.launch()
+        XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
+        tab("tab-notes", label: "笔记", in: app).tap()
+        XCTAssertTrue(app.staticTexts["notes-title"].waitForExistence(timeout: 5))
+        attachDesignSurface("issue26-notes-normal-375-dark", app)
+
+        app.terminate()
+        app.launchArguments = ["--design-fixture=empty", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
+        tab("tab-notes", label: "笔记", in: app).tap()
+        XCTAssertTrue(app.staticTexts["还没有阅读痕迹"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["notes-empty-action"].exists)
+        attachDesignSurface("issue26-notes-empty-375-light", app)
+    }
+
     private func tab(_ identifier: String, label: String, in app: XCUIApplication) -> XCUIElement {
         let identified = app.buttons[identifier].firstMatch
         return identified.exists ? identified : app.tabBars.buttons[label].firstMatch

@@ -130,13 +130,15 @@ enum DesignFixture {
             chapter: specifications[0].chapter,
             quote: specifications[0].paragraphs[1],
             progression: 0.18,
-            totalProgression: 0.12
+            totalProgression: 0.12,
+            paragraphIndex: 1
         )
         let second = locator(
             chapter: specifications[0].chapter,
             quote: specifications[0].paragraphs[0],
             progression: 0.08,
-            totalProgression: 0.04
+            totalProgression: 0.04,
+            paragraphIndex: 0
         )
         try session.library.saveReadingState(
             first,
@@ -200,7 +202,12 @@ enum DesignFixture {
     }
 
     private static func seedConversations(primary: Book, selection: Locator, library: LibraryStore) {
-        let citation = locator(chapter: "第三回 · 林黛玉进贾府", quote: "灯把书页照亮，也把问题留在纸上。", progression: 0.18)
+        let citation = locator(
+            chapter: "第三回 · 林黛玉进贾府",
+            quote: "灯把书页照亮，也把问题留在纸上。",
+            progression: 0.18,
+            paragraphIndex: 1
+        )
         let evidence = QuestionEvidence(locator: citation)
 
         var first = ReadingQuestion(book: primary, selection: evidence, neighbors: [])
@@ -217,7 +224,12 @@ enum DesignFixture {
         first.updated = Date(timeIntervalSince1970: 1_792_742_400)
         _ = library.questions.save(first)
 
-        let selection2 = locator(chapter: "第三回 · 林黛玉进贾府", quote: "黛玉方进入房时", progression: 0.08)
+        let selection2 = locator(
+            chapter: "第三回 · 林黛玉进贾府",
+            quote: "黛玉方进入房时",
+            progression: 0.08,
+            paragraphIndex: 0
+        )
         var second = ReadingQuestion(book: primary, selection: QuestionEvidence(locator: selection2), neighbors: [])
         second.conversationID = second.id
         second.turnIndex = 0
@@ -244,17 +256,19 @@ enum DesignFixture {
         chapter: String,
         quote: String,
         progression: Double,
-        totalProgression: Double? = nil
+        totalProgression: Double? = nil,
+        paragraphIndex: Int
     ) -> Locator {
+        let selector = "#fixture-paragraph-" + String(paragraphIndex)
         var locations = Locator.Locations(
             progression: progression,
             totalProgression: totalProgression ?? progression / 3,
             position: max(1, Int(progression * 100))
         )
-        locations.cssSelector = "#fixture-paragraph"
+        locations.cssSelector = selector
         locations.otherLocations["domRange"] = DOMRange(
-            start: .init(cssSelector: "#fixture-paragraph", textNodeIndex: 0, charOffset: 0),
-            end: .init(cssSelector: "#fixture-paragraph", textNodeIndex: 0, charOffset: quote.utf16.count)
+            start: .init(cssSelector: selector, textNodeIndex: 0, charOffset: 0),
+            end: .init(cssSelector: selector, textNodeIndex: 0, charOffset: quote.utf16.count)
         ).jsonValue
         return Locator(
             href: AnyURL(string: "OEBPS/chapter1.xhtml")!,
@@ -297,7 +311,7 @@ private struct FixtureEPUB {
         let escapedAuthor = escape(book.author)
         let escapedChapter = escape(book.chapter)
         let body = book.paragraphs.enumerated().map {
-            "<p id=\"fixture-paragraph\">\(escape($0.element))</p>"
+            "<p id=\"fixture-paragraph-\($0.offset)\">\(escape($0.element))</p>"
         }.joined(separator: "\n")
 
         zip.add("mimetype", Data("application/epub+zip".utf8))
