@@ -405,6 +405,86 @@ extension ReadingUITests {
         attachDesignSurface("issue26-notes-empty-375-light", app)
     }
 
+    func testIssue27ConversationsSearchOpenAndStates() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
+        tab("tab-conversations", label: "对话", in: app).tap()
+
+        XCTAssertTrue(app.staticTexts["conversations-title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["conversations-description"].exists)
+        let table = app.tables["question-history"]
+        XCTAssertEqual(table.cells.count, 2)
+        XCTAssertTrue(
+            table.cells.containing(
+                NSPredicate(format: "label CONTAINS %@", "这句话里的“灯”指什么？")
+            ).firstMatch.exists
+        )
+        XCTAssertTrue(
+            table.cells.containing(NSPredicate(format: "label CONTAINS %@", "次提问")).firstMatch.exists
+        )
+        attachDesignSurface("issue27-conversations-normal-375-light", app)
+
+        let search = app.textFields["conversation-search"]
+        XCTAssertTrue(search.exists)
+        search.tap()
+        search.typeText("第一次进贾府\n")
+        XCTAssertEqual(table.cells.count, 1)
+        XCTAssertTrue(
+            table.cells.containing(
+                NSPredicate(format: "label CONTAINS %@", "林黛玉第一次进贾府时看到了什么？")
+            ).firstMatch.exists
+        )
+
+        search.tap()
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12))
+        XCTAssertEqual(table.cells.count, 2)
+        search.typeText("不存在的对话")
+        XCTAssertTrue(app.staticTexts["没有找到相关对话"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["conversations-search-empty-action"].exists)
+        attachDesignSurface("issue27-conversations-search-empty-375-light", app)
+
+        app.terminate()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
+        tab("tab-conversations", label: "对话", in: app).tap()
+        let first = app.tables["question-history"].cells.containing(
+            NSPredicate(format: "label CONTAINS %@", "这句话里的“灯”指什么？")
+        ).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        first.tap()
+        XCTAssertTrue(app.textViews["question-input"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", "这句话里的“灯”指什么？")
+            ).firstMatch.exists
+        )
+        XCTAssertTrue(app.buttons["question-follow-up"].exists)
+        XCTAssertTrue(app.buttons["关闭"].exists)
+        app.buttons["关闭"].tap()
+        XCTAssertTrue(app.staticTexts["conversations-title"].waitForExistence(timeout: 5))
+
+        app.terminate()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
+        app.launch()
+        XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
+        tab("tab-conversations", label: "对话", in: app).tap()
+        XCTAssertTrue(app.staticTexts["conversations-title"].waitForExistence(timeout: 5))
+        attachDesignSurface("issue27-conversations-normal-375-dark", app)
+
+        app.terminate()
+        app.launchArguments = ["--design-fixture=empty", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
+        tab("tab-conversations", label: "对话", in: app).tap()
+        XCTAssertTrue(app.staticTexts["还没有对话"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["conversations-empty-action"].exists)
+        attachDesignSurface("issue27-conversations-empty-375-light", app)
+    }
+
     private func tab(_ identifier: String, label: String, in app: XCUIApplication) -> XCUIElement {
         let identified = app.buttons[identifier].firstMatch
         return identified.exists ? identified : app.tabBars.buttons[label].firstMatch

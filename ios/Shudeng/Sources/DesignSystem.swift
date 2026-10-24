@@ -519,3 +519,83 @@ final class BookCoverStore {
         } catch { return nil }
     }
 }
+
+/// Shared book identity row used above grouped notes and conversations.
+@MainActor
+final class BookGroupHeader: UIView {
+    private let cover = UIView()
+    private let coverImage = UIImageView()
+    private let initial = BookDesign.label(nil, size: 11, weight: .semibold, colour: BookDesign.paper)
+    private let title = BookDesign.label(nil, size: 12, colour: BookDesign.secondary)
+    private var token = UUID()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        cover.layer.cornerRadius = 2
+        cover.clipsToBounds = true
+        coverImage.contentMode = .scaleAspectFill
+        coverImage.clipsToBounds = true
+        initial.textAlignment = .center
+        initial.isHidden = true
+        for child in [coverImage, initial] {
+            child.translatesAutoresizingMaskIntoConstraints = false
+            cover.addSubview(child)
+        }
+        let row = UIStackView(arrangedSubviews: [cover, title, UIView()])
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            cover.widthAnchor.constraint(equalToConstant: 22),
+            cover.heightAnchor.constraint(equalToConstant: 30),
+            coverImage.topAnchor.constraint(equalTo: cover.topAnchor),
+            coverImage.leadingAnchor.constraint(equalTo: cover.leadingAnchor),
+            coverImage.trailingAnchor.constraint(equalTo: cover.trailingAnchor),
+            coverImage.bottomAnchor.constraint(equalTo: cover.bottomAnchor),
+            initial.centerXAnchor.constraint(equalTo: cover.centerXAnchor),
+            initial.centerYAnchor.constraint(equalTo: cover.centerYAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor, constant: 23),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            row.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor)
+        ])
+        isAccessibilityElement = true
+        accessibilityTraits = .header
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func configure(
+        bookID: String,
+        bookTitle: String,
+        book: Book?,
+        covers: BookCoverStore,
+        library: LibraryStore,
+        identifierPrefix: String
+    ) {
+        token = UUID()
+        let current = token
+        title.text = bookTitle
+        accessibilityIdentifier = "\(identifierPrefix)-\(bookID)"
+        accessibilityLabel = bookTitle
+        cover.backgroundColor = palette(for: bookTitle)
+        coverImage.image = nil
+        initial.text = String(bookTitle.prefix(1))
+        initial.isHidden = false
+        guard let book else { return }
+        Task { [weak self] in
+            let image = await covers.image(for: book, library: library)
+            guard let self, token == current else { return }
+            coverImage.image = image
+            initial.isHidden = image != nil
+        }
+    }
+
+    private func palette(for title: String) -> UIColor {
+        let colours = [0x565D4A, 0x79513E, 0x4E626B, 0x75634C]
+        let index = title.utf8.reduce(0) { ($0 + Int($1)) % colours.count }
+        return BookDesign.rgb(colours[index])
+    }
+}

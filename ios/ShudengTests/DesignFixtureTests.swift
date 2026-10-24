@@ -218,6 +218,175 @@ final class DesignFixtureTests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
+
+    func testConversationsPageUsesDesignedHeaderSearchGroupingAndMetadata() async throws {
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        let root = makeApplicationTabs(library: session.library, root: session.root, secrets: session.secrets)
+        root.select(RootDestination.conversations.rawValue)
+        root.loadViewIfNeeded()
+        root.view.frame = CGRect(x: 0, y: 0, width: 375, height: 667)
+        root.view.layoutIfNeeded()
+
+        let views = root.view.allViews
+        for identifier in [
+            "conversations-title",
+            "conversations-description",
+            "conversation-search",
+            "tab-conversations"
+        ] {
+            XCTAssertNotNil(views.first { $0.accessibilityIdentifier == identifier }, identifier)
+        }
+        let table = try XCTUnwrap(
+            views.compactMap { $0 as? UITableView }.first { $0.accessibilityIdentifier == "question-history" }
+        )
+        XCTAssertEqual(table.numberOfSections, 1)
+        XCTAssertEqual(table.numberOfRows(inSection: 0), 2)
+        XCTAssertTrue(
+            views.contains { $0.accessibilityIdentifier?.hasPrefix("conversations-book-") == true }
+        )
+
+        table.layoutIfNeeded()
+        let labels = table.visibleCells.compactMap(\.accessibilityLabel).joined(separator: "\n")
+        XCTAssertTrue(labels.contains(DesignFixture.conversationTitle))
+        XCTAssertTrue(labels.contains("次提问"))
+        XCTAssertTrue(labels.contains("这里的“灯”既是阅读时的照明"))
+        let actions = table.delegate?.tableView?(
+            table,
+            trailingSwipeActionsConfigurationForRowAt: IndexPath(row: 0, section: 0)
+        )
+        XCTAssertEqual(Set(actions?.actions.compactMap(\.title) ?? []), Set(["改名", "删除"]))
+
+        let search = try XCTUnwrap(
+            views.compactMap { $0 as? UITextField }.first { $0.accessibilityIdentifier == "conversation-search" }
+        )
+        search.text = "第一次进贾府"
+        search.sendActions(for: .editingChanged)
+        XCTAssertEqual(table.numberOfRows(inSection: 0), 1)
+        XCTAssertTrue(
+            table.visibleCells.compactMap(\.accessibilityLabel).joined().contains("林黛玉第一次进贾府时看到了什么")
+        )
+
+        search.text = "不存在的对话"
+        search.sendActions(for: .editingChanged)
+        XCTAssertEqual(table.numberOfSections, 0)
+        let searchEmpty = try XCTUnwrap(table.backgroundView)
+        XCTAssertEqual(searchEmpty.accessibilityIdentifier, "conversations-search-empty")
+        let clearSearch = try XCTUnwrap(
+            searchEmpty.allViews.compactMap { $0 as? UIControl }
+                .first { $0.accessibilityIdentifier == "conversations-search-empty-action" }
+        )
+        clearSearch.sendActions(for: .touchUpInside)
+        XCTAssertEqual(search.text, "")
+        XCTAssertEqual(table.numberOfRows(inSection: 0), 2)
+
+        for size in [CGSize(width: 375, height: 667), CGSize(width: 390, height: 844)] {
+            for (style, theme) in [(UIUserInterfaceStyle.light, "light"), (.dark, "dark")] {
+                let rendered = makeApplicationTabs(
+                    library: session.library,
+                    root: session.root,
+                    secrets: session.secrets
+                )
+                rendered.select(RootDestination.conversations.rawValue)
+                let image = DesignFixture.renderRoot(rendered, size: size, style: style)
+                let attachment = XCTAttachment(
+                    data: try XCTUnwrap(image.pngData()),
+                    uniformTypeIdentifier: "public.png"
+                )
+                attachment.name = "conversations-\(Int(size.width))x\(Int(size.height))-\(theme)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
+    func testConversationsEmptyAndReadFailureOfferDistinctNextActions() async throws {
+        let emptyRequest = DesignFixture.Request(scenario: .empty, theme: .light)
+        let emptySession = try DesignFixture.makeSession(emptyRequest)
+        try await DesignFixture.seed(emptySession)
+        let emptyRoot = makeApplicationTabs(
+            library: emptySession.library,
+            root: emptySession.root,
+            secrets: emptySession.secrets
+        )
+        emptyRoot.select(RootDestination.conversations.rawValue)
+        emptyRoot.loadViewIfNeeded()
+        emptyRoot.view.frame = CGRect(x: 0, y: 0, width: 375, height: 667)
+        emptyRoot.view.layoutIfNeeded()
+
+        let emptyTable = try XCTUnwrap(
+            emptyRoot.view.allViews.compactMap { $0 as? UITableView }
+                .first { $0.accessibilityIdentifier == "question-history" }
+        )
+        let empty = try XCTUnwrap(emptyTable.backgroundView)
+        XCTAssertEqual(empty.accessibilityIdentifier, "conversations-empty")
+        let emptyAction = try XCTUnwrap(
+            empty.allViews.compactMap { $0 as? UIControl }
+                .first { $0.accessibilityIdentifier == "conversations-empty-action" }
+        )
+        let emptyImage = DesignFixture.renderRoot(
+            emptyRoot,
+            size: CGSize(width: 375, height: 667),
+            style: .light
+        )
+        let emptyAttachment = XCTAttachment(
+            data: try XCTUnwrap(emptyImage.pngData()),
+            uniformTypeIdentifier: "public.png"
+        )
+        emptyAttachment.name = "conversations-empty-375x667-light"
+        emptyAttachment.lifetime = .keepAlways
+        add(emptyAttachment)
+        emptyAction.sendActions(for: .touchUpInside)
+        XCTAssertEqual(emptyRoot.selectedIndex, RootDestination.library.rawValue)
+
+        let failedRequest = DesignFixture.Request(scenario: .normal, theme: .light)
+        let failedSession = try DesignFixture.makeSession(failedRequest)
+        try await DesignFixture.seed(failedSession)
+        try Data("not valid conversation data".utf8).write(
+            to: failedSession.root.appendingPathComponent("reading-questions.json"),
+            options: .atomic
+        )
+        let failedLibrary = try LibraryStore(root: failedSession.root, secrets: failedSession.secrets)
+        let failedRoot = makeApplicationTabs(
+            library: failedLibrary,
+            root: failedSession.root,
+            secrets: failedSession.secrets
+        )
+        failedRoot.select(RootDestination.conversations.rawValue)
+        failedRoot.loadViewIfNeeded()
+        failedRoot.view.frame = CGRect(x: 0, y: 0, width: 375, height: 667)
+        failedRoot.view.layoutIfNeeded()
+
+        let failedTable = try XCTUnwrap(
+            failedRoot.view.allViews.compactMap { $0 as? UITableView }
+                .first { $0.accessibilityIdentifier == "question-history" }
+        )
+        let failed = try XCTUnwrap(failedTable.backgroundView)
+        XCTAssertEqual(failed.accessibilityIdentifier, "conversations-failed")
+        let retry = try XCTUnwrap(
+            failed.allViews.compactMap { $0 as? UIControl }
+                .first { $0.accessibilityIdentifier == "conversations-failed-action" }
+        )
+        XCTAssertNotEqual(empty.accessibilityIdentifier, failed.accessibilityIdentifier)
+        let failedImage = DesignFixture.renderRoot(
+            failedRoot,
+            size: CGSize(width: 375, height: 667),
+            style: .light
+        )
+        let failedAttachment = XCTAttachment(
+            data: try XCTUnwrap(failedImage.pngData()),
+            uniformTypeIdentifier: "public.png"
+        )
+        failedAttachment.name = "conversations-failed-375x667-light"
+        failedAttachment.lifetime = .keepAlways
+        add(failedAttachment)
+        retry.sendActions(for: .touchUpInside)
+        XCTAssertEqual(
+            try XCTUnwrap(failedTable.backgroundView).accessibilityIdentifier,
+            "conversations-failed"
+        )
+    }
 }
 
 private extension UIView {

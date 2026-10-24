@@ -271,14 +271,13 @@ final class QuestionCitationWhitespaceTests: XCTestCase {
 @MainActor
 final class QuestionTests: XCTestCase {
     private var root: URL!
-    private var secrets: KeychainSecrets!
+    private var secrets: EphemeralSecrets!
     override func setUp() async throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        secrets = KeychainSecrets(service: "dev.shudeng.tests.question." + UUID().uuidString)
+        secrets = EphemeralSecrets()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
     override func tearDown() async throws {
-        for id in try secrets.accounts() { try secrets.remove(id) }
         try? FileManager.default.removeItem(at: root)
     }
     private func question(_ quote: String = "Safety requires review.") -> ReadingQuestion {
