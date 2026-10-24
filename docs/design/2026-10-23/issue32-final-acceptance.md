@@ -1,6 +1,6 @@
 # Issue #32：整应用视觉验收与 Release 验证
 
-状态：2026-10-25，最终聚焦验收完成；所有 #23 子 Issue 的页面实现已关闭，整应用 Release 按用户约定的模拟器标准完成本轮验收。未创建新版本、未推送、未修改父 Issue。
+状态：2026-10-25，独立终审 PASS。所有 #23 子 Issue 的页面实现已关闭，整应用 Release 按用户约定的模拟器标准完成本轮验收。未创建新版本、未推送、未修改父 Issue。
 
 ## 最终结果
 
@@ -9,6 +9,7 @@
 - Release 构建：`.build/issue24-derived/Build/Products/Release-iphonesimulator/Shudeng.app` 构建成功；对生产二进制检查 `design-fixture`、`DESIGN_FIXTURE_ROOT`、`ShudengDesignFixture` 均无命中。
 - 唯一设备仍为 Shudeng Small（iPhone SE 3，iOS 26.5，`1B9B9A35-F2D7-4D87-AB31-6B07D1B27D66`）；未新增模拟器。
 - Release 包已安装并正常启动；书架仍有原 3 本书，未删除或重建书库。最终启动截图见 `.scratch/test-evidence/issue32/final-release-shelf.png`（含本机用户数据，不提交公开仓库）。
+- 独立终审确认构建产物与 Shudeng Small 已安装 App 的二进制 SHA-256 完全一致：`3a66c9b4a75d42c0664ea0ef3fdaac363a3666cc3696f1770565f2ccf370c485`；安装后 `dev.shudeng.app` 为 0.1.0，`library.json` 存在且仍有 3 本书。
 - 构建前可用磁盘约 40 GiB；最终构建目录位于 `.build/issue24-derived`，未复制持久依赖到系统临时目录。
 
 ## 页面覆盖

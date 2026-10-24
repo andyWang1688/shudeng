@@ -1,6 +1,6 @@
 # 原生视觉验收矩阵
 
-状态：2026-10-25，#24-#31 的固定夹具及全部页面已通过逐页视觉验收；#32 的聚焦 Release 验收已完成，30/30 tests、Release 构建与原 Shudeng Small 正常启动通过。尚未完成完整旧测试集、完整 VoiceOver、真机与 App Store 分发。
+状态：2026-10-25，#24-#31 的固定夹具及全部页面已通过逐页视觉验收；#32 的聚焦 Release 验收已独立终审通过，30/30 tests、Release 构建与原 Shudeng Small 正常启动通过。尚未完成完整旧测试集、完整 VoiceOver、真机与 App Store 分发。
 
 基准：[高保真原型](standalone.html) 与 [设计规格](spec.md)。实现门槛见 [UIKit 界面开发规范](../ui-development-standard.md)，决策见 [ADR 0009](../../adr/0009-native-ui-design-baseline.md)。
 
