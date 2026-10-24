@@ -72,7 +72,7 @@ final class QuestionPresentationTests: XCTestCase {
         reader.loadViewIfNeeded()
         try await Task.sleep(nanoseconds: 700_000_000)
         let back = try XCTUnwrap(descendants(reader.view).first { $0.accessibilityIdentifier == "reader-return-question" } as? UIButton)
-        XCTAssertEqual(back.title(for: .normal), "返回问答")
+        XCTAssertEqual(back.accessibilityLabel, "返回问答")
         let position = try XCTUnwrap(descendants(reader.view).first { $0.accessibilityIdentifier == "reading-save-status" } as? UILabel)
         for _ in 0..<200 where position.text != "阅读位置已保存" { try await Task.sleep(nanoseconds: 100_000_000) }
         XCTAssertEqual(position.text, "阅读位置已保存", "原生阅读器必须确认真实定位后才返回")

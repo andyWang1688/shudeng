@@ -599,17 +599,37 @@ extension ReadingUITests {
 
         contents.tap()
         XCTAssertTrue(app.tables["book-navigation"].waitForExistence(timeout: 5))
+        app.buttons["添加书签"].tap()
+        XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
         app.buttons["完成"].tap()
         XCTAssertTrue(ask.waitForExistence(timeout: 5))
 
-        settings.tap()
-        XCTAssertTrue(app.navigationBars["阅读设置"].waitForExistence(timeout: 5))
-        app.navigationBars["阅读设置"].buttons["取消"].tap()
-        XCTAssertTrue(ask.waitForExistence(timeout: 5))
-
         let paragraph = app.webViews.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")
+            NSPredicate(format: "label CONTAINS %@", "当下地下侍立之人")
         ).firstMatch
+        for (index, mode) in ["滚动", "仿真", "分页"].enumerated() {
+            if index > 0 {
+                app.terminate()
+                app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+                app.launch()
+                XCTAssertTrue(app.buttons["continue-reading"].waitForExistence(timeout: 15))
+                app.buttons["continue-reading"].tap()
+                XCTAssertTrue(ask.waitForExistence(timeout: 15))
+                XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15))
+            }
+            let readerSettings = app.buttons["reader-settings"]
+            XCTAssertTrue(readerSettings.waitForExistence(timeout: 15), mode)
+            readerSettings.tap()
+            XCTAssertTrue(app.navigationBars["阅读设置"].waitForExistence(timeout: 10), mode)
+            app.segmentedControls.buttons[mode].tap()
+            app.buttons["完成"].tap()
+            XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15), mode)
+            XCTAssertTrue(paragraph.waitForExistence(timeout: 10), mode)
+            Thread.sleep(forTimeInterval: 0.45)
+            XCTAssertTrue(ask.waitForExistence(timeout: 5), mode)
+            XCTAssertTrue(ask.isHittable, mode)
+        }
+
         XCTAssertTrue(paragraph.waitForExistence(timeout: 10))
         paragraph.press(forDuration: 1.3)
         attachDesignSurface("issue29-selection-375-light", app)
@@ -629,7 +649,7 @@ extension ReadingUITests {
         XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15))
         let darkParagraph = app.webViews.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")
+            NSPredicate(format: "label CONTAINS %@", "当下地下侍立之人")
         ).firstMatch
         XCTAssertTrue(darkParagraph.waitForExistence(timeout: 10))
         darkParagraph.press(forDuration: 1.3)

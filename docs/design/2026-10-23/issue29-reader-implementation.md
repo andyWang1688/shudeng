@@ -1,6 +1,6 @@
 # Issue #29：阅读页与选文视觉闭环实施记录
 
-状态：2026-10-24，实现与专项回归完成，待独立验收。本记录不自行关闭 Issue，也不把其他页面并入阅读页结论。
+状态：2026-10-24，独立验收提出的菜单遮挡与引用按钮契约问题已修复，等待复审。本记录不自行关闭 Issue，也不把其他页面并入阅读页结论。
 
 基准：[高保真原型](standalone.html)、[设计规格](spec.md)、[UIKit 界面开发规范](../ui-development-standard.md)。执行单：[GitHub Issue #29](https://github.com/andyWang1688/shudeng/issues/29)。
 
@@ -20,12 +20,13 @@
 
 ## 证据
 
-最终结果：[final-placement.xcresult](../../../.scratch/test-evidence/issue29/final-placement.xcresult)，4 tests / 0 failures；设备为 Shudeng Small（iPhone SE 3，iOS 26.5）。
+最终结果：[fix-final3.xcresult](../../../.scratch/test-evidence/issue29/fix-final3.xcresult)，6 tests / 0 failures；设备为 Shudeng Small（iPhone SE 3，iOS 26.5）。
 
 - `DesignFixtureTests/testReaderUsesDesignedTypographyMarginsAndWarmSelection`：验证宋体、20pt 基准换算、1.95 行高、29pt 边距、两端对齐和浅深色选文令牌。
-- `DesignFixtureTests/testReaderChromeMatchesDesignedMetrics`：验证 51pt 顶栏、左右 13pt 边距、44pt 返回/目录/设置与底栏胶囊居中，以及选区菜单基础尺寸和越界钳制。
+- `DesignFixtureTests/testReaderChromeMatchesDesignedMetrics`：验证 51pt 顶栏、左右 13pt 边距、44pt 返回/目录/设置、底栏胶囊居中，以及完整多行选区下菜单不与选区相交。
 - `DesignFixtureTests/testReaderRendersBothContentSizesAndThemes`：用真实 Readium 页面在 375 × 667 和 390 × 844、浅色和深色下等待正文加载后截图，并验证顶栏与胶囊尺寸。
-- `ReadingUITests/testIssue29ReaderToolbarSelectionAndAskEntry`：在 Shudeng Small 上实际打开书、检查顶栏与底栏、打开目录和阅读设置、长按选文、验证三项菜单、进入笔记并返回；重启后复查暗色选文。
+- `QuestionPresentationTests`：4 项保存、引用往返、连续引用和加载失败退出回归均通过；返回按钮通过公开 `accessibilityLabel` 暴露“返回问答”。
+- `ReadingUITests/testIssue29ReaderToolbarSelectionAndAskEntry`：实际打开书、添加书签、依次切换滚动/仿真/分页、长按无预置高亮段落、验证菜单不遮挡选区、进入笔记并返回；重启后复查暗色选文。
 
 截图由 [final-placement-attachments](../../../.scratch/test-evidence/issue29/final-placement-attachments/manifest.json) 导出：
 
@@ -36,10 +37,17 @@
 | 390 × 844 浅色 | [reader-390x844-light](../../../.scratch/test-evidence/issue29/final-placement-attachments/28D4FCD9-1908-496A-A499-E227CBA1BF2E.png) |
 | 390 × 844 深色 | [reader-390x844-dark](../../../.scratch/test-evidence/issue29/final-placement-attachments/D343C20B-B0FB-4C15-8B2C-400FFCAAAF29.png) |
 | Shudeng Small 阅读页 | [reader-375-light](../../../.scratch/test-evidence/issue29/final-placement-attachments/ED00B898-0D72-4CC1-ABB2-E34A0FF0DE6D.png) |
-| Shudeng Small 选文浅色 | [selection-375-light](../../../.scratch/test-evidence/issue29/final-placement-attachments/9BB94DD5-9BB7-4EF0-9E32-EB3F15722731.png) |
-| Shudeng Small 选文深色 | [selection-375-dark](../../../.scratch/test-evidence/issue29/final-placement-attachments/DE1581C8-DF2D-4CA5-9058-8C0A5A0B768D.png) |
+| Shudeng Small 选文浅色 | [selection-375-light](../../../.scratch/test-evidence/issue29/fix-ui5-attachments/A80CA760-1AD4-4F19-A439-E22F3013AE22.png) |
+| Shudeng Small 选文深色 | [selection-375-dark](../../../.scratch/test-evidence/issue29/fix-ui5-attachments/BFCFFAF5-B63E-48C0-A743-9D7DC8882B6A.png) |
 
 应用级截图按 point 裁除 20pt 系统状态栏。390 × 844 是同一模拟器进程内的固定内容尺寸渲染，不创建第二台设备。
+
+## 独立验收修复
+
+1. 原实现先按 `Selection.frame` 显示菜单，再用异步完整选区移动，截图会捕获菜单压住原文的中间态。现改为先取得完整 Range 的所有 `getClientRects()` 并求并集，再一次性显示菜单。
+2. 菜单位置使用整体选区矩形，优先放在上方；上方不足时放在下方；不得以单行矩形替代多行选区。新增非相交断言。
+3. 引用返回按钮已使用公开可访问标题“返回问答”；旧测试读取 `title(for:)` 得到 nil，现改为断言 `accessibilityLabel`，不依赖按钮内部配置形式。
+4. 应用级用例新增书签保存和滚动/仿真/分页实际切换，补上本票缺失的阅读模式回归证据。
 
 ## 数据与兼容性
 

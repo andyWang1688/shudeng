@@ -673,6 +673,10 @@ final class DesignFixtureTests: XCTestCase {
         menu.place(in: host, above: CGRect(x: 100, y: 80, width: 150, height: 20))
         XCTAssertEqual(menu.frame.height, 46, accuracy: 0.5)
         XCTAssertGreaterThan(menu.frame.minY, 100)
+
+        let tallSelection = CGRect(x: 80, y: 300, width: 210, height: 170)
+        menu.place(in: host, above: tallSelection)
+        XCTAssertFalse(menu.frame.intersects(tallSelection), "选文菜单不得覆盖任意一行选区")
     }
 
     func testReaderRendersBothContentSizesAndThemes() async throws {

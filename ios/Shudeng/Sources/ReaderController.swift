@@ -693,38 +693,40 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     private func presentSelectionMenu(for selection: Selection) {
         hideSelectionMenu()
-        guard let frame = selection.frame else { return }
-        let menu = ReaderSelectionMenu()
-        menu.onHighlight = { [weak self] in
-            self?.captureSelection(writeNote: false, selection: selection)
-        }
-        menu.onNote = { [weak self] in
-            self?.captureSelection(writeNote: true, selection: selection)
-        }
-        menu.onAsk = { [weak self] in
-            self?.captureSelection(writeNote: false, question: true, selection: selection)
-        }
-        view.addSubview(menu)
-        let selectionFrame = navigator.view.convert(frame, to: view)
-        menu.place(in: view, above: selectionFrame)
-        selectionMenu = menu
-        menuPresentedAt = CACurrentMediaTime()
-        Task { [weak self, weak menu] in
-            guard let self, let menu,
-                  case let .success(bounds as [String: Any]) =
-                    await self.navigator.evaluateJavaScript(Self.selectionBounds),
-                  let x = bounds["x"] as? CGFloat,
-                  let y = bounds["y"] as? CGFloat,
-                  let width = bounds["width"] as? CGFloat,
-                  let height = bounds["height"] as? CGFloat,
-                  width > 0, height > 0,
-                  self.selectionMenu === menu,
-                  self.navigator.currentSelection != nil else { return }
-            let fullSelection = self.navigator.view.convert(
-                CGRect(x: x, y: y, width: width, height: height),
-                to: self.view
-            )
-            menu.place(in: self.view, above: fullSelection)
+        let fallback = selection.frame.map { navigator.view.convert($0, to: view) }
+        Task { [weak self] in
+            guard let self else { return }
+            var selectionFrame = fallback
+            if case let .success(bounds as [String: Any]) =
+                await self.navigator.evaluateJavaScript(Self.selectionBounds),
+               let x = bounds["x"] as? CGFloat,
+               let y = bounds["y"] as? CGFloat,
+               let width = bounds["width"] as? CGFloat,
+               let height = bounds["height"] as? CGFloat,
+               width > 0, height > 0 {
+                selectionFrame = self.navigator.view.convert(
+                    CGRect(x: x, y: y, width: width, height: height),
+                    to: self.view
+                )
+            }
+            guard let selectionFrame,
+                  self.navigator.currentSelection != nil,
+                  self.selectionMenu == nil else { return }
+
+            let menu = ReaderSelectionMenu()
+            menu.onHighlight = { [weak self] in
+                self?.captureSelection(writeNote: false, selection: selection)
+            }
+            menu.onNote = { [weak self] in
+                self?.captureSelection(writeNote: true, selection: selection)
+            }
+            menu.onAsk = { [weak self] in
+                self?.captureSelection(writeNote: false, question: true, selection: selection)
+            }
+            self.view.addSubview(menu)
+            menu.place(in: self.view, above: selectionFrame)
+            self.selectionMenu = menu
+            self.menuPresentedAt = CACurrentMediaTime()
         }
     }
     private func hideSelectionMenu() {
@@ -916,7 +918,15 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     (() => {
       const selection = getSelection();
       if (!selection.rangeCount || selection.isCollapsed) return null;
-      const rect = selection.getRangeAt(0).getBoundingClientRect();
+      const range = selection.getRangeAt(0);
+      const rects = Array.from(range.getClientRects())
+        .filter(r => r.width > 0 && r.height > 0);
+      if (!rects.length) return null;
+      const left = Math.min(...rects.map(r => r.left));
+      const top = Math.min(...rects.map(r => r.top));
+      const right = Math.max(...rects.map(r => r.right));
+      const bottom = Math.max(...rects.map(r => r.bottom));
+      const rect = {left, top, width: right - left, height: bottom - top};
       return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
     })()
     """
@@ -1287,16 +1297,25 @@ final class ReaderSelectionMenu: UIView {
         let minY = host.safeAreaInsets.top + 55
         let preferredAbove = selection.minY - size.height - 4
         let preferredBelow = selection.maxY + 8
-        let useBelow = preferredAbove < minY
-            && preferredBelow + 46 <= host.bounds.height - 82
+        let maxY = host.bounds.height - 82
+        let fitsAbove = preferredAbove >= minY
+        let fitsBelow = preferredBelow + 46 <= maxY
+        let useBelow = !fitsAbove && fitsBelow
         if useBelow {
             size.height = 46
         }
         var y = useBelow ? preferredBelow : preferredAbove
-        if !useBelow, y < minY {
-            y = minY
+        if !fitsAbove && !fitsBelow {
+            // Preserve access for an unusually tall selection by choosing the
+            // side with more room. Normal multi-line selections fit wholly
+            // above or below the complete selection bounds.
+            y = selection.minY - minY > maxY - selection.maxY
+                ? minY
+                : maxY - size.height
+        } else if !useBelow {
+            y = max(minY, y)
         }
-        y = min(y, host.bounds.height - size.height - 82)
+        y = min(y, maxY - size.height)
         let x = max(8, min(selection.midX - size.width / 2, host.bounds.width - size.width - 8))
         frame = CGRect(origin: CGPoint(x: x, y: y), size: size)
         caret.isHidden = useBelow
