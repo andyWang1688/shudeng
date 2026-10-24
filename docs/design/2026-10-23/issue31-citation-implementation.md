@@ -1,6 +1,6 @@
 # Issue #31：引用原文视觉与往返闭环实施记录
 
-状态：2026-10-24，实现与专项回归完成，等待独立验收。本记录只覆盖引用原文与返回问答，不把整应用或 Release 验收并入。
+状态：2026-10-24，独立验收通过。本记录只覆盖引用原文与返回问答，不把整应用或 Release 验收并入。
 
 基准：[高保真原型](standalone.html)、[设计规格](spec.md)、[UIKit 界面开发规范](../ui-development-standard.md)。执行单：[GitHub Issue #31](https://github.com/andyWang1688/shudeng/issues/31)。
 
@@ -49,3 +49,5 @@
 1. 390×844 使用内容尺寸渲染，不是第二台模拟器；系统状态栏与 Home Indicator 不计入对照。
 2. 本轮未重新运行完整旧测试集、完整 VoiceOver 顺序、所有辅助字号组合或真机性能。
 3. 固定夹具引用原文中的保存高亮与引用高亮可能同时出现，属于夹具的已有笔记与引用两个独立记录，不是重复定位。
+
+独立验收结论：PASS。实现方 `round1b.xcresult` 为 7 tests / 0 failures，独立复跑 `.scratch/test-evidence/issue31/acceptance-question.xcresult` 为 5 tests / 0 failures；未发现 #32 范围改动。
