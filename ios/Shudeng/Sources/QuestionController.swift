@@ -108,7 +108,6 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     private let retry = UIButton(type: .system)
     private let retryGeneration = UIButton(type: .system)
     private let materials = UIButton(type: .system)
-    private let followUp = UIButton(type: .system)
     private var observer: NSObjectProtocol?
     private var expanded: Set<UUID> = []
     private var rendered = ""
@@ -148,6 +147,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         composer.accessibilityIdentifier = "question-composer"
 
         status.accessibilityIdentifier = "question-status"; scope.accessibilityIdentifier = "question-scope"
+        statusBox.accessibilityIdentifier = "question-status-box"
         statusBox.layer.cornerRadius = 12
         status.translatesAutoresizingMaskIntoConstraints = false
         statusBox.addSubview(status)
@@ -204,10 +204,27 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         field.isLayoutMarginsRelativeArrangement = true; field.layoutMargins = .init(top: 6, left: 6, bottom: 6, right: 6)
         BookDesign.button(cancel, title: "取消生成"); cancel.addTarget(self, action: #selector(cancelQuestion), for: .touchUpInside)
         BookDesign.button(retry, title: "重试保存"); retry.addTarget(self, action: #selector(retrySave), for: .touchUpInside)
-        BookDesign.button(materials, title: "查看本次实际发送材料", symbol: "doc.text")
-        materials.addTarget(self, action: #selector(showMaterials), for: .touchUpInside)
-        BookDesign.button(followUp, title: "继续追问", symbol: "arrow.turn.down.right")
-        followUp.accessibilityIdentifier = "question-follow-up"; followUp.addTarget(self, action: #selector(continueConversation), for: .touchUpInside)
+        var moreConfiguration = UIButton.Configuration.plain()
+        moreConfiguration.title = "更多"
+        moreConfiguration.image = BookDesign.symbol("ellipsis", size: 15)
+        moreConfiguration.imagePadding = 5
+        moreConfiguration.baseForegroundColor = BookDesign.secondary
+        moreConfiguration.contentInsets = .zero
+        moreConfiguration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookDesign.font(11, style: .caption1)
+            return outgoing
+        }
+        materials.configuration = moreConfiguration
+        materials.contentHorizontalAlignment = .leading
+        materials.accessibilityIdentifier = "question-more"
+        materials.accessibilityLabel = "更多选项"
+        materials.showsMenuAsPrimaryAction = true
+        materials.menu = UIMenu(children: [
+            UIAction(title: "查看本次实际发送材料", image: BookDesign.symbol("doc.text", size: 15)) { [weak self] _ in
+                self?.showMaterials()
+            }
+        ])
         BookDesign.button(retryGeneration, title: "重试回答", symbol: "arrow.clockwise")
         retryGeneration.contentHorizontalAlignment = .leading
         retryGeneration.accessibilityIdentifier = "question-retry-generation"
@@ -291,9 +308,9 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         } else {
             statusBox.backgroundColor = .clear
         }
+        statusBox.isHidden = record.state == .complete && !unsaved && record.failure == nil && available
         scope.text = record.notice.isEmpty ? "仅围绕当前书回答；发送前会告知服务与原文范围。" : record.notice
         materials.isHidden = record.evidence.isEmpty
-        followUp.isHidden = record.state != .complete; followUp.isEnabled = !unsaved && available
         retryGeneration.isHidden = record.state != .incomplete || record.failure == nil
         let turns = library.questions.conversation(record.conversation)?.turns ?? [record]
         let signature = turns.map { "\($0.id)|\($0.question)|\($0.answer)|\($0.state)|\($0.citations)|\(expanded.contains($0.id))" }.joined()
@@ -302,7 +319,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             let offset = scroll.contentOffset
             for view in messages.arrangedSubviews { messages.removeArrangedSubview(view); view.removeFromSuperview() }
             for turn in turns where turn.state != .draft { append(turn, latest: turn.id == id) }
-            for child in [statusBox, retryGeneration, scope, materials, followUp] {
+            for child in [statusBox, retryGeneration, scope, materials] {
                 messages.addArrangedSubview(child)
             }
             view.layoutIfNeeded(); scroll.setContentOffset(offset, animated: false)
@@ -441,6 +458,24 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         if latest && (turn.state == .preparing || turn.state == .generating) {
             reply.addArrangedSubview(QuestionSkeletonView(identifier: "question-skeleton"))
         }
+        if !turn.answer.isEmpty {
+            let hint = BookDesign.label("解释供参考，可回原文核查", size: 10, colour: BookDesign.secondary)
+            let copy = UIButton(type: .system)
+            copy.setImage(BookDesign.symbol("doc.on.doc", size: 15), for: .normal)
+            copy.tintColor = BookDesign.secondary
+            copy.accessibilityLabel = "复制回答"
+            copy.accessibilityIdentifier = latest ? "question-copy" : "question-copy-\(turn.id)"
+            copy.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            copy.heightAnchor.constraint(equalToConstant: 44).isActive = true
+            copy.addAction(UIAction { _ in
+                UIPasteboard.general.string = turn.answer
+                UIAccessibility.post(notification: .announcement, argument: "回答已复制")
+            }, for: .touchUpInside)
+            let footer = UIStackView(arrangedSubviews: [hint, UIView(), copy])
+            footer.alignment = .center
+            footer.spacing = 8
+            reply.addArrangedSubview(footer)
+        }
         messages.addArrangedSubview(reply)
     }
     func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
@@ -457,7 +492,6 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         guard let record = library.questions.record(id), let next = library.questions.followUp(record.conversation) else { return false }
         id = next; input.text = ""; refresh(); return true
     }
-    @objc private func continueConversation() { if createFollowUp() { input.becomeFirstResponder() } }
     @objc private func toggleQuote() {
         if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }; refresh()
     }

@@ -814,6 +814,8 @@ final class DesignFixtureTests: XCTestCase {
                     "question-composer",
                     "question-composer-field",
                     "question-input",
+                    "question-copy",
+                    "question-more",
                     "question-user-bubble-\(record.id)",
                     "question-ai-identity-\(record.id)",
                     "question-answer"
@@ -821,10 +823,8 @@ final class DesignFixtureTests: XCTestCase {
                     XCTAssertNotNil(views.first { $0.accessibilityIdentifier == identifier }, identifier)
                 }
                 XCTAssertFalse(views.compactMap { ($0 as? UILabel)?.text }.contains("你"))
-                XCTAssertEqual(
-                    (views.first { $0.accessibilityIdentifier == "question-status" } as? UILabel)?.text,
-                    "回答已保存"
-                )
+                XCTAssertTrue(try XCTUnwrap(views.first { $0.accessibilityIdentifier == "question-status-box" }).isHidden)
+                XCTAssertNil(views.first { $0.accessibilityIdentifier == "question-follow-up" })
                 XCTAssertEqual(image.size, size)
                 let attachment = XCTAttachment(
                     data: try XCTUnwrap(image.pngData()),
@@ -858,6 +858,7 @@ final class DesignFixtureTests: XCTestCase {
                     $0.accessibilityIdentifier == "question-status"
                 } as? UILabel
             )
+            XCTAssertFalse(page.view.allViews.first { $0.accessibilityIdentifier == "question-status-box" }?.isHidden ?? true)
             if let failure = value.2 {
                 XCTAssertTrue(status.text?.contains("回答未完成") == true)
                 XCTAssertTrue(status.text?.contains(failure) == true)

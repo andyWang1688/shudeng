@@ -1,6 +1,6 @@
 # Issue #30：问答底部面板实施记录
 
-状态：2026-10-24，实现与专项回归完成，等待独立验收。本记录只覆盖阅读问答面板，不把引用原文视觉或整应用验收并入通过范围。
+状态：2026-10-24，独立验收发现的问题已修复，等待复审。本记录只覆盖阅读问答面板，不把引用原文视觉或整应用验收并入通过范围。
 
 基准：[高保真原型](standalone.html)、[设计规格](spec.md)、[UIKit 界面开发规范](../ui-development-standard.md)。执行单：[GitHub Issue #30](https://github.com/andyWang1688/shudeng/issues/30)。
 
@@ -16,22 +16,30 @@
 
 ## 证据
 
-最终结果：[final.xcresult](../../../.scratch/test-evidence/issue30/final.xcresult)，7 tests / 0 failures；设备为 Shudeng Small（iPhone SE 3，iOS 26.5）。
+最终结果：[fix-2.xcresult](../../../.scratch/test-evidence/issue30/fix-2.xcresult)，7 tests / 0 failures；设备为 Shudeng Small（iPhone SE 3，iOS 26.5）。
 
 - `DesignFixtureTests/testQuestionSheetUsesDesignedPanelIdentityDraftAndStates`：验证把手、品牌头、关闭、用户/AI 身份、右侧气泡、固定输入区、正常/生成/失败/中断状态与两尺寸浅深色截图。
 - `DesignFixtureTests/testQuestionSheetKeepsHeaderAndComposerAtAccessibilitySize`：XXXL 辅助字号下保留页头、关闭和输入区。
 - `QuestionPresentationTests`：4 项已有保存、引用往返、连续引用和加载失败退出回归全部通过。
 - `ReadingUITests/testIssue30QuestionSheetLayoutDraftAndIdentity`：真实打开底部面板，检查面板高度、身份、无“你”、收起后重开草稿，以及深浅色。
 
-截图保存在本机 [精选目录](../../../.scratch/test-evidence/issue30/curated/)：
+截图保存在本机 [修复后精选目录](../../../.scratch/test-evidence/issue30/curated-fix/)：
 
 | 状态 | 证据 |
 | --- | --- |
-| 375 × 667 浅色 / 深色 | [浅色](../../../.scratch/test-evidence/issue30/curated/question-375x667-light.png) / [深色](../../../.scratch/test-evidence/issue30/curated/question-375x667-dark.png) |
-| 390 × 844 浅色 / 深色 | [浅色](../../../.scratch/test-evidence/issue30/curated/question-390x844-light.png) / [深色](../../../.scratch/test-evidence/issue30/curated/question-390x844-dark.png) |
-| 生成中 / 连接失败 / 回答中断 | [生成中](../../../.scratch/test-evidence/issue30/curated/question-generating.png) / [连接失败](../../../.scratch/test-evidence/issue30/curated/question-error.png) / [回答中断](../../../.scratch/test-evidence/issue30/curated/question-interrupted.png) |
-| Shudeng Small 浅色 / 深色 | [浅色](../../../.scratch/test-evidence/issue30/curated/app-question-375-light.png) / [深色](../../../.scratch/test-evidence/issue30/curated/app-question-375-dark.png) |
-| XXXL 辅助字号 | [可滚动面板](../../../.scratch/test-evidence/issue30/curated/question-accessibility-xxxl.png) |
+| 375 × 667 浅色 / 深色 | [浅色](../../../.scratch/test-evidence/issue30/curated-fix/question-375x667-light.png) / [深色](../../../.scratch/test-evidence/issue30/curated-fix/question-375x667-dark.png) |
+| 390 × 844 浅色 / 深色 | [浅色](../../../.scratch/test-evidence/issue30/curated-fix/question-390x844-light.png) / [深色](../../../.scratch/test-evidence/issue30/curated-fix/question-390x844-dark.png) |
+| 生成中 / 连接失败 / 回答中断 | [生成中](../../../.scratch/test-evidence/issue30/curated-fix/question-generating.png) / [连接失败](../../../.scratch/test-evidence/issue30/curated-fix/question-error.png) / [回答中断](../../../.scratch/test-evidence/issue30/curated-fix/question-interrupted.png) |
+| Shudeng Small 浅色 / 深色 | [浅色](../../../.scratch/test-evidence/issue30/curated-fix/app-question-375-light.png) / [深色](../../../.scratch/test-evidence/issue30/curated-fix/app-question-375-dark.png) |
+| XXXL 辅助字号 | [可滚动面板](../../../.scratch/test-evidence/issue30/curated-fix/question-accessibility-xxxl.png) |
+
+## 独立验收修复
+
+1. 正常完成态隐藏“回答已保存”成功状态条，只在生成、失败、中断或保存未完成时显示状态卡。
+2. 移除独立“继续追问”按钮，追问直接使用固定输入区。
+3. “查看本次实际发送材料”收进回答以下的次要“更多”菜单，不再占据回答尾部主操作。
+4. 回答底部增加弱提示“解释供参考，可回原文核查”和 44pt 复制入口。
+5. 应用级用例新增键盘出现时输入区不遮挡、正常态无成功条/重复追问、新选文使对话数增加 1 的断言。
 
 应用级截图裁除 20pt 系统状态栏。390 × 844 为同一测试进程中的固定内容尺寸渲染，不新建模拟器。
 

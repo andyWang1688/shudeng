@@ -663,7 +663,9 @@ extension ReadingUITests {
         app.launch()
         XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
         tab("tab-conversations", label: "对话", in: app).tap()
-        let conversation = app.tables["question-history"].cells.firstMatch
+        let history = app.tables["question-history"]
+        let initialConversations = history.cells.count
+        let conversation = history.cells.firstMatch
         XCTAssertTrue(conversation.waitForExistence(timeout: 10))
         conversation.tap()
 
@@ -678,12 +680,18 @@ extension ReadingUITests {
         XCTAssertTrue(app.staticTexts["书灯 · AI"].exists)
         XCTAssertTrue(app.staticTexts["这句话里的“灯”指什么？"].exists)
         XCTAssertFalse(app.staticTexts["你"].exists)
-        XCTAssertEqual(app.staticTexts["question-status"].label, "回答已保存")
+        XCTAssertFalse(app.staticTexts["question-status"].exists)
+        XCTAssertFalse(app.buttons["question-follow-up"].exists)
+        XCTAssertTrue(app.buttons["question-copy"].exists)
+        XCTAssertTrue(app.buttons["question-more"].exists)
         attachDesignSurface("issue30-question-375-light", app)
 
         let input = app.textViews["question-input"]
         XCTAssertTrue(input.exists)
         input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let composer = app.otherElements["question-composer"]
+        XCTAssertLessThanOrEqual(composer.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
         input.typeText("还没发送的追问")
         app.buttons["question-close"].tap()
         XCTAssertFalse(sheet.waitForExistence(timeout: 3))
@@ -691,6 +699,22 @@ extension ReadingUITests {
         conversation.tap()
         XCTAssertTrue(sheet.waitForExistence(timeout: 10))
         XCTAssertEqual(app.textViews["question-input"].value as? String, "还没发送的追问")
+        app.buttons["question-close"].tap()
+
+        tab("tab-library", label: "书架", in: app).tap()
+        app.buttons["continue-reading"].tap()
+        let paragraph = app.webViews.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "当下地下侍立之人")
+        ).firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 15))
+        paragraph.press(forDuration: 1.3)
+        XCTAssertTrue(app.buttons["selection-ask"].waitForExistence(timeout: 5))
+        app.buttons["selection-ask"].tap()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        app.buttons["question-close"].tap()
+        app.buttons["书架"].tap()
+        tab("tab-conversations", label: "对话", in: app).tap()
+        XCTAssertEqual(history.cells.count, initialConversations + 1)
         app.terminate()
 
         app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
