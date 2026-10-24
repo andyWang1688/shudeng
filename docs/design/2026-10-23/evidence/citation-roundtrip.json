@@ -1,0 +1,85 @@
+{
+  "checks": [
+    {
+      "size": "standard",
+      "theme": "light",
+      "selector": ".citation",
+      "highlightVisible": true,
+      "returnVisible": true,
+      "noSelectionMenu": true,
+      "overflow": false,
+      "conversationRestored": true
+    },
+    {
+      "size": "standard",
+      "theme": "light",
+      "selector": ".source-card",
+      "highlightVisible": true,
+      "returnVisible": true,
+      "noSelectionMenu": true,
+      "overflow": false,
+      "conversationRestored": true
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "selector": ".citation",
+      "highlightVisible": true,
+      "returnVisible": true,
+      "noSelectionMenu": true,
+      "overflow": false,
+      "conversationRestored": true
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "selector": ".source-card",
+      "highlightVisible": true,
+      "returnVisible": true,
+      "noSelectionMenu": true,
+      "overflow": false,
+      "conversationRestored": true
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "selector": ".citation",
+      "highlightVisible": true,
+      "returnVisible": true,
+      "noSelectionMenu": true,
+      "overflow": false,
+      "conversationRestored": true
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "selector": ".source-card",
+      "highlightVisible": true,
+      "returnVisible": true,
+      "noSelectionMenu": true,
+      "overflow": false,
+      "conversationRestored": true
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "selector": ".citation",
+      "highlightVisible": true,
+      "returnVisible": true,
+      "noSelectionMenu": true,
+      "overflow": false,
+      "conversationRestored": true
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "selector": ".source-card",
+      "highlightVisible": true,
+      "returnVisible": true,
+      "noSelectionMenu": true,
+      "overflow": false,
+      "conversationRestored": true
+    }
+  ],
+  "closeAndReopenRestoresConversation": true
+}

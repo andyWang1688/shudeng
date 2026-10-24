@@ -1,0 +1,381 @@
+{
+  "networkBlocked": [
+    "http",
+    "https"
+  ],
+  "assets": [
+    {
+      "name": "app-icon.png",
+      "ok": true
+    },
+    {
+      "name": "arrow-counter-clockwise.svg",
+      "ok": true
+    },
+    {
+      "name": "arrow-left.svg",
+      "ok": true
+    },
+    {
+      "name": "arrow-right.svg",
+      "ok": true
+    },
+    {
+      "name": "arrow-up-right.svg",
+      "ok": true
+    },
+    {
+      "name": "arrow-up.svg",
+      "ok": true
+    },
+    {
+      "name": "bookmark-simple.svg",
+      "ok": true
+    },
+    {
+      "name": "books.svg",
+      "ok": true
+    },
+    {
+      "name": "caret-down.svg",
+      "ok": true
+    },
+    {
+      "name": "chats-circle.svg",
+      "ok": true
+    },
+    {
+      "name": "check.svg",
+      "ok": true
+    },
+    {
+      "name": "circle-notch.svg",
+      "ok": true
+    },
+    {
+      "name": "clock.svg",
+      "ok": true
+    },
+    {
+      "name": "cloud-slash.svg",
+      "ok": true
+    },
+    {
+      "name": "copy.svg",
+      "ok": true
+    },
+    {
+      "name": "dots-three.svg",
+      "ok": true
+    },
+    {
+      "name": "download-simple.svg",
+      "ok": true
+    },
+    {
+      "name": "export.svg",
+      "ok": true
+    },
+    {
+      "name": "file-text.svg",
+      "ok": true
+    },
+    {
+      "name": "gear-six.svg",
+      "ok": true
+    },
+    {
+      "name": "lightbulb.svg",
+      "ok": true
+    },
+    {
+      "name": "list.svg",
+      "ok": true
+    },
+    {
+      "name": "magnifying-glass.svg",
+      "ok": true
+    },
+    {
+      "name": "moon.svg",
+      "ok": true
+    },
+    {
+      "name": "notebook.svg",
+      "ok": true
+    },
+    {
+      "name": "plus.svg",
+      "ok": true
+    },
+    {
+      "name": "pride-and-prejudice.jpg",
+      "ok": true
+    },
+    {
+      "name": "quotes.svg",
+      "ok": true
+    },
+    {
+      "name": "sun.svg",
+      "ok": true
+    },
+    {
+      "name": "text-aa.svg",
+      "ok": true
+    },
+    {
+      "name": "trash.svg",
+      "ok": true
+    },
+    {
+      "name": "user-circle.svg",
+      "ok": true
+    },
+    {
+      "name": "warning-circle.svg",
+      "ok": true
+    },
+    {
+      "name": "x.svg",
+      "ok": true
+    }
+  ],
+  "checks": [
+    {
+      "size": "standard",
+      "theme": "light",
+      "view": "library",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "light",
+      "view": "reader",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "light",
+      "view": "selection",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "light",
+      "view": "qa",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "light",
+      "view": "notes",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "light",
+      "view": "chats",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "light",
+      "view": "profile",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "view": "library",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "view": "reader",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "view": "selection",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "view": "qa",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "view": "notes",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "view": "chats",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "view": "profile",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "view": "library",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "view": "reader",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "view": "selection",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "view": "qa",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "view": "notes",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "view": "chats",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "view": "profile",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "view": "library",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "view": "reader",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "view": "selection",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "view": "qa",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "view": "notes",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "view": "chats",
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "view": "profile",
+      "broken": 0,
+      "overflow": false
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario": "normal",
+      "title": "书灯 · 书架",
+      "broken": 0,
+      "text": "9:41\n⌁\n书灯\n一盏照书的灯\n书架\n书名或作者\n继续阅读\n红楼梦\n曹雪芹 著\n红楼梦\n曹雪芹\n第三回 · 已读 12%\n接着读\n我的书籍 4\n最近阅读\n红楼梦\n曹雪芹 著\n红楼梦\n\n曹雪芹\n\n读到第三回\n\nPride and Prejudice\n\nJane Austen\n\n读到第一章\n\nWALDEN\n瓦尔登湖\nHENRY DAVID\nTHOREAU\n瓦尔登湖\n\n亨利·戴维·梭罗\n\n读到第二章\n\nTHE\nANALECTS\n论 语\n孔子及其弟子\n论语\n\n孔子及其弟子\n\n尚未开"
+    },
+    {
+      "scenario": "empty",
+      "title": "书灯 · 书架",
+      "broken": 0,
+      "text": "9:41\n⌁\n书灯\n一盏照书的灯\n书架\n书名或作者\n从一本书开始\n\n导入你的 EPUB，\n让阅读与理解一起发生。\n\n导入书籍\n书架\n笔记\n对话\n我的"
+    },
+    {
+      "scenario": "preparing",
+      "title": "书灯 · 书架",
+      "broken": 0,
+      "text": "9:41\n⌁\n书灯\n一盏照书的灯\n书架\n书名或作者\n正在准备《红楼梦》的问答资料\n你可以先阅读，准备好后再提问。\n继续阅读\n红楼梦\n曹雪芹 著\n红楼梦\n曹雪芹\n第三回 · 已读 12%\n接着读\n我的书籍 4\n最近阅读\n红楼梦\n曹雪芹 著\n红楼梦\n\n曹雪芹\n\n读到第三回\n\nPride and Prejudice\n\nJane Austen\n\n读到第一章\n\nWALDEN\n瓦尔登湖\nHENRY DAVID\nTHOREAU\n瓦尔登湖\n\n亨利·戴维·梭罗\n\n读到第二章\n\nTHE\nANAL"
+    },
+    {
+      "scenario": "generating",
+      "title": "书灯 · 问答",
+      "broken": 0,
+      "text": "9:41\n⌁\n红楼梦\n第三回\n第三回\n托内兄如海荐西宾\n贾雨村夤缘复旧职\n\n且说黛玉自那日弃舟登岸时，便有荣国府打发了轿子并拉行李的车辆久候了。\n\n这林黛玉常听得母亲说过，他外祖母家与别家不同。他近日所见的这几个三等仆妇，吃穿用度，已是不凡了，何况今至其家。因此步步留心，时时在意，不肯轻易多说一句话，多行一步路，惟恐被人耻笑了去。\n\n自上了轿，进入城中，从纱窗向外瞧了一瞧，其街市之繁华，人烟之阜盛，自与别处不同。\n\n12%\n问问书灯\n第三回\n问问书灯\n选自《红楼梦》 · 第三"
+    },
+    {
+      "scenario": "error",
+      "title": "书灯 · 问答",
+      "broken": 0,
+      "text": "9:41\n⌁\n红楼梦\n第三回\n第三回\n托内兄如海荐西宾\n贾雨村夤缘复旧职\n\n且说黛玉自那日弃舟登岸时，便有荣国府打发了轿子并拉行李的车辆久候了。\n\n这林黛玉常听得母亲说过，他外祖母家与别家不同。他近日所见的这几个三等仆妇，吃穿用度，已是不凡了，何况今至其家。因此步步留心，时时在意，不肯轻易多说一句话，多行一步路，惟恐被人耻笑了去。\n\n自上了轿，进入城中，从纱窗向外瞧了一瞧，其街市之繁华，人烟之阜盛，自与别处不同。\n\n12%\n问问书灯\n第三回\n问问书灯\n选自《红楼梦》 · 第三"
+    },
+    {
+      "scenario": "interrupted",
+      "title": "书灯 · 问答",
+      "broken": 0,
+      "text": "9:41\n⌁\n红楼梦\n第三回\n第三回\n托内兄如海荐西宾\n贾雨村夤缘复旧职\n\n且说黛玉自那日弃舟登岸时，便有荣国府打发了轿子并拉行李的车辆久候了。\n\n这林黛玉常听得母亲说过，他外祖母家与别家不同。他近日所见的这几个三等仆妇，吃穿用度，已是不凡了，何况今至其家。因此步步留心，时时在意，不肯轻易多说一句话，多行一步路，惟恐被人耻笑了去。\n\n自上了轿，进入城中，从纱窗向外瞧了一瞧，其街市之繁华，人烟之阜盛，自与别处不同。\n\n12%\n问问书灯\n第三回\n问问书灯\n选自《红楼梦》 · 第三"
+    }
+  ],
+  "offlineSpecOpens": true
+}

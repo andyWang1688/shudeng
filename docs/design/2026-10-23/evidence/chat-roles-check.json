@@ -1,0 +1,177 @@
+{
+  "checks": [
+    {
+      "size": "standard",
+      "theme": "light",
+      "scenario": "normal",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "light",
+      "scenario": "generating",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "light",
+      "scenario": "error",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "light",
+      "scenario": "interrupted",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "scenario": "normal",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "scenario": "generating",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "scenario": "error",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "standard",
+      "theme": "dark",
+      "scenario": "interrupted",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "scenario": "normal",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "scenario": "generating",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "scenario": "error",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "light",
+      "scenario": "interrupted",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "scenario": "normal",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "scenario": "generating",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "scenario": "error",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    },
+    {
+      "size": "small",
+      "theme": "dark",
+      "scenario": "interrupted",
+      "userRole": "你的提问",
+      "aiRole": "书灯的 AI 回答",
+      "rightAligned": true,
+      "broken": 0,
+      "overflow": false
+    }
+  ],
+  "attachmentOpens": true,
+  "twoFollowupsAppend": true,
+  "questionCount": 3,
+  "roleOrder": [
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant"
+  ],
+  "citationReturnsToSelection": true,
+  "closeReturnsToReader": true
+}
