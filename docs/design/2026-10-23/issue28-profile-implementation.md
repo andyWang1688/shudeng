@@ -1,6 +1,6 @@
 # Issue #28：我的页面视觉闭环实施记录
 
-状态：2026-10-24，实现与专项回归完成，等待独立验收。本记录不把其他页面并入“我的”页结论，也不代替验收代理关闭工单。
+状态：2026-10-24，实现与专项回归完成，独立验收通过。本记录不把其他页面并入“我的”页结论。
 
 基准：[高保真原型](standalone.html)、[设计规格](spec.md)、[UIKit 界面开发规范](../ui-development-standard.md)。执行单：[GitHub Issue #28](https://github.com/andyWang1688/shudeng/issues/28)。
 
@@ -18,6 +18,8 @@
 ## 证据
 
 最终结果：[final.xcresult](../../../.scratch/test-evidence/issue28/final.xcresult)，3 tests / 0 failures；设备为 Shudeng Small（iPhone SE 3，iOS 26.5）。
+
+独立验收核对了结构化 xcresult、实现约束和截图：页头左对齐、品牌区居中、三条设置行、服务摘要、外观持久化、关于与第三方许可、未配置状态及两尺寸/浅深色均符合确认稿；辅助字号下内容增高并保持可滚动，未删除设置入口。未发现需要返工的结构差异。
 
 - `DesignFixtureTests/testProfileUsesCenteredBrandDesignedSettingsAndPersistentAppearance`：品牌居中、左页头、三条设置行、服务摘要、未泄露密钥、外观持久化，以及四种尺寸/主题截图。
 - `DesignFixtureTests/testProfileShowsUnconfiguredServiceWithoutReadingAKey`：空配置根目录显示“尚未配置，阅读仍可使用”，不访问真实 Keychain。
