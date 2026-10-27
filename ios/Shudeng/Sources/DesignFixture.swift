@@ -14,6 +14,7 @@ enum DesignFixture {
         case normal
         case empty
         case preparing
+        case long
     }
 
     struct Request {
@@ -80,7 +81,7 @@ enum DesignFixture {
             return
         }
 
-        let specifications = [
+        var specifications = [
             BookSpecification(
                 identifier: "hongloumeng",
                 title: "红楼梦",
@@ -115,6 +116,20 @@ enum DesignFixture {
                 ]
             )
         ]
+        if session.request.scenario == .long {
+            specifications[0] = BookSpecification(
+                identifier: "hongloumeng",
+                title: "红楼梦",
+                author: "曹雪芹",
+                chapter: "第三回 · 林黛玉进贾府",
+                paragraphs: [
+                    "黛玉方进入房时，只见两个人搀着一位鬓发如银的老母迎上来。",
+                    "灯把书页照亮，也把问题留在纸上。读者没有读懂的那一句，往往正需要停一停。"
+                ] + (1...36).map {
+                    "第 \($0) 段。黛玉在心中细细分辨众人的言语与神色，窗外花影摇动，屋内的问答仍在一层层展开。"
+                }
+            )
+        }
 
         var books: [Book] = []
         for specification in specifications {
@@ -253,7 +268,11 @@ enum DesignFixture {
             address: "https://api.deepseek.com/v1",
             model: "deepseek-flash"
         )
-        try store.save(configuration, newKey: "fixture-placeholder-not-a-real-key")
+        try store.save(
+            configuration,
+            newKey: "fixture-placeholder-not-a-real-key",
+            confirmingSendConsent: true
+        )
     }
 
     private static func locator(

@@ -11,6 +11,7 @@ final class DesignFixtureTests: XCTestCase {
         XCTAssertEqual(DesignFixture.request(in: ["--design-fixture"])?.scenario, .normal)
         XCTAssertEqual(DesignFixture.request(in: ["--design-fixture=empty", "--design-theme=dark"])?.scenario, .empty)
         XCTAssertEqual(DesignFixture.request(in: ["--design-fixture=preparing"])?.scenario, .preparing)
+        XCTAssertEqual(DesignFixture.request(in: ["--design-fixture=long"])?.scenario, .long)
         XCTAssertEqual(DesignFixture.request(in: ["--design-fixture=normal", "--design-theme=dark"])?.theme, .dark)
     }
 
@@ -389,6 +390,218 @@ final class DesignFixtureTests: XCTestCase {
         )
     }
 
+    func testBookGroupsCollapseAndPersistIndependentlyAcrossTabsAndReopening() async throws {
+        let fixture = try await makeBookGroupFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.library.root) }
+        let root = makeApplicationTabs(library: fixture.library, root: fixture.library.root, secrets: fixture.library.secrets)
+        root.select(RootDestination.notes.rawValue)
+        _ = DesignFixture.renderRoot(root, size: CGSize(width: 375, height: 667), style: .light)
+        let notesNavigation = try XCTUnwrap(root.viewControllers[RootDestination.notes.rawValue] as? UINavigationController)
+        let notes = try XCTUnwrap(notesNavigation.topViewController as? NotesController)
+        let primary = try bookGroup(in: notes, bookID: fixture.primaryID, prefix: "notes-book")
+        let secondary = try bookGroup(in: notes, bookID: fixture.secondaryID, prefix: "notes-book")
+        XCTAssertEqual(notes.tableView.numberOfRows(inSection: primary.section), 0)
+        XCTAssertEqual(notes.tableView.numberOfRows(inSection: secondary.section), 3, "Newest notes expand even when the book is not first in the catalogue")
+        XCTAssertEqual(secondary.header.accessibilityValue, "已展开")
+        XCTAssertTrue(secondary.header.accessibilityLabel?.contains("3 条记录") == true)
+        secondary.header.sendActions(for: .touchUpInside)
+        XCTAssertEqual(notes.tableView.numberOfRows(inSection: secondary.section), 0)
+        XCTAssertNil(notes.tableView.backgroundView, "Collapsed records are not an empty library")
+        let collapsed = try bookGroup(in: notes, bookID: fixture.secondaryID, prefix: "notes-book")
+        XCTAssertEqual(collapsed.header.accessibilityValue, "已收起")
+        XCTAssertTrue(primary.header.accessibilityActivate())
+        XCTAssertEqual(notes.tableView.numberOfRows(inSection: primary.section), 4)
+        let cell = notes.tableView(notes.tableView, cellForRowAt: IndexPath(row: 0, section: primary.section))
+        XCTAssertNotNil(cell.allControls.first { $0.accessibilityIdentifier?.hasPrefix("return-") == true })
+
+        root.select(RootDestination.conversations.rawValue)
+        root.view.layoutIfNeeded()
+        let historyNavigation = try XCTUnwrap(root.viewControllers[RootDestination.conversations.rawValue] as? UINavigationController)
+        let history = try XCTUnwrap(historyNavigation.topViewController as? QuestionHistoryController)
+        let conversationGroup = try bookGroup(in: history, bookID: fixture.primaryID, prefix: "conversations-book")
+        XCTAssertEqual(history.tableView.numberOfRows(inSection: conversationGroup.section), 2)
+        conversationGroup.header.sendActions(for: .touchUpInside)
+        XCTAssertEqual(history.tableView.numberOfRows(inSection: conversationGroup.section), 0)
+        root.select(RootDestination.notes.rawValue)
+        notes.viewWillAppear(false)
+        XCTAssertEqual(notes.tableView.numberOfRows(inSection: primary.section), 4)
+        XCTAssertEqual(notes.tableView.numberOfRows(inSection: secondary.section), 0)
+
+        let reopenedLibrary = try LibraryStore(root: fixture.library.root, secrets: fixture.library.secrets)
+        let reopenedNotes = NotesController(library: reopenedLibrary)
+        reopenedNotes.loadViewIfNeeded()
+        let reopenedPrimary = try bookGroup(in: reopenedNotes, bookID: fixture.primaryID, prefix: "notes-book")
+        let reopenedSecondary = try bookGroup(in: reopenedNotes, bookID: fixture.secondaryID, prefix: "notes-book")
+        XCTAssertEqual(reopenedNotes.tableView.numberOfRows(inSection: reopenedPrimary.section), 4)
+        XCTAssertEqual(reopenedNotes.tableView.numberOfRows(inSection: reopenedSecondary.section), 0)
+        let reopenedHistory = QuestionHistoryController(library: reopenedLibrary)
+        reopenedHistory.loadViewIfNeeded()
+        XCTAssertEqual(reopenedHistory.tableView.numberOfSections, 2)
+        XCTAssertTrue((0..<2).allSatisfy { reopenedHistory.tableView.numberOfRows(inSection: $0) == 0 })
+        let reopenedConversation = try bookGroup(in: reopenedHistory, bookID: fixture.primaryID, prefix: "conversations-book")
+        reopenedConversation.header.sendActions(for: .touchUpInside)
+        XCTAssertEqual(reopenedHistory.tableView.numberOfRows(inSection: reopenedConversation.section), 2)
+        let actions = reopenedHistory.tableView(reopenedHistory.tableView, trailingSwipeActionsConfigurationForRowAt: IndexPath(row: 0, section: reopenedConversation.section))
+        XCTAssertEqual(Set(actions?.actions.compactMap(\.title) ?? []), ["改名", "删除"])
+    }
+
+    func testBookGroupSearchExpandsMatchesWithoutOverwritingSavedCollapseOrLosingFilteredNotes() async throws {
+        let fixture = try await makeBookGroupFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.library.root) }
+        let notes = NotesController(library: fixture.library)
+        _ = DesignFixture.renderRoot(notes, size: CGSize(width: 375, height: 667), style: .light)
+        let secondary = try bookGroup(in: notes, bookID: fixture.secondaryID, prefix: "notes-book")
+        secondary.header.sendActions(for: .touchUpInside)
+        let search = try XCTUnwrap(notes.view.allViews.first { $0.accessibilityIdentifier == "notes-search" } as? UITextField)
+        search.text = "分组命中"
+        search.sendActions(for: .editingChanged)
+        XCTAssertEqual(notes.tableView.numberOfSections, 2)
+        XCTAssertEqual((0..<2).reduce(0) { $0 + notes.tableView.numberOfRows(inSection: $1) }, 4)
+        let matched = try bookGroup(in: notes, bookID: fixture.secondaryID, prefix: "notes-book")
+        matched.header.sendActions(for: .touchUpInside)
+        XCTAssertEqual(notes.tableView.numberOfRows(inSection: matched.section), 3, "Search results cannot be hidden by collapse")
+        for (identifier, expected) in [("note-filter-notes", 2), ("note-filter-highlights", 1), ("note-filter-bookmarks", 1), ("note-filter-all", 4)] {
+            let control = try XCTUnwrap(notes.view.allControls.first { $0.accessibilityIdentifier == identifier })
+            control.sendActions(for: .touchUpInside)
+            XCTAssertEqual((0..<notes.tableView.numberOfSections).reduce(0) { $0 + notes.tableView.numberOfRows(inSection: $1) }, expected, identifier)
+        }
+        search.text = "   "
+        search.sendActions(for: .editingChanged)
+        XCTAssertTrue((0..<2).allSatisfy { notes.tableView.numberOfRows(inSection: $0) == 0 })
+
+        let history = QuestionHistoryController(library: fixture.library)
+        history.loadViewIfNeeded()
+        let primary = try bookGroup(in: history, bookID: fixture.primaryID, prefix: "conversations-book")
+        primary.header.sendActions(for: .touchUpInside)
+        let conversationSearch = try XCTUnwrap(history.view.allViews.first { $0.accessibilityIdentifier == "conversation-search" } as? UITextField)
+        conversationSearch.text = "分组命中"
+        conversationSearch.sendActions(for: .editingChanged)
+        XCTAssertEqual(history.tableView.numberOfSections, 1)
+        XCTAssertEqual(history.tableView.numberOfRows(inSection: 0), 1)
+        XCTAssertEqual(try bookGroup(in: history, bookID: fixture.secondaryID, prefix: "conversations-book").header.accessibilityValue, "已展开")
+        conversationSearch.text = "不存在的分组"
+        conversationSearch.sendActions(for: .editingChanged)
+        XCTAssertEqual(history.tableView.numberOfSections, 0)
+        XCTAssertNotNil(history.tableView.backgroundView)
+        conversationSearch.text = ""
+        conversationSearch.sendActions(for: .editingChanged)
+        XCTAssertEqual(history.tableView.numberOfSections, 2)
+        XCTAssertTrue((0..<2).allSatisfy { history.tableView.numberOfRows(inSection: $0) == 0 })
+        let reopened = QuestionHistoryController(library: try LibraryStore(root: fixture.library.root, secrets: fixture.library.secrets))
+        reopened.loadViewIfNeeded()
+        XCTAssertTrue((0..<2).allSatisfy { reopened.tableView.numberOfRows(inSection: $0) == 0 })
+    }
+
+    func testBookGroupScrollPositionsRestoreSeparatelyAfterReopening() async throws {
+        let fixture = try await makeBookGroupFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.library.root) }
+        for (page, offset) in [("notes", CGFloat(60)), ("conversations", CGFloat(40))] {
+            func makeController() -> UITableViewController {
+                page == "notes" ? NotesController(library: fixture.library) : QuestionHistoryController(library: fixture.library)
+            }
+            let controller = makeController()
+            _ = DesignFixture.renderRoot(controller, size: CGSize(width: 375, height: 300), style: .light)
+            controller.tableView.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
+            controller.tableView.delegate?.scrollViewDidEndDragging?(controller.tableView, willDecelerate: false)
+            controller.viewWillDisappear(false)
+            let reopened = makeController()
+            _ = DesignFixture.renderRoot(reopened, size: CGSize(width: 375, height: 300), style: .light)
+            XCTAssertEqual(reopened.tableView.contentOffset.y, offset, accuracy: 1, page)
+        }
+    }
+
+    func testBookGroupHeadersFitSmallScreenAndAccessibilitySizesInBothThemes() async throws {
+        let fixture = try await makeBookGroupFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.library.root) }
+        for (page, prefix) in [("notes", "notes-book"), ("conversations", "conversations-book")] {
+            for style in [UIUserInterfaceStyle.light, .dark] {
+                for category in [UIContentSizeCategory.large, .accessibilityExtraExtraExtraLarge] {
+                    let controller: UITableViewController = page == "notes"
+                        ? NotesController(library: fixture.library) : QuestionHistoryController(library: fixture.library)
+                    let image = DesignFixture.renderRoot(controller, size: CGSize(width: 375, height: 667), style: style, preferredContentSizeCategory: category)
+                    let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
+                    attachment.name = "groups-\(page)-375x667-\(style.rawValue)-\(category.rawValue)"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
+                    XCTAssertEqual(controller.tableView.numberOfSections, 2)
+                    let group = try bookGroup(in: controller, bookID: fixture.secondaryID, prefix: prefix)
+                    let header = group.header
+                    header.configure(bookID: fixture.secondaryID, bookTitle: "一本书名很长但应当完整显示的书籍：灯下阅读与思考的故事", book: nil, covers: BookCoverStore(), library: fixture.library, identifierPrefix: prefix, countText: "12345 条记录", expanded: false)
+                    let host = UIViewController()
+                    header.translatesAutoresizingMaskIntoConstraints = false
+                    host.view.addSubview(header)
+                    NSLayoutConstraint.activate([
+                        header.leadingAnchor.constraint(equalTo: host.view.leadingAnchor),
+                        header.trailingAnchor.constraint(equalTo: host.view.trailingAnchor),
+                        header.topAnchor.constraint(equalTo: host.view.topAnchor)
+                    ])
+                    _ = DesignFixture.renderRoot(host, size: CGSize(width: 375, height: 667), style: style, preferredContentSizeCategory: category)
+                    XCTAssertGreaterThanOrEqual(header.bounds.height, 44)
+                    XCTAssertTrue(header.accessibilityTraits.contains(.button))
+                    XCTAssertTrue(header.accessibilityTraits.contains(.header))
+                    XCTAssertEqual(header.accessibilityValue, "已收起")
+                    for label in header.allViews.compactMap({ $0 as? UILabel }).filter({ !($0.text ?? "").isEmpty && !$0.isHidden }) {
+                        XCTAssertGreaterThan(label.bounds.width, 0)
+                        let requiredHeight = label.sizeThatFits(CGSize(width: label.bounds.width, height: .greatestFiniteMagnitude)).height
+                        XCTAssertGreaterThanOrEqual(label.bounds.height + 1, requiredHeight)
+                        let frame = header.convert(label.bounds, from: label)
+                        XCTAssertLessThanOrEqual(frame.maxX, 375)
+                        XCTAssertLessThanOrEqual(frame.maxY, header.bounds.height + 0.5)
+                    }
+                    let arrow = try XCTUnwrap(header.allViews.compactMap { $0 as? UIImageView }.last)
+                    XCTAssertGreaterThan(arrow.bounds.width, 0)
+                    XCTAssertLessThanOrEqual(header.convert(arrow.bounds, from: arrow).maxX, 375)
+                }
+            }
+        }
+    }
+
+    private func bookGroup(in controller: UITableViewController, bookID: String, prefix: String) throws -> (section: Int, header: BookGroupHeader) {
+        for section in 0..<controller.tableView.numberOfSections {
+            if let header = controller.tableView.delegate?.tableView?(controller.tableView, viewForHeaderInSection: section) as? BookGroupHeader,
+               header.accessibilityIdentifier == "\(prefix)-\(bookID)" {
+                return (section, header)
+            }
+        }
+        throw XCTUnwrapErrorForMissingBookGroup()
+    }
+
+    private struct XCTUnwrapErrorForMissingBookGroup: Error {}
+
+    private func makeBookGroupFixture() async throws -> (library: LibraryStore, primaryID: String, secondaryID: String) {
+        let session = try DesignFixture.makeSession(.init(scenario: .normal, theme: .light))
+        do {
+            try await DesignFixture.seed(session)
+            let primary = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.fixtureTitle })
+            let secondary = try XCTUnwrap(session.library.books.first { $0.title == "瓦尔登湖" })
+            var locator = try XCTUnwrap(primary.notes?.first).location()
+            locator.text.highlight = "分组命中原文"
+            try session.library.saveNote(BookNote(locator: locator, body: "分组命中笔记"), for: primary.id)
+            try session.library.saveNote(BookNote(locator: locator, body: "分组命中笔记"), for: secondary.id)
+            try session.library.saveNote(BookNote(locator: locator), for: secondary.id, highlightOnly: true)
+            try session.library.saveBookmark(Bookmark(locator: locator), for: secondary.id)
+            var question = ReadingQuestion(book: secondary, selection: QuestionEvidence(locator: locator), neighbors: [])
+            question.question = "分组命中问题"
+            question.answer = "固定夹具回答"
+            question.state = .complete
+            question.updated = Date(timeIntervalSince1970: 1_700_000_000)
+            XCTAssertTrue(session.library.questions.save(question))
+            var timestamps: [String: Date] = [:]
+            for book in session.library.books {
+                let date = Date(timeIntervalSince1970: book.id == secondary.id ? 1_700_000_100 : 1_700_000_000)
+                for note in book.notes ?? [] { timestamps["note:\(book.id):\(note.id.uuidString)"] = date }
+                for bookmark in book.bookmarks ?? [] { timestamps["bookmark:\(book.id):\(bookmark.id.uuidString)"] = date }
+            }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(timestamps).write(to: session.root.appendingPathComponent("record-timestamps.json"), options: .atomic)
+            return (try LibraryStore(root: session.root, secrets: session.secrets), primary.id, secondary.id)
+        } catch {
+            try? FileManager.default.removeItem(at: session.root)
+            throw error
+        }
+    }
+
     func testProfileUsesCenteredBrandDesignedSettingsAndPersistentAppearance() async throws {
         let appearanceKey = "interface-style"
         let previousAppearance = UserDefaults.standard.object(forKey: appearanceKey)
@@ -443,11 +656,11 @@ final class DesignFixtureTests: XCTestCase {
         for identifier in [
             "profile-ai-service",
             "profile-appearance",
-            "profile-about",
-            "profile-storage-disclosure"
+            "profile-about"
         ] {
             XCTAssertNotNil(views.first { $0.accessibilityIdentifier == identifier }, identifier)
         }
+        XCTAssertNil(views.first { $0.accessibilityIdentifier == "profile-storage-disclosure" })
         let service = try XCTUnwrap(
             views.compactMap { $0 as? UIControl }
                 .first { $0.accessibilityIdentifier == "profile-ai-service" }

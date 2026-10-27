@@ -1,4 +1,6 @@
 import XCTest
+import Security
+import UIKit
 @testable import Shudeng
 
 @MainActor
@@ -211,13 +213,14 @@ final class AIServiceTests: XCTestCase {
         XCTAssertTrue(try final.key(for: final.configurations[0]) == "replacement-fictional-credential")
         XCTAssertThrowsError(try secrets.read(store.configurations[0].secretID!))
         XCTAssertEqual(try secrets.accounts().count, 2)
-        // A process death before catalog replacement leaves an orphan only.
+        // An unreferenced account could belong to another catalog; opening this
+        // catalog must not sweep it, even after an interrupted write.
         try secrets.write("orphan-fictional-credential", id: "orphan")
         _ = try AIConfigurationStore(root: root, secrets: secrets)
-        XCTAssertEqual(try secrets.accounts().count, 2)
+        XCTAssertEqual(try secrets.accounts().count, 3)
         try final.remove(a.id)
         XCTAssertNil(try AIConfigurationStore(root: root, secrets: secrets).selectedID)
-        XCTAssertEqual(try secrets.accounts().count, 1)
+        XCTAssertEqual(try secrets.accounts().count, 2)
     }
     func testKeychainFailureAndMissingKeyNeverPublishSuccess() throws {
         let actual = secrets!
@@ -236,6 +239,167 @@ final class AIServiceTests: XCTestCase {
         try store.save(store.configurations[0], newKey: token)
         XCTAssertTrue(try store.key(for: store.configurations[0]) == token)
     }
+    func testSendConsentPersistsAndInvalidatesForDestinationProviderAndProtocol() throws {
+        let fake = StubAISecrets()
+        let store = try AIConfigurationStore(root: root, secrets: fake)
+        let preset = AIConfiguration.deepSeek
+        XCTAssertEqual(preset.address, "https://api.deepseek.com")
+        XCTAssertEqual(preset.model, "deepseek-flash")
+        try store.save(preset, newKey: token, confirmingSendConsent: true)
+        let saved = try XCTUnwrap(store.configurations.first)
+        XCTAssertTrue(store.hasSendConsent(for: saved))
+        let restarted = try AIConfigurationStore(root: root, secrets: fake)
+        XCTAssertEqual(try restarted.selectedConfigurationForSending(), saved)
+
+        var equivalent = saved
+        equivalent.address = "https://api.deepseek.com/v1/chat/completions/"
+        XCTAssertTrue(restarted.hasSendConsent(for: equivalent))
+        var newModel = saved; newModel.model = "another-explicit-model"
+        XCTAssertTrue(restarted.hasSendConsent(for: newModel))
+        try restarted.save(newModel, newKey: "replacement-fixture-key")
+        XCTAssertTrue(restarted.hasSendConsent(for: restarted.configurations[0]))
+
+        var address = saved; address.address = "https://gateway.example/private/v1"
+        var format = saved; format.format = .anthropic
+        var provider = saved; provider.provider = .custom
+        var name = saved; name.name = "Another service"
+        for changed in [address, format, provider, name] {
+            XCTAssertFalse(restarted.hasSendConsent(for: changed))
+            try restarted.save(changed, newKey: "")
+            let unconfirmed = try AIConfigurationStore(root: root, secrets: fake)
+            XCTAssertThrowsError(try unconfirmed.selectedConfigurationForSending()) { error in
+                XCTAssertEqual(error as? AIError, .consentRequired)
+            }
+            try unconfirmed.save(changed, newKey: "", confirmingSendConsent: true)
+            XCTAssertTrue(unconfirmed.hasSendConsent(for: changed))
+        }
+    }
+    func testLegacyCatalogAndSwitchNeverInferSendConsent() throws {
+        let fake = StubAISecrets()
+        let store = try AIConfigurationStore(root: root, secrets: fake)
+        let a = configuration(), b = configuration(.anthropic)
+        try store.save(a, newKey: token)
+        try store.save(b, newKey: token)
+        let file = root.appendingPathComponent("ai-services.json")
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        json.removeValue(forKey: "sendConsents")
+        try JSONSerialization.data(withJSONObject: json).write(to: file, options: .atomic)
+        let legacy = try AIConfigurationStore(root: root, secrets: fake)
+        XCTAssertFalse(legacy.hasSendConsent(for: legacy.configurations[0]))
+        XCTAssertTrue(try legacy.key(for: legacy.configurations[0]) == token)
+        try legacy.select(b.id)
+        XCTAssertThrowsError(try legacy.selectedConfigurationForSending()) { XCTAssertEqual($0 as? AIError, .consentRequired) }
+        try legacy.select(b.id, confirmingSendConsent: true)
+        let restarted = try AIConfigurationStore(root: root, secrets: fake)
+        XCTAssertEqual(try restarted.selectedConfigurationForSending().id, b.id)
+        try restarted.select(a.id)
+        XCTAssertThrowsError(try restarted.selectedConfigurationForSending())
+        XCTAssertTrue(restarted.hasSendConsent(for: restarted.configurations[1]))
+        try restarted.remove(b.id)
+        XCTAssertFalse(restarted.hasSendConsent(for: legacy.configurations[1]))
+    }
+    func testSharedKeychainServiceKeepsOtherCatalogKeys() throws {
+        let first = try AIConfigurationStore(root: root.appendingPathComponent("first"), secrets: secrets)
+        try first.save(configuration(), newKey: token)
+        let second = try AIConfigurationStore(root: root.appendingPathComponent("second"), secrets: secrets)
+        XCTAssertTrue((try? first.key(for: first.configurations[0])) == token, "Opening another catalog must preserve the first catalog's saved key")
+        try second.save(configuration(.anthropic), newKey: "second-fixture-key")
+        XCTAssertTrue((try? first.key(for: first.configurations[0])) == token)
+        try first.save(first.configurations[0], newKey: "replacement-fixture-key")
+        XCTAssertTrue((try? second.key(for: second.configurations[0])) == "second-fixture-key")
+        try first.remove(first.configurations[0].id)
+        XCTAssertTrue((try? second.key(for: second.configurations[0])) == "second-fixture-key")
+        XCTAssertEqual(try secrets.accounts().count, 1)
+    }
+    func testSavedConfigurationEditorRequiresReadableKey() throws {
+        let fake = StubAISecrets()
+        let store = try AIConfigurationStore(root: root, secrets: fake)
+        try store.save(configuration(), newKey: token)
+        let saved = store.configurations[0]
+        fake.values.removeAll()
+        for (failure, footer) in [(AIError.secretMissing, "API Key 已无法找到，请重新填写并保存。"), (.secretLocked, "API Key 暂时无法读取，请解锁设备后重试。"), (.secret, "API Key 暂时无法读取，请重试或重新填写。")] {
+            fake.readError = failure
+            let editor = AIConfigurationController(store: store, configuration: saved) { _ in XCTFail("Checking must not save") }
+            editor.loadViewIfNeeded()
+            XCTAssertEqual(editor.tableView(editor.tableView, titleForFooterInSection: 0), footer)
+            editor.tableView(editor.tableView, didSelectRowAt: IndexPath(row: 0, section: 2))
+            XCTAssertEqual(editor.tableView(editor.tableView, cellForRowAt: IndexPath(row: 1, section: 2)).textLabel?.text, failure.localizedDescription)
+            XCTAssertEqual(editor.tableView(editor.tableView, numberOfRowsInSection: 2), 3)
+            XCTAssertEqual(store.configurations[0], saved)
+        }
+        fake.readError = nil
+        try store.save(saved, newKey: "replacement-fixture-key")
+        let recovered = AIConfigurationController(store: store, configuration: store.configurations[0]) { _ in }
+        recovered.loadViewIfNeeded()
+        XCTAssertEqual(recovered.tableView(recovered.tableView, titleForFooterInSection: 0), "已保存 API Key；留空保留，填写新 Key 可替换。")
+    }
+    func testSecretFailuresAreClassifiedAndKeyCanBeReplaced() throws {
+        let fake = StubAISecrets()
+        let store = try AIConfigurationStore(root: root, secrets: fake)
+        XCTAssertThrowsError(try store.key(for: configuration())) { XCTAssertEqual($0 as? AIError, .missingSecretReference) }
+        try store.save(configuration(), newKey: token)
+        let saved = store.configurations[0]
+        fake.values.removeAll()
+        XCTAssertThrowsError(try store.key(for: saved)) { XCTAssertEqual($0 as? AIError, .secretMissing) }
+        fake.readError = .secretLocked
+        XCTAssertThrowsError(try store.key(for: saved)) { XCTAssertEqual($0 as? AIError, .secretLocked) }
+        fake.readError = .secret
+        XCTAssertThrowsError(try store.key(for: saved)) { XCTAssertEqual($0 as? AIError, .secret) }
+        fake.readError = nil
+        try store.save(saved, newKey: "replacement-fixture-key")
+        XCTAssertTrue(try store.key(for: store.configurations[0]) == "replacement-fixture-key")
+        for (status, expected) in [(errSecItemNotFound, AIError.secretMissing), (errSecInteractionNotAllowed, .secretLocked), (errSecAuthFailed, .secretLocked), (errSecNotAvailable, .secret), (errSecMissingEntitlement, .secret)] {
+            XCTAssertEqual(KeychainSecrets.error(for: status), expected)
+            XCTAssertNotEqual(expected, .authentication)
+            XCTAssertNotEqual(expected, .network)
+            XCTAssertFalse(expected.localizedDescription.contains(token))
+            XCTAssertTrue(expected.offersKeyReplacement)
+        }
+    }
+    func testFailedSaveDoesNotPublishConsentOrNewSecret() throws {
+        let fake = StubAISecrets()
+        let store = try AIConfigurationStore(root: root, secrets: fake)
+        let c = AIConfiguration.deepSeek
+        try store.save(c, newKey: token)
+        let file = root.appendingPathComponent("ai-services.json")
+        let backup = root.appendingPathComponent("committed.json")
+        try FileManager.default.moveItem(at: file, to: backup)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try store.save(c, newKey: "replacement-fixture-key", confirmingSendConsent: true)) {
+            XCTAssertEqual($0 as? AIError, .storage)
+        }
+        XCTAssertFalse(store.hasSendConsent(for: c))
+        XCTAssertEqual(fake.values.count, 1)
+        XCTAssertTrue(try store.key(for: store.configurations[0]) == token)
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.moveItem(at: backup, to: file)
+        try store.save(c, newKey: "", confirmingSendConsent: true)
+        XCTAssertEqual(try store.selectedConfigurationForSending().id, c.id)
+    }
+    func testSendNoticeShowsDestinationWithoutSensitiveURLDetails() {
+        var c = AIConfiguration.deepSeek
+        c.address = "https://gateway.example/private-tenant/v1"
+        let notice = AIPrivacyController.sendNotice(for: c)
+        for text in ["问题", "相关原文", "必要对话", "gateway.example", "费用"] { XCTAssertTrue(notice.contains(text)) }
+        XCTAssertFalse(notice.contains("private-tenant"))
+        c.address = "https://user:fictional-key@gateway.example?token=fictional-key"
+        let invalid = AIPrivacyController.sendNotice(for: c)
+        XCTAssertFalse(invalid.contains("fictional-key"))
+        XCTAssertFalse(invalid.contains("user:"))
+    }
+}
+
+private final class StubAISecrets: AISecrets {
+    var values: [String: String] = [:]
+    var readError: AIError?
+    func read(_ id: String) throws -> String {
+        if let readError { throw readError }
+        guard let value = values[id] else { throw AIError.secretMissing }
+        return value
+    }
+    func write(_ value: String, id: String) throws { values[id] = value }
+    func remove(_ id: String) throws { values.removeValue(forKey: id) }
+    func accounts() throws -> [String] { Array(values.keys) }
 }
 
 private struct FailingSecrets: AISecrets {

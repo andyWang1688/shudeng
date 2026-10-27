@@ -2,7 +2,7 @@
 
 书灯是一款以阅读为中心的个人阅读应用：读者遇到不懂的内容，可以直接提问、查看书内依据，并留下能继续讨论的问答记录。
 
-**当前状态：v0.1.0 已通过约定的模拟器首发验收。** 下载、安装、验收边界和已知限制见[首版说明](releases/v0.1.0.md)；不是 App Store 上架或真机验收。以下设计与历史调研不替代该版本实际验证记录。
+**当前版本：v0.2.0。** 下载、安装、更新内容和验证边界见[新版说明](releases/v0.2.0.md)；[首版说明](releases/v0.1.0.md)保留历史证据。当前提供 Apple Silicon 的 iOS 模拟器包，真机与商店分发尚未验证。
 
 ## 从这里开始
 
@@ -13,6 +13,7 @@
 | AI 怎样结合整本书回答，RAG 和提示词是什么关系 | [阅读问答如何工作](how-reading-ai-works.md) |
 | 首发做什么、不做什么 | [产品范围](product-scope.md) |
 | 界面保留什么、优化什么 | [界面设计方向](interface-review.md) |
+| 下一版界面按什么原则调整 | [阅读优先与渐进披露](adr/0010-reading-first-progressive-disclosure.md) · [#34 设计施工范围](https://github.com/andyWang1688/shudeng/issues/34) · [UIKit 开发规范](design/ui-development-standard.md) |
 | 选文、对话、问答记录分别指什么 | [领域用语](../GLOSSARY.md) |
 
 推荐先读“认识书灯”，再读“阅读问答如何工作”；理解产品不需要先理解向量数据库。
@@ -47,6 +48,11 @@
 | [收窄首发后台范围](adr/0006-bounded-background-generation.md) | 当前有效：支持几十秒目标，完整后台路线移后 |
 | [简单本地 RAG](adr/0007-simple-local-rag.md) | 已被 ADR0008 取代，保留纯向量历史正文 |
 | [本地混合检索](adr/0008-local-hybrid-retrieval.md) | 当前有效：本地向量与关键词合并，保持单次生成，不承诺完整概括全书；#21 技术验收通过 |
+| [原生界面设计基准](adr/0009-native-ui-design-baseline.md) | 已被 ADR-0010 取代，保留历史正文和验收记录 |
+| [阅读优先与渐进披露](adr/0010-reading-first-progressive-disclosure.md) | 当前有效：一页一件事、内容优先、长说明渐进披露；阅读控件收起时全屏 |
+| [移除“仅已读”](adr/0011-remove-only-read-scope.md) | 当前有效：所有问答参考当前整本书，不再保存阅读范围元数据 |
+| [AI 发送说明在配置时确认](adr/0012-confirm-ai-send-scope-on-setup.md) | 当前有效：保存或更换服务时提示，普通问答不逐次弹窗 |
+| [固定正文与覆盖式阅读控件](adr/0013-fixed-reading-viewport-overlay-controls.md) | 当前有效：正文始终满屏，控件淡入淡出，点击不重新分页；取代 ADR-0010 的阅读控件显隐方式 |
 
 ## 怎样阅读文档里的承诺
 

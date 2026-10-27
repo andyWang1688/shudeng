@@ -41,8 +41,6 @@ struct ReadingQuestion: Codable, Identifiable {
     var history: [QuestionHistoryTurn]?
     var retrievalQueries: [String]?
     var retrievalNotice: String?
-    var evidenceScope: BookEvidenceScope?
-    var onlyRead: Bool?
     let bookID: String
     var bookIdentity: UUID?
     let bookTitle: String
@@ -66,6 +64,13 @@ struct ReadingQuestion: Codable, Identifiable {
     var format: AIFormat?
     var updated = Date()
     var conversation: UUID { conversationID ?? id }
+    var isEmptyDraft: Bool {
+        state == .draft && question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        answer.isEmpty && evidence.isEmpty && citations.isEmpty &&
+        ((turnIndex ?? 0) > 0 || !(selectionParts ?? [selection]).contains {
+            !$0.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        })
+    }
     init(book: Book, selection: QuestionEvidence, neighbors: [QuestionEvidence]) {
         id = UUID(); bookID = book.id; bookTitle = book.title
         bookIdentity = book.recordIdentity
@@ -98,6 +103,7 @@ struct ReadingConversation: Identifiable {
     var first: ReadingQuestion { turns[0] }
     var latest: ReadingQuestion { turns[turns.count - 1] }
     var updated: Date { turns.map(\.updated).max()! }
+    var submittedCount: Int { turns.filter { $0.state != .draft }.count }
     var title: String { first.conversationTitle ?? (first.question.isEmpty ? "未填写的问题草稿" : String(first.question.prefix(48))) }
 }
 
@@ -111,6 +117,8 @@ final class QuestionStore: NSObject {
     private let secrets: AISecrets
     private var committed: [ReadingQuestion] = []
     private var pending: [UUID: ReadingQuestion] = [:]
+    // Empty composers remain usable in memory but never become saved history.
+    private var emptyDrafts: [UUID: ReadingQuestion] = [:]
     private(set) var loadFailed = false
     private var jobs: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
     private var backgroundTask = UIBackgroundTaskIdentifier.invalid
@@ -118,10 +126,13 @@ final class QuestionStore: NSObject {
     var records: [ReadingQuestion] {
         var values = committed.filter { pending[$0.id] == nil }
         values += pending.values
+        values += emptyDrafts.values
         return values.sorted { $0.updated > $1.updated }
     }
     var conversations: [ReadingConversation] {
-        Dictionary(grouping: records, by: \.conversation).values.map {
+        Dictionary(grouping: records, by: \.conversation).values.filter {
+            $0.contains { !$0.isEmptyDraft }
+        }.map {
             ReadingConversation(turns: $0.sorted { ($0.turnIndex ?? 0) < ($1.turnIndex ?? 0) })
         }.sorted { $0.updated == $1.updated ? $0.id.uuidString < $1.id.uuidString : $0.updated > $1.updated }
     }
@@ -134,7 +145,6 @@ final class QuestionStore: NSObject {
         var next = ReadingQuestion(book: Book(id: first.bookID, title: first.bookTitle, author: ""), selection: first.selection, neighbors: first.neighbors)
         next.selectionParts = first.selectionParts; next.originJSON = first.originJSON; next.freeQuestion = first.freeQuestion
         next.bookIdentity = first.bookIdentity
-        next.onlyRead = conversation.latest.onlyRead
         next.conversationID = id; next.turnIndex = (conversation.latest.turnIndex ?? 0) + 1
         // The same persisted draft is reopened; sending and saving keep this UUID.
         save(next)
@@ -160,6 +170,7 @@ final class QuestionStore: NSObject {
         do {
             try JSONEncoder().encode(committed.filter { !ids.contains($0.id) }).write(to: file, options: .atomic)
             committed.removeAll { ids.contains($0.id) }; pending = pending.filter { !ids.contains($0.key) }
+            emptyDrafts = emptyDrafts.filter { !ids.contains($0.key) }
             notify(); return true
         } catch { notify(); return false }
     }
@@ -175,6 +186,7 @@ final class QuestionStore: NSObject {
         let next = committed.filter { $0.bookID != bookID }
         try JSONEncoder().encode(next).write(to: file, options: .atomic)
         committed = next; pending = pending.filter { $0.value.bookID != bookID }
+        emptyDrafts = emptyDrafts.filter { $0.value.bookID != bookID }
         notify()
     }
     init(root: URL, secrets: AISecrets = KeychainSecrets()) {
@@ -234,54 +246,67 @@ final class QuestionStore: NSObject {
         do {
             let values = FileManager.default.fileExists(atPath: file.path) ? try JSONDecoder().decode([ReadingQuestion].self, from: Data(contentsOf: file)) : []
             committed = values; loadFailed = false
+            let retained = values.filter { !$0.isEmptyDraft }
+            if retained.count != values.count {
+                // Publish cleanup only after the atomic write succeeds. On failure,
+                // legacy empty drafts stay hidden and the original file stays intact.
+                if (try? JSONEncoder().encode(retained).write(to: file, options: .atomic)) != nil {
+                    committed = retained
+                }
+            }
             for var record in values where record.state == .generating || record.state == .preparing {
                 record.state = .incomplete; record.failure = "上次生成已中断，请主动重试。"; save(record)
             }
         } catch { loadFailed = true }
         notify()
     }
-    func record(_ id: UUID) -> ReadingQuestion? { pending[id] ?? committed.first { $0.id == id } }
+    func record(_ id: UUID) -> ReadingQuestion? { pending[id] ?? emptyDrafts[id] ?? committed.first { $0.id == id } }
     func unsaved(_ id: UUID) -> Bool { pending[id] != nil }
     @discardableResult func save(_ record: ReadingQuestion) -> Bool {
         guard !loadFailed, canSave?(record) != false else { return false }
-        var next = committed.filter { $0.id != record.id }; next.append(record)
+        if record.isEmptyDraft, !committed.contains(where: { $0.id == record.id }), pending[record.id] == nil {
+            emptyDrafts[record.id] = record; notify(); return true
+        }
+        var next = committed.filter { $0.id != record.id }
+        if !record.isEmptyDraft { next.append(record) }
         do {
             try JSONEncoder().encode(next).write(to: file, options: .atomic)
+            emptyDrafts[record.id] = record.isEmptyDraft ? record : nil
             committed = next; pending.removeValue(forKey: record.id); trace("committed-" + record.state.rawValue, id: record.id); notify(); return true
-        } catch { pending[record.id] = record; trace("saveFailed", id: record.id); notify(); return false }
+        } catch { emptyDrafts[record.id] = nil; pending[record.id] = record; trace("saveFailed", id: record.id); notify(); return false }
     }
     func retrySave(_ id: UUID) { if let record = pending[id] { save(record) } }
     func edit(_ id: UUID, text: String) {
         guard var record = record(id), record.state == .draft || record.state == .incomplete else { return }
         record.question = text; record.updated = Date(); save(record)
     }
-    func setOnlyRead(_ id: UUID, value: Bool) {
-        guard var record = record(id), record.state == .draft || record.state == .incomplete else { return }
-        record.onlyRead = value; record.updated = Date(); save(record)
-    }
     func cancel(_ id: UUID) {
         trace("cancel", id: id)
         interrupt(id, reason: "已主动取消；保留已保存内容。")
     }
-    func send(_ id: UUID, library: LibraryStore, local: Bool, scope: BookEvidenceScope? = nil) {
+    func send(_ id: UUID, library: LibraryStore, local: Bool) {
         guard jobs[id] == nil, !unsaved(id), var record = record(id), record.state != .complete,
               !record.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard library.sourceAvailable(for: record.bookID) else {
             record.failure = LibraryError.missing.errorDescription; save(record); return
         }
-        let scope: BookEvidenceScope? = {
-            guard record.onlyRead == true else { return scope }
-            let read = library.readScope(for: record.bookID)
-            guard var narrowed = scope else { return read }
-            narrowed.chapters = (read.chapters ?? []).filter { narrowed.permits(chapter: $0, ordinal: 0) }
-            return narrowed
-        }()
+        let configuration: AIConfiguration
+        let key: String
+        do {
+            let configurations = try AIConfigurationStore(root: library.root, secrets: secrets)
+            configuration = try configurations.selectedConfigurationForSending()
+            key = try configurations.key(for: configuration)
+        } catch {
+            record.failure = (error as? AIError)?.errorDescription
+                ?? "AI 服务配置无法读取，请检查设置。"
+            save(record)
+            return
+        }
         record.state = .preparing; record.failure = nil; record.updated = Date()
         record.retrievalQueries = nil; record.retrievalNotice = nil
         record.history = conversation(record.conversation)?.turns.filter { ($0.turnIndex ?? 0) < (record.turnIndex ?? 0) }.map {
             QuestionHistoryTurn(id: $0.id, question: $0.question, answer: $0.answer, state: $0.state)
         }
-        record.evidenceScope = scope ?? BookEvidenceScope(bookID: record.bookID)
         guard save(record) else {
             record.state = .incomplete; record.failure = "请求准备尚未保存，未发送；请重试保存。"; save(record); return
         }
@@ -294,32 +319,20 @@ final class QuestionStore: NSObject {
                 trace("finished", id: id, token: token); notify()
             }
             do {
-                let configurations = try AIConfigurationStore(root: library.root, secrets: secrets)
-                guard let configuration = configurations.configurations.first(where: { $0.id == configurations.selectedID }) else { throw QuestionError.configuration }
-                let key = try configurations.key(for: configuration)
                 let state = library.preparation.states[record.bookID] ?? BookPreparationState()
                 guard state.ready || local else { throw QuestionError.preparation }
-                if let scope {
-                    let sample = try await library.preparation.index.languageSample(bookID: record.bookID, scope: scope)
-                    guard !sample.isEmpty else { throw QuestionError.scope }
-                }
                 let historyTurns = conversation(record.conversation)?.turns.filter { ($0.turnIndex ?? 0) < (record.turnIndex ?? 0) } ?? []
                 if !historyTurns.isEmpty {
                     guard !local else { throw QuestionError.preparation }
-                    let allowed = scope ?? BookEvidenceScope(bookID: record.bookID)
-                    // A previous answer may paraphrase its sources. Do not send answers produced
-                    // under a wider (or legacy unknown) scope when the reader narrows the range.
+                    let allowed = BookEvidenceScope(bookID: record.bookID)
                     for previous in historyTurns {
                         guard previous.bookID == record.bookID else { throw QuestionError.scope }
-                        guard !previous.answer.isEmpty else { continue }
-                        let old = previous.evidenceScope ?? BookEvidenceScope(bookID: previous.bookID)
-                        guard allowed.contains(old) else { throw QuestionError.scope }
                     }
                     let historyEvidence = historyTurns.flatMap { ($0.selectionParts ?? [$0.selection]) + $0.evidence + $0.citations }
                     guard try await library.preparation.index.permits(historyEvidence, scope: allowed) else { throw QuestionError.scope }
                 }
                 try Task.checkCancellation()
-                let plan = try await QuestionPlan.make(record, index: library.preparation.index, local: local, state: state, scope: scope)
+                let plan = try await QuestionPlan.make(record, index: library.preparation.index, local: local, state: state)
                 try Task.checkCancellation()
                 guard jobs[id]?.token == token, library.sourceAvailable(for: record.bookID) else { return }
                 record.evidence = plan.evidence; record.notice = plan.notice; record.retrievalTrace = plan.trace
@@ -359,7 +372,7 @@ enum QuestionError: LocalizedError {
     case configuration, preparation, budget, scope
     var errorDescription: String? {
         switch self {
-        case .scope: return "选文或历史回答超出当前书允许的参考范围（旧记录范围不明时也不会发送）；请扩大允许范围或新建问题。未发送请求。"
+        case .scope: return "选文或历史原文无法在当前书中核查；请重新选择原文或新建问题。未发送请求。"
         case .configuration: return "请先在“我的 → AI 服务”保存并选择服务。"
         case .preparation: return "资料尚未准备完整；可等待，或主动选择局部解释。"
         case .budget: return "问题、必要原文或完整对话历史超过本次上下文容量；未发送回答请求，请缩小问题范围或新建问题。"
@@ -411,10 +424,9 @@ struct QuestionPlan {
         }
         let limit = 8
         func notice(_ clipped: Bool) -> String {
-            let range = record.onlyRead == true ? "仅已读：仅参考明确确认已读的章节，可能缺少后文解释。" : ""
             let materials = local ? (record.freeQuestion == true ? "读者主动选择局部解释，仅参考当前书已准备的关键词材料，不代表全书。" : "读者主动选择局部解释，仅发送提问选文。") : "本次仅参考提问选文与查到的有限相关原文，可能漏掉相关依据；未遍历全书，不代表完整全书概括。"
             let history = (record.history ?? []).isEmpty ? "" : "完整对话历史仅帮助理解追问，历史回答不作为书内依据。"
-            return range + materials + history + "资料已准备\(state.completed)/\(state.total)个资源。" + (clipped ? "部分检索材料超出本次容量未发送，依据可能不足。" : "未命中相关材料时不能断言书内不存在依据。")
+            return materials + history + "资料已准备\(state.completed)/\(state.total)个资源。" + (clipped ? "部分检索材料超出本次容量未发送，依据可能不足。" : "未命中相关材料时不能断言书内不存在依据。")
         }
         var selected = required
         guard try prompt(record, evidence: selected, notice: notice(false)).utf8.count <= 23000 else { throw QuestionError.budget }

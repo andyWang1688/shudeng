@@ -1,8 +1,10 @@
 # 书灯 · Shudeng
 
+> 一盏照书的灯，AI 照亮你读不懂的地方。
+
 以阅读为中心的个人阅读应用。AI 是按需出现的辅助工具。
 
-> v0.1.0 首版已通过约定的 iOS 模拟器验收。[下载首版](https://github.com/andyWang1688/shudeng/releases/tag/v0.1.0) · [安装与版本说明](docs/releases/v0.1.0.md)。下载包用于 Xcode iOS Simulator，不是可安装到 iPhone 的 IPA，也未上架 App Store。
+> 最新版 v0.2.0：界面更简洁，阅读工具栏即时淡入淡出，AI 服务配置与密钥恢复更清楚。[下载新版](https://github.com/andyWang1688/shudeng/releases/tag/v0.2.0) · [安装与版本说明](docs/releases/v0.2.0.md)。下载包用于 Apple Silicon Mac 的 Xcode iOS Simulator，真机和 App Store 分发尚未验证。
 
 ## 项目方向
 
@@ -26,7 +28,7 @@
 
 ## 当前状态
 
-2026-10-21 [首发模拟器验收通过](https://github.com/andyWang1688/shudeng/issues/19#issuecomment-6314647587)：24条真实服务问答完成保存、54条引用原文核对、24条重启恢复，以及3轮本地性能测试。验收范围和已知限制见[首版说明](docs/releases/v0.1.0.md)；完成记录不代表每条答案正确，真机、最低系统版本与商店分发仍未验证。
+2026-10-27 发布 v0.2.0，包含界面收敛、覆盖式阅读控件、按书折叠分组、移除“仅已读”和一次性 AI 发送确认；范围与验证记录见[新版说明](docs/releases/v0.2.0.md)。2026-10-21 的[真实服务首发验收](https://github.com/andyWang1688/shudeng/issues/19#issuecomment-6314647587)保留为历史记录，本轮未重跑真实 AI 回答质量；真机、最低系统版本与商店分发仍未验证。
 
 独立实现；本仓库未导入其他项目的源码或 Git 历史。第三方组件须分别核对来源和许可证。
 

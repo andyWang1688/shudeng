@@ -522,15 +522,19 @@ final class BookCoverStore {
 
 /// Shared book identity row used above grouped notes and conversations.
 @MainActor
-final class BookGroupHeader: UIView {
+final class BookGroupHeader: UIControl {
     private let cover = UIView()
     private let coverImage = UIImageView()
     private let initial = BookDesign.label(nil, size: 11, weight: .semibold, colour: BookDesign.paper)
     private let title = BookDesign.label(nil, size: 12, colour: BookDesign.secondary)
+    private let count = BookDesign.label(nil, size: 11, colour: BookDesign.secondary)
+    private let chevron = UIImageView(image: BookDesign.symbol("chevron.right", size: 13, weight: .semibold))
     private var token = UUID()
+    var onToggle: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        backgroundColor = BookDesign.paper
         cover.layer.cornerRadius = 2
         cover.clipsToBounds = true
         coverImage.contentMode = .scaleAspectFill
@@ -541,13 +545,20 @@ final class BookGroupHeader: UIView {
             child.translatesAutoresizingMaskIntoConstraints = false
             cover.addSubview(child)
         }
-        let row = UIStackView(arrangedSubviews: [cover, title, UIView()])
+        let text = UIStackView(arrangedSubviews: [title, count])
+        text.axis = .vertical
+        text.spacing = 2
+        chevron.tintColor = BookDesign.secondary
+        chevron.contentMode = .scaleAspectFit
+        let row = UIStackView(arrangedSubviews: [cover, text, chevron])
         row.axis = .horizontal
         row.alignment = .center
         row.spacing = 8
         row.translatesAutoresizingMaskIntoConstraints = false
+        row.isUserInteractionEnabled = false
         addSubview(row)
         NSLayoutConstraint.activate([
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
             cover.widthAnchor.constraint(equalToConstant: 22),
             cover.heightAnchor.constraint(equalToConstant: 30),
             coverImage.topAnchor.constraint(equalTo: cover.topAnchor),
@@ -556,13 +567,17 @@ final class BookGroupHeader: UIView {
             coverImage.bottomAnchor.constraint(equalTo: cover.bottomAnchor),
             initial.centerXAnchor.constraint(equalTo: cover.centerXAnchor),
             initial.centerYAnchor.constraint(equalTo: cover.centerYAnchor),
-            row.topAnchor.constraint(equalTo: topAnchor, constant: 23),
+            chevron.widthAnchor.constraint(equalToConstant: 16),
+            chevron.heightAnchor.constraint(equalToConstant: 20),
+            row.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            row.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor)
+            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         ])
         isAccessibilityElement = true
-        accessibilityTraits = .header
+        accessibilityTraits = [.header, .button]
+        accessibilityHint = "轻点展开或收起本书的记录"
+        addAction(UIAction { [weak self] _ in self?.onToggle?() }, for: .touchUpInside)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -573,13 +588,20 @@ final class BookGroupHeader: UIView {
         book: Book?,
         covers: BookCoverStore,
         library: LibraryStore,
-        identifierPrefix: String
+        identifierPrefix: String,
+        countText: String,
+        expanded: Bool,
+        searching: Bool = false
     ) {
         token = UUID()
         let current = token
         title.text = bookTitle
+        count.text = countText
+        chevron.transform = expanded ? CGAffineTransform(rotationAngle: .pi / 2) : .identity
         accessibilityIdentifier = "\(identifierPrefix)-\(bookID)"
-        accessibilityLabel = bookTitle
+        accessibilityLabel = "\(bookTitle)，\(countText)"
+        accessibilityValue = expanded ? "已展开" : "已收起"
+        accessibilityHint = searching ? "搜索期间自动展开匹配记录" : "轻点展开或收起本书的记录"
         cover.backgroundColor = palette(for: bookTitle)
         coverImage.image = nil
         initial.text = String(bookTitle.prefix(1))
@@ -591,6 +613,11 @@ final class BookGroupHeader: UIView {
             coverImage.image = image
             initial.isHidden = image != nil
         }
+    }
+
+    override func accessibilityActivate() -> Bool {
+        sendActions(for: .touchUpInside)
+        return true
     }
 
     private func palette(for title: String) -> UIColor {

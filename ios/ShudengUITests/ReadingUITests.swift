@@ -2,6 +2,345 @@ import XCTest
 import UIKit
 
 extension ReadingUITests {
+    func testToolbarLatencyPagination() throws { try checkToolbarLatency(mode: "分页") }
+    func testToolbarLatencyScroll() throws { try checkToolbarLatency(mode: "滚动") }
+    func testToolbarLatencyCurl() throws { try checkToolbarLatency(mode: "仿真") }
+
+    private func toolbarLatency(_ app: XCUIApplication) -> [String: Any]? {
+        guard let value = app.otherElements["reading-content"].value as? String,
+              let data = value.data(using: .utf8),
+              let observation = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return observation["toolbarLatency"] as? [String: Any]
+    }
+    private func checkToolbarLatency(mode: String) throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=long", "--design-theme=light", "--reader-acceptance", "--toolbar-latency-acceptance"]
+        app.launch()
+        XCTAssertTrue(app.buttons["continue-reading"].waitForExistence(timeout: 15))
+        app.buttons["continue-reading"].tap()
+        fullscreenWait { app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled }
+        settings(app, mode: mode, dark: false, font: 100)
+        fullscreenWait { app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled && self.fullscreenVisibleCharacter(app) != nil }
+        for _ in 0..<4 where !fullscreenPageHasNoFixtureNotes(app) {
+            let initialObservation = try XCTUnwrap(fullscreenObservation(app))
+            advanceReading(app, mode: mode)
+            fullscreenWait {
+                (self.fullscreenObservation(app) ?? 0) > initialObservation &&
+                    app.buttons["reader-settings"].isEnabled && self.fullscreenVisibleCharacter(app) != nil
+            }
+        }
+        XCTAssertTrue(fullscreenPageHasNoFixtureNotes(app), "计时输入页必须不含fixture的两处笔记原文")
+        evidence("toolbar-latency-\(mode)-unannotated-input-page", app)
+        let original = try XCTUnwrap(fullscreenVisibleCharacter(app))
+        var measured: [[String: Any]] = []
+        for hidden in [true, false] {
+            let previousAction = toolbarLatency(app)?["action"] as? Int ?? 0
+            let started = ProcessInfo.processInfo.systemUptime
+            app.webViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            fullscreenWait(timeout: 30) {
+                guard let sample = self.toolbarLatency(app),
+                      let action = sample["action"] as? Int, action > previousAction,
+                      sample["usableMS"] as? Double != nil, sample["interactive"] as? Bool == true,
+                      sample["controlsHidden"] as? Bool == hidden else { return false }
+                return self.fullscreenCharacterIsVisible(original, in: app)
+            }
+            let sample = try XCTUnwrap(toolbarLatency(app))
+            print("[ReaderToolbarAcceptance] mode=\(mode) hidden=\(hidden) wallMS=\((ProcessInfo.processInfo.systemUptime - started) * 1000) sample=\(sample)")
+            measured.append(sample)
+            XCTAssertEqual(app.buttons["reader-settings"].exists, !hidden)
+            XCTAssertEqual(app.buttons["reader-ask-book"].exists, !hidden)
+            evidence("toolbar-latency-\(mode)-\(hidden ? "hide" : "show")", app)
+        }
+        let beforeBurst = toolbarLatency(app)?["action"] as? Int ?? 0
+        let viewport = app.webViews.firstMatch.frame
+        let point = fullscreenCharacterPoint(original, in: app)
+        // A native five-tap event exercises interruptions inside the 200ms
+        // fade. The odd final intent is hidden; a stale completion must lose.
+        app.webViews.firstMatch.tap(withNumberOfTaps: 5, numberOfTouches: 1)
+        fullscreenWait(timeout: 10) {
+            guard let sample = self.toolbarLatency(app), sample["action"] as? Int == beforeBurst + 5,
+                  sample["controlsHidden"] as? Bool == true, sample["interactive"] as? Bool == true,
+                  sample["usableMS"] as? Double != nil else { return false }
+            return !app.buttons["reader-settings"].exists && self.fullscreenCharacterIsVisible(original, in: app)
+        }
+        XCTAssertEqual(app.webViews.firstMatch.frame, viewport)
+        if let point { XCTAssertEqual(fullscreenCharacterPoint(original, in: app), point) }
+        measured.append(try XCTUnwrap(toolbarLatency(app)))
+        evidence("toolbar-latency-\(mode)-rapid-latest-intent", app)
+        // Exercise the live reader while chrome is hidden. Toggle latency ends
+        // before this real turn, so normal curl prefetch is measured separately.
+        let hiddenObservation = try XCTUnwrap(fullscreenObservation(app))
+        advanceReading(app, mode: mode)
+        fullscreenWait {
+            (self.fullscreenObservation(app) ?? 0) > hiddenObservation &&
+                self.fullscreenVisibleCharacter(app).map { $0 != original } == true &&
+                !app.buttons["reader-settings"].exists
+        }
+        let moved = try XCTUnwrap(fullscreenVisibleCharacter(app))
+        evidence("toolbar-latency-\(mode)-hidden-native-input", app)
+        app.webViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        fullscreenWait {
+            app.buttons["reader-settings"].isHittable && app.buttons["reader-settings"].isEnabled &&
+                self.fullscreenCharacterIsVisible(moved, in: app)
+        }
+        app.buttons["reader-settings"].tap()
+        XCTAssertTrue(app.navigationBars["阅读设置"].waitForExistence(timeout: 5))
+        app.buttons["取消"].tap()
+        // Both actions are measured before checking latency, so a slow hide
+        // cannot prevent the same baseline run from measuring show.
+        continueAfterFailure = true
+        for sample in measured {
+            XCTAssertLessThanOrEqual(try XCTUnwrap(sample["chromeMS"] as? Double), 250, "\(mode) controls should respond within250ms")
+            XCTAssertLessThanOrEqual(try XCTUnwrap(sample["usableMS"] as? Double), 350, "\(mode) live source should be usable within350ms")
+            XCTAssertEqual(sample["rebuilds"] as? Int, 0, "工具栏不应重建阅读器")
+            XCTAssertEqual(sample["enteredLoading"] as? Bool, false, "工具栏不应让正文进入加载状态")
+            XCTAssertEqual(sample["enteredCurlBusy"] as? Bool, false, "工具栏不应重做仿真预取")
+            XCTAssertEqual(sample["curlStarts"] as? Int, 0)
+            XCTAssertEqual(sample["curlStops"] as? Int, 0)
+        }
+    }
+    private func advanceReading(_ app: XCUIApplication, mode: String) {
+        let body = app.otherElements["reading-content"]
+        if mode == "滚动" {
+            body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+                .press(forDuration: 0.05, thenDragTo: body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
+        } else if mode == "仿真" {
+            curlTurn(app, forward: true)
+        } else {
+            body.swipeLeft()
+        }
+    }
+    private func fullscreenPageHasNoFixtureNotes(_ app: XCUIApplication) -> Bool {
+        let sources = fullscreenVisibleRuns(app).compactMap { $0["source"] as? String }
+        return !sources.isEmpty && sources.allSatisfy {
+            !$0.contains("黛玉方进入房时") && !$0.contains("灯把书页照亮")
+        }
+    }
+
+    func testIssue37FullscreenPagination() throws {
+        try checkFullscreenReading(mode: "分页", fixture: "long")
+    }
+
+    func testIssue37FullscreenScroll() throws {
+        try checkFullscreenReading(mode: "滚动")
+    }
+
+    func testIssue37FullscreenCurl() throws {
+        try checkFullscreenReading(mode: "仿真", fixture: "long")
+    }
+
+    private func checkFullscreenReading(mode: String, fixture: String = "normal") throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=\(fixture)", "--design-theme=light", "--reader-acceptance"]
+        app.launch()
+        XCTAssertTrue(app.buttons["continue-reading"].waitForExistence(timeout: 15))
+        app.buttons["continue-reading"].tap()
+        fullscreenWait { app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled }
+        let initialFont = mode == "仿真" ? 100 : 175
+        settings(app, mode: mode, dark: false, font: initialFont)
+        fullscreenWait { app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled && self.fullscreenVisibleCharacter(app) != nil }
+        let beforeMove = try XCTUnwrap(fullscreenObservation(app))
+        let beforeCharacter = try XCTUnwrap(fullscreenVisibleCharacter(app))
+        let beforeProgress = app.staticTexts["reader-progress"].label
+
+        // Move beyond the initial page so restoring a default location cannot pass.
+        if mode == "滚动" {
+            let body = app.otherElements["reading-content"]
+            body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+                .press(forDuration: 0.05, thenDragTo: body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)))
+        } else if mode == "仿真" {
+            curlTurn(app, forward: true)
+        } else {
+            app.otherElements["reading-content"].swipeLeft()
+        }
+        fullscreenWait {
+            app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled &&
+                (self.fullscreenObservation(app) ?? 0) > beforeMove &&
+                self.fullscreenVisibleCharacter(app) != nil
+        }
+        let character = try XCTUnwrap(fullscreenVisibleCharacter(app))
+        if mode == "分页" {
+            XCTAssertNotEqual(character, beforeCharacter, "原生翻页应改变可见原文字元")
+            XCTAssertNotEqual(app.staticTexts["reader-progress"].label, beforeProgress, "原生翻页应推进阅读进度")
+        }
+        var persistedFocus = character
+        evidence("issue37-" + mode + "-before", app)
+        try checkFullscreenCycle(app, text: nil, name: mode + "-light", rotate: true, character: character)
+
+        if mode == "仿真" {
+            for cycle in 1...2 {
+                curlTurn(app, forward: true)
+                fullscreenWait { app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled && self.fullscreenVisibleCharacter(app) != nil }
+                let forward = try XCTUnwrap(fullscreenVisibleCharacter(app))
+                XCTAssertNotEqual(forward, character)
+                let progress = app.staticTexts["reader-progress"].label
+                curlTurn(app, forward: true, cancel: true)
+                fullscreenWait { app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled && self.fullscreenCharacterIsVisible(forward, in: app) }
+                XCTAssertEqual(app.staticTexts["reader-progress"].label, progress)
+                evidence("issue37-curl-cancel-\(cycle)", app)
+                curlTurn(app, forward: false)
+                fullscreenWait { app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled && self.fullscreenCharacterIsVisible(character, in: app) }
+                evidence("issue37-curl-back-\(cycle)", app)
+            }
+            let reflow = try XCTUnwrap(fullscreenVisibleCharacter(app))
+            persistedFocus = reflow
+            settings(app, mode: mode, dark: true, font: 125)
+            fullscreenWait { app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled && self.fullscreenCharacterIsVisible(reflow, in: app) }
+            try checkFullscreenCycle(app, text: nil, name: "curl-dark-large", character: reflow)
+        }
+
+        app.buttons["reader-close"].tap()
+        app.buttons["continue-reading"].tap()
+        fullscreenWait { app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled && self.fullscreenVisibleCharacter(app) != nil }
+        XCTAssertTrue(fullscreenCharacterIsVisible(persistedFocus, in: app), "重开应恢复重排前的稳定原文字元，不能保存新页首或预取邻页")
+        app.buttons["reader-settings"].tap()
+        XCTAssertTrue(app.segmentedControls.buttons[mode].isSelected)
+        XCTAssertTrue(app.segmentedControls.buttons[mode == "仿真" ? "深色" : "明亮"].isSelected)
+        XCTAssertEqual(app.staticTexts["font-size"].label, "\(mode == "仿真" ? 125 : initialFont)%")
+        app.buttons["取消"].tap()
+    }
+
+    private func checkFullscreenCycle(_ app: XCUIApplication, text: String?, name: String, rotate: Bool = false, character: FullscreenCharacter? = nil) throws {
+        let before = app.webViews.firstMatch.frame
+        let beforePoint = character.flatMap { fullscreenCharacterPoint($0, in: app) }
+        app.webViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        fullscreenWait {
+            let web = app.webViews.firstMatch
+            return !app.buttons["reader-settings"].exists && web.exists &&
+                web.frame == before &&
+                (text.map { self.fullscreenTextIsVisible($0, in: app) } ?? true) &&
+                (character.map { self.fullscreenCharacterIsVisible($0, in: app) } ?? true)
+        }
+        XCTAssertEqual(app.webViews.firstMatch.frame, before, "工具栏覆盖正文，不应改变正文视口")
+        if let character, let beforePoint { XCTAssertEqual(fullscreenCharacterPoint(character, in: app), beforePoint, "收起工具栏不应移动原文字元") }
+        for identifier in ["reader-close", "reader-contents", "reader-settings", "reader-ask-book"] {
+            XCTAssertFalse(app.buttons[identifier].exists, identifier)
+        }
+        XCTAssertFalse(app.otherElements["reader-toolbar"].exists)
+        XCTAssertFalse(app.otherElements["reader-footer"].exists)
+        XCTAssertFalse(app.staticTexts["reader-title"].exists)
+        XCTAssertFalse(app.staticTexts["reader-progress"].exists)
+        evidence("issue37-" + name + "-fullscreen", app)
+
+        if rotate {
+            XCUIDevice.shared.orientation = .landscapeLeft
+            fullscreenWait {
+                let web = app.webViews.firstMatch
+                let screenSize = XCUIScreen.main.screenshot().image.size
+                return web.exists && web.frame.width > web.frame.height &&
+                    screenSize.width > screenSize.height &&
+                    (text.map { self.fullscreenTextIsVisible($0, in: app) } ?? true) &&
+                    (character.map { self.fullscreenCharacterIsVisible($0, in: app) } ?? true)
+            }
+            XCTAssertFalse(app.buttons["reader-ask-book"].exists)
+            let landscape = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            landscape.name = "issue37-" + name + "-landscape"
+            landscape.lifetime = .keepAlways
+            add(landscape)
+            XCUIDevice.shared.orientation = .portrait
+            fullscreenWait {
+                let web = app.webViews.firstMatch
+                return web.exists && web.frame.width < web.frame.height &&
+                    (text.map { self.fullscreenTextIsVisible($0, in: app) } ?? true) &&
+                    (character.map { self.fullscreenCharacterIsVisible($0, in: app) } ?? true)
+            }
+        }
+
+        app.webViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        fullscreenWait {
+            let web = app.webViews.firstMatch
+            return web.exists && app.buttons["reader-settings"].exists && app.buttons["reader-settings"].isEnabled &&
+                (text.map { self.fullscreenTextIsVisible($0, in: app) } ?? true) &&
+                (character.map { self.fullscreenCharacterIsVisible($0, in: app) } ?? true)
+        }
+        XCTAssertEqual(app.webViews.firstMatch.frame.minY, before.minY, accuracy: 0.5)
+        XCTAssertEqual(app.webViews.firstMatch.frame.height, before.height, accuracy: 0.5)
+        if !rotate, let character, let beforePoint { XCTAssertEqual(fullscreenCharacterPoint(character, in: app), beforePoint, "恢复工具栏不应移动原文字元") }
+        for identifier in ["reader-close", "reader-contents", "reader-settings", "reader-ask-book"] {
+            XCTAssertTrue(app.buttons[identifier].isHittable, identifier)
+        }
+        evidence("issue37-" + name + "-restored", app)
+    }
+    private struct FullscreenCharacter: Equatable {
+        let selector: String
+        let source: String
+        let offset: Int
+    }
+
+    private func fullscreenVisibleRuns(_ app: XCUIApplication) -> [[String: Any]] {
+        guard let value = app.otherElements["reading-content"].value as? String,
+              let data = value.data(using: .utf8),
+              let observed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let width = observed["hostWidth"] as? Double, let height = observed["hostHeight"] as? Double,
+              abs(width - app.otherElements["reading-content"].frame.width) < 1,
+              abs(height - app.otherElements["reading-content"].frame.height) < 1 else { return [] }
+        return observed["runs"] as? [[String: Any]] ?? []
+    }
+    private func fullscreenObservation(_ app: XCUIApplication) -> Int? {
+        guard let value = app.otherElements["reading-content"].value as? String,
+              let data = value.data(using: .utf8),
+              let observed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return observed["observation"] as? Int
+    }
+
+    private func fullscreenVisibleCharacter(_ app: XCUIApplication) -> FullscreenCharacter? {
+        for run in fullscreenVisibleRuns(app) {
+            if let selector = run["selector"] as? String, let source = run["source"] as? String,
+               let offset = run["start"] as? Int, let end = run["end"] as? Int, end > offset,
+               !(source as NSString).substring(with: NSRange(location: offset, length: end - offset)).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return FullscreenCharacter(selector: selector, source: source, offset: offset)
+            }
+        }
+        return nil
+    }
+
+    private func fullscreenCharacterIsVisible(_ character: FullscreenCharacter, in app: XCUIApplication) -> Bool {
+        fullscreenVisibleRuns(app).contains { run in
+            guard let start = run["start"] as? Int, let end = run["end"] as? Int else { return false }
+            return run["selector"] as? String == character.selector && run["source"] as? String == character.source &&
+                start <= character.offset && end > character.offset
+        }
+    }
+    private func fullscreenCharacterPoint(_ character: FullscreenCharacter, in app: XCUIApplication) -> CGPoint? {
+        for run in fullscreenVisibleRuns(app) {
+            if run["selector"] as? String == character.selector, run["source"] as? String == character.source,
+               run["start"] as? Int == character.offset, let x = run["left"] as? Double, let y = run["top"] as? Double { return CGPoint(x: x, y: y) }
+        }
+        return nil
+    }
+
+    private func fullscreenVisibleText(_ app: XCUIApplication) -> String? {
+        app.webViews.staticTexts.allElementsBoundByIndex.first {
+            !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && fullscreenTextIsVisible($0.label, in: app)
+        }?.label
+    }
+
+    private func fullscreenTextIsVisible(_ text: String, in app: XCUIApplication) -> Bool {
+        let bounds = app.webViews.firstMatch.frame
+        return app.webViews.staticTexts.matching(NSPredicate(format: "label == %@", text)).allElementsBoundByIndex.contains {
+            let rect = $0.frame
+            return rect.width > 0 && rect.height > 0 && rect.minX > bounds.minX + 5 &&
+                rect.maxX < bounds.maxX - 5 && rect.maxY > bounds.minY && rect.minY < bounds.maxY
+        }
+    }
+
+    private func fullscreenWait(
+        timeout: TimeInterval = 60,
+        _ condition: @escaping () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: timeout), .completed, file: file, line: line)
+    }
+}
+
+extension ReadingUITests {
     // The host backs up the original data, explicitly launches the isolated app,
     // and restarts it between this method and the offline verification method.
     func testIssue17IntegratedMode() throws {
@@ -68,7 +407,6 @@ extension ReadingUITests {
             let input = app.textViews["question-input"]; issue12Reach(input, in: app)
             input.tap(); input.typeText(followText)
             let send = app.buttons["question-send"]; issue12Reach(send, in: app); send.tap()
-            app.alerts.buttons["发送并查找书内依据"].tap()
             let failed = app.staticTexts["question-status"]
             expectation(for: NSPredicate { _, _ in failed.label.hasPrefix("保存失败") }, evaluatedWith: app)
             waitForExpectations(timeout: 20); evidence("issue17-answer-real-save-failure", app)
@@ -133,12 +471,7 @@ extension ReadingUITests {
         app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"].tap(); waitForBody(app)
         app.buttons["目录与书签"].tap(); app.buttons["添加书签"].tap()
         XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
-        app.buttons["已读范围"].tap()
-        for chapter in [0, 2] {
-            app.tables["read-chapters"].cells["read-chapter-" + String(chapter)].tap()
-            app.alerts.buttons["确认已读"].tap()
-        }
-        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["书内搜索"].tap()
+        app.buttons["书内搜索"].tap()
         print("I17_BEFORE_REBUILD"); Thread.sleep(forTimeInterval: 3)
         app.buttons["重新准备"].tap(); evidence("issue17-rebuild-started-with-business-records", app)
         app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap(); waitForBody(app)
@@ -506,7 +839,7 @@ extension ReadingUITests {
         XCTAssertTrue(app.staticTexts["profile-wordmark"].exists)
         XCTAssertEqual(
             app.staticTexts["profile-motto"].label,
-            "一盏照书的灯，AI 照亮你读不懂的地方"
+            "一盏照书的灯"
         )
 
         let service = app.buttons["profile-ai-service"]
@@ -519,7 +852,7 @@ extension ReadingUITests {
         let about = app.buttons["profile-about"]
         XCTAssertTrue(about.exists)
         XCTAssertGreaterThanOrEqual(about.frame.height, 66)
-        XCTAssertTrue(app.staticTexts["profile-storage-disclosure"].exists)
+        XCTAssertFalse(app.staticTexts["profile-storage-disclosure"].exists)
         attachDesignSurface("issue28-profile-normal-375-light", app)
 
         appearance.tap()
@@ -577,6 +910,7 @@ extension ReadingUITests {
         let ask = app.buttons["reader-ask-book"]
         XCTAssertTrue(ask.waitForExistence(timeout: 15))
         XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15))
+        fullscreenWait { app.buttons["reader-contents"].isEnabled && app.buttons["reader-settings"].isEnabled }
 
         let toolbar = app.otherElements["reader-toolbar"]
         XCTAssertTrue(toolbar.exists)
@@ -606,9 +940,6 @@ extension ReadingUITests {
         app.buttons["完成"].tap()
         XCTAssertTrue(ask.waitForExistence(timeout: 5))
 
-        let paragraph = app.webViews.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "当下地下侍立之人")
-        ).firstMatch
         for (index, mode) in ["滚动", "仿真", "分页"].enumerated() {
             if index > 0 {
                 app.terminate()
@@ -621,18 +952,18 @@ extension ReadingUITests {
             }
             let readerSettings = app.buttons["reader-settings"]
             XCTAssertTrue(readerSettings.waitForExistence(timeout: 15), mode)
+            fullscreenWait { readerSettings.isEnabled && readerSettings.isHittable }
             readerSettings.tap()
             XCTAssertTrue(app.navigationBars["阅读设置"].waitForExistence(timeout: 10), mode)
             app.segmentedControls.buttons[mode].tap()
             app.buttons["完成"].tap()
             XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15), mode)
-            XCTAssertTrue(paragraph.waitForExistence(timeout: 10), mode)
-            Thread.sleep(forTimeInterval: 0.45)
+            fullscreenWait(timeout: 15) { readerSettings.isEnabled && self.fullscreenSelectableParagraph(app) != nil }
             XCTAssertTrue(ask.waitForExistence(timeout: 5), mode)
             XCTAssertTrue(ask.isHittable, mode)
         }
 
-        XCTAssertTrue(paragraph.waitForExistence(timeout: 10))
+        let paragraph = try XCTUnwrap(fullscreenSelectableParagraph(app))
         paragraph.press(forDuration: 1.3)
         attachDesignSurface("issue29-selection-375-light", app)
         for identifier in ["selection-highlight", "selection-note", "selection-ask"] {
@@ -650,13 +981,21 @@ extension ReadingUITests {
         app.buttons["continue-reading"].tap()
         XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15))
-        let darkParagraph = app.webViews.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "当下地下侍立之人")
-        ).firstMatch
-        XCTAssertTrue(darkParagraph.waitForExistence(timeout: 10))
+        fullscreenWait(timeout: 15) { app.buttons["reader-settings"].isEnabled && self.fullscreenSelectableParagraph(app) != nil }
+        let darkParagraph = try XCTUnwrap(fullscreenSelectableParagraph(app))
         darkParagraph.press(forDuration: 1.3)
         XCTAssertTrue(app.buttons["selection-ask"].waitForExistence(timeout: 5))
         attachDesignSurface("issue29-selection-375-dark", app)
+    }
+    private func fullscreenSelectableParagraph(_ app: XCUIApplication) -> XCUIElement? {
+        let viewport = app.webViews.firstMatch.frame
+        let top = max(viewport.minY, app.otherElements["reader-toolbar"].frame.maxY + 8)
+        let bottom = min(viewport.maxY, app.otherElements["reader-footer"].frame.minY - 8)
+        return app.webViews.staticTexts.allElementsBoundByIndex.first {
+            let rect = $0.frame
+            return $0.label.count > 16 && rect.minX >= viewport.minX + 5 &&
+                rect.maxX <= viewport.maxX - 5 && rect.minY >= top && rect.maxY <= bottom && $0.isHittable
+        }
     }
 
     func testIssue30QuestionSheetLayoutDraftAndIdentity() throws {
@@ -796,90 +1135,30 @@ extension ReadingUITests {
 }
 
 final class ReadingUITests: XCTestCase {
-    func testIssue13RangeNavigationAndRealHTTP() {
-        let app = issue12App()
-        questionService(app, format: "OpenAI", model: "ui13", address: "http://127.0.0.1:18773/v1")
-        let book = app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
-        expectation(for: NSPredicate { _, _ in (book.value as? String ?? "").contains("书内资料可用") }, evaluatedWith: app)
-        waitForExpectations(timeout: 60)
-        book.tap(); waitForBody(app)
-        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
-        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-0"].label.contains("未确认已读"))
-        for chapter in [2, 0] {
-            app.tables["read-chapters"].cells["read-chapter-" + String(chapter)].tap()
-            app.alerts.buttons["确认已读"].tap()
-            XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-" + String(chapter)].label.contains("已确认已读"))
-        }
-        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"))
-        evidence("issue13-disjoint-confirmed-range", app)
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.tables["book-navigation"].cells.element(boundBy: 1).tap(); waitForBody(app)
-        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
-        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"), "Jumping to chapter 2 must not mark it read")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.tables["book-navigation"].cells.element(boundBy: 0).tap(); waitForBody(app)
-        settings(app, mode: "仿真", dark: false)
-        curlTurn(app, forward: true, cancel: true)
-        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
-        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"), "Curl prefetch and cancellation never grant access")
-        evidence("issue13-navigation-and-prefetch-no-read-growth", app)
-        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap()
-        settings(app, mode: "滚动", dark: false)
+    func testEmptyQuestionCloseDoesNotCreateHistoryOrRangeControls() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["红楼梦"].waitForExistence(timeout: 15))
+        tab("tab-conversations", label: "对话", in: app).tap()
+        let history = app.tables["question-history"]
+        XCTAssertTrue(history.cells.firstMatch.waitForExistence(timeout: 10))
+        let before = history.cells.count
+        tab("tab-library", label: "书架", in: app).tap()
+        app.buttons["continue-reading"].tap(); waitForBody(app)
+        app.buttons["目录与书签"].tap()
+        XCTAssertFalse(app.buttons["已读范围"].exists)
+        app.buttons["完成"].tap()
         app.buttons["reader-ask-book"].tap()
-        XCTAssertTrue(app.segmentedControls["question-reading-range"].buttons["整书"].isSelected)
-        app.segmentedControls["question-reading-range"].buttons["仅已读"].tap()
-        issue12Send("UI13-RESTRICTED 全书余辉与停机有哪些联系？", app: app)
-        XCTAssertTrue(app.staticTexts["question-scope"].label.contains("可能缺少后文解释"))
-        evidence("issue13-restricted-answer-and-notice", app)
-        let follow = app.buttons["question-follow-up"]; issue12Reach(follow, in: app); follow.tap()
-        XCTAssertTrue(app.segmentedControls["question-reading-range"].buttons["仅已读"].isSelected)
-        app.buttons["关闭"].tap(); app.buttons["书架"].tap()
-        app.collectionViews["library"].cells[bookID].tap(); waitForBody(app)
-        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
-        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-0"].label.contains("未确认已读"))
-        evidence("issue13-other-book-no-read-record", app)
-        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap(); app.buttons["书架"].tap()
-    }
-    func testIssue13NativeSelectionAndReferenceRange() {
-        let app = issue12App()
-        app.tabBars.buttons["书架"].tap()
-        app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"].tap(); waitForBody(app)
-        searchBook(app, query: "第七日发生电池漏液", count: 1)
-        app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
-        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
-        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"))
-        evidence("issue13-search-jump-no-read-growth", app)
-        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap()
-        searchBook(app, query: "初版规则规定所有停机指令", count: 1)
-        app.tables["book-search-results"].cells.firstMatch.tap(); waitForBody(app)
-        let paragraph = app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "初版规则规定所有停机指令")).firstMatch
-        XCTAssertTrue(paragraph.waitForExistence(timeout: 5)); paragraph.press(forDuration: 1.3); noteMenu("提问", in: app)
-        app.segmentedControls["question-reading-range"].buttons["仅已读"].tap()
-        issue12Send("UI13-NATIVE 这条停机规则是什么意思？", app: app)
-        evidence("issue13-native-selected-restricted-answer", app)
-        let reference = app.buttons["question-reference-0"]; issue12Reach(reference, in: app); reference.tap()
-        app.buttons["跳转原文"].tap(); waitForBody(app)
-        app.buttons["回提问处"].tap(); waitForBody(app)
-        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
-        for chapter in [0, 2] { XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-" + String(chapter)].label.contains("已确认已读")) }
-        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"))
-        evidence("issue13-reference-return-no-read-growth", app)
-        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap(); app.buttons["书架"].tap()
-    }
-    func testIssue13RestartRangeAndOfflineHistory() {
-        let app = issue12App()
-        app.tabBars.buttons["书架"].tap()
-        app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"].tap(); waitForBody(app)
-        app.buttons["目录与书签"].tap(); app.buttons["已读范围"].tap()
-        for chapter in [0, 2] { XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-" + String(chapter)].label.contains("已确认已读")) }
-        XCTAssertTrue(app.tables["read-chapters"].cells["read-chapter-1"].label.contains("未确认已读"))
-        evidence("issue13-restart-range", app)
-        app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["完成"].tap(); app.buttons["书架"].tap()
-        app.tabBars.buttons["对话"].tap(); issue12Row("UI13-RESTRICTED", app: app).tap()
-        XCTAssertTrue(app.segmentedControls["question-reading-range"].buttons["仅已读"].isSelected)
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "仅依据本次实际材料解释。")).firstMatch.exists)
-        evidence("issue13-offline-range-draft-and-history", app)
-        app.buttons["关闭"].tap()
+        XCTAssertTrue(app.textViews["question-input"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.segmentedControls["question-reading-range"].exists)
+        XCTAssertFalse(app.buttons["问答范围说明"].exists)
+        XCTAssertFalse(app.staticTexts["question-scope"].exists)
+        app.buttons["question-close"].tap()
+        app.buttons["书架"].tap()
+        tab("tab-conversations", label: "对话", in: app).tap()
+        XCTAssertEqual(history.cells.count, before)
     }
     private func issue12App() -> XCUIApplication {
         continueAfterFailure = false
@@ -899,9 +1178,7 @@ final class ReadingUITests: XCTestCase {
         let input = app.textViews["question-input"]; issue12Reach(input, in: app)
         input.tap(); input.typeText(text)
         let send = app.buttons["question-send"]; issue12Reach(send, in: app); send.tap()
-        XCTAssertTrue(app.alerts["发送书内原文"].waitForExistence(timeout: 5))
-        evidence("issue12-disclosure-" + text, app)
-        app.alerts.buttons["发送并查找书内依据"].tap(); questionSaved(app)
+        questionSaved(app)
     }
     private func issue12Row(_ name: String, app: XCUIApplication) -> XCUIElement {
         app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
@@ -919,7 +1196,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(app.alerts["资料尚未准备完整"].waitForExistence(timeout: 5))
         evidence("issue12-explicit-local-choice", app)
         app.alerts.buttons["仅用选文解释"].tap(); questionSaved(app)
-        XCTAssertTrue(app.staticTexts["question-scope"].label.contains("主动选择局部"))
+        XCTAssertFalse(app.staticTexts["question-scope"].exists)
         evidence("issue12-local-first-saved", app)
         app.buttons["关闭"].tap(); app.buttons["书架"].tap()
     }
@@ -2603,15 +2880,25 @@ extension ReadingUITests {
         if !app.tables["ai-services"].exists { app.buttons["AI 服务"].tap() }
         app.buttons["添加"].tap()
         let name = "I9-" + format + "-" + model + "-" + UUID().uuidString.prefix(6)
+        app.cells["ai-provider"].tap(); app.buttons["自定义服务"].tap()
+        app.cells["ai-advanced"].tap()
+        XCTAssertTrue(app.tables["ai-advanced-editor"].waitForExistence(timeout: 5))
         app.textFields["ai-name"].tap(); app.textFields["ai-name"].typeText(name)
         if format == "Anthropic" { app.cells["ai-format"].tap(); app.buttons["Anthropic"].tap() }
         app.textFields["ai-address"].tap(); app.textFields["ai-address"].typeText(address)
         app.textFields["ai-model"].tap(); app.textFields["ai-model"].typeText(model)
+        app.navigationBars["高级设置"].buttons.element(boundBy: 0).tap()
         app.secureTextFields["ai-key"].tap(); app.secureTextFields["ai-key"].typeText("not-a-real-credential")
+        if app.sheets["保存密码？"].waitForExistence(timeout: 1) { app.sheets["保存密码？"].buttons["以后"].tap() }
         app.navigationBars.buttons["保存"].tap()
-        app.tables["ai-services"].cells.containing(NSPredicate(format: "label CONTAINS %@", name)).firstMatch.tap()
-        app.tables.firstMatch.swipeUp()
-        app.cells["ai-select"].tap(); app.alerts.buttons["使用已保存配置"].tap()
+        XCTAssertTrue(app.alerts["AI 服务发送说明"].waitForExistence(timeout: 5))
+        app.alerts["AI 服务发送说明"].buttons["同意并保存"].tap()
+        XCTAssertTrue(app.alerts["已保存"].waitForExistence(timeout: 5))
+        app.alerts["已保存"].buttons["完成"].tap()
+        app.navigationBars.buttons["切换"].tap()
+        app.sheets["切换服务"].buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch.tap()
+        XCTAssertTrue(app.alerts["已切换服务"].waitForExistence(timeout: 5))
+        app.alerts["已切换服务"].buttons["完成"].tap()
         app.tabBars.buttons["书架"].tap()
     }
     private func questionSelection(_ app: XCUIApplication) {
@@ -2632,13 +2919,10 @@ extension ReadingUITests {
         let input = app.textViews["question-input"]
         input.tap(); input.typeText(text)
         app.buttons["question-send"].tap()
-        XCTAssertTrue(app.alerts["发送书内原文"].waitForExistence(timeout: 5))
-        evidence("issue9-disclosure-before-send", app)
-        app.alerts.buttons["发送并查找书内依据"].tap()
     }
     private func questionSaved(_ app: XCUIApplication) {
         let label = app.staticTexts["question-status"]
-        let ready = NSPredicate { _, _ in label.label == "回答已保存" }
+        let ready = NSPredicate { _, _ in label.label.hasPrefix("回答已保存") }
         expectation(for: ready, evaluatedWith: app); waitForExpectations(timeout: 15)
     }
     func testSemanticBackgroundCitationActualHTTPJumpAndReturn() throws {
@@ -2684,7 +2968,7 @@ extension ReadingUITests {
             sendSelectedQuestion(app, text: "Why sentence? I9 " + format)
             questionSaved(app)
             XCTAssertTrue(app.staticTexts["question-answer"].label.contains("依据原文"))
-            XCTAssertTrue(app.staticTexts["question-scope"].label.contains("未通过本次原文核验"))
+            XCTAssertTrue(app.staticTexts["question-status"].label.contains("未通过本次原文核验"))
             app.scrollViews["question-scroll"].swipeUp()
             let reference = app.buttons["question-reference-0"]
             XCTAssertTrue(reference.waitForExistence(timeout: 5)); reference.tap()
@@ -2736,7 +3020,7 @@ extension ReadingUITests {
         questionService(app, format: "Anthropic", model: "no-evidence")
         questionSelection(app); sendSelectedQuestion(app, text: "I9 no evidence unknown answer")
         questionSaved(app)
-        XCTAssertTrue(app.staticTexts["question-scope"].label.contains("未提供可核查"))
+        XCTAssertTrue(app.staticTexts["question-status"].label.contains("未提供可核查"))
         XCTAssertFalse(app.buttons["question-reference-0"].exists)
         evidence("issue9-no-evidence-no-valid-links", app)
     }
@@ -2838,7 +3122,7 @@ extension ReadingUITests {
         XCTAssertTrue(local.waitForExistence(timeout: 5))
         local.tap()
         questionSaved(app)
-        XCTAssertTrue(app.staticTexts["question-scope"].label.contains("主动选择局部"))
+        XCTAssertFalse(app.staticTexts["question-scope"].exists)
         evidence("issue18-current-explicit-local-answer-saved", app)
     }
 
@@ -2865,7 +3149,7 @@ extension ReadingUITests {
         XCTAssertEqual(app.staticTexts["question-status"].label, "问题草稿")
         app.buttons["question-send"].tap(); app.alerts.buttons["仅用选文解释"].tap()
         questionSaved(app)
-        XCTAssertTrue(app.staticTexts["question-scope"].label.contains("主动选择局部"))
+        XCTAssertFalse(app.staticTexts["question-scope"].exists)
         evidence("issue9-explicit-local-saved-scope", app)
         print("I9_RESTORE_PREPARATION_FAULT")
         Thread.sleep(forTimeInterval: 3)
@@ -2910,7 +3194,7 @@ extension ReadingUITests {
         app.tabBars.buttons["对话"].tap()
         app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'I9 small draft'")).firstMatch.tap()
         XCTAssertEqual(app.textViews["question-input"].value as? String, "I9 small draft")
-        app.buttons["question-send"].tap(); app.alerts.buttons["发送并查找书内依据"].tap(); questionSaved(app)
+        app.buttons["question-send"].tap(); questionSaved(app)
         app.scrollViews["question-scroll"].swipeUp(); XCTAssertTrue(app.buttons["question-reference-0"].isHittable)
         evidence("issue9-small-large-text-saved-answer", app)
     }
@@ -2942,7 +3226,7 @@ extension ReadingUITests {
         XCTAssertTrue(app.staticTexts["question-status"].label.contains("上次生成已中断"))
         XCTAssertFalse(app.staticTexts["question-answer"].exists)
         evidence("issue14-http-inflight-restart-incomplete", app)
-        app.buttons["question-send"].tap(); app.alerts.buttons["发送并查找书内依据"].tap()
+        app.buttons["question-send"].tap()
         let saved = NSPredicate { _, _ in app.staticTexts["question-status"].label == "回答已保存" }
         expectation(for: saved, evaluatedWith: app); waitForExpectations(timeout: 65)
         XCTAssertEqual(app.staticTexts["question-answer"].label, "BG14-OpenAI-20")
@@ -3034,7 +3318,7 @@ extension ReadingUITests {
         XCTAssertTrue(app.staticTexts["question-status"].label.contains("上次生成已中断"))
         XCTAssertFalse(app.staticTexts["question-answer"].exists)
         evidence("issue14-terminated-restart-incomplete", app)
-        app.buttons["question-send"].tap(); app.alerts.buttons["发送并查找书内依据"].tap()
+        app.buttons["question-send"].tap()
         let saved = NSPredicate { _, _ in app.staticTexts["question-status"].label == "回答已保存" }
         expectation(for: saved, evaluatedWith: app); waitForExpectations(timeout: 30)
         evidence("issue14-active-new-request-same-record", app)

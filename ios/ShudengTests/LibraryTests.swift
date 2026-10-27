@@ -44,6 +44,24 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(try reopened.location(for: first.book.id)?.locations["cssSelector"]?.string, "#c2-p10")
         _ = try await reopened.open(first.book)
     }
+    func testLegacyReadChaptersAreIgnoredWithoutLosingReadingState() async throws {
+        let library = try LibraryStore(root: root)
+        let book = try await library.importBook(from: fixture()).book
+        await library.preparation.stop(bookID: book.id)
+        let location = Locator(href: AnyURL(string: "OEBPS/ch2.xhtml")!, mediaType: .xhtml,
+                               text: .init(highlight: "C2-P10"))
+        try library.saveLocation(location, for: book.id)
+        var values = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("library.json"))) as? [[String: Any]])
+        values[0]["readChapters"] = [0, 2]
+        try JSONSerialization.data(withJSONObject: values).write(to: root.appendingPathComponent("library.json"), options: .atomic)
+        let reopened = try LibraryStore(root: root)
+        XCTAssertEqual(reopened.books.first?.id, book.id)
+        XCTAssertEqual(try reopened.location(for: book.id), location)
+        try reopened.saveLocation(location, for: book.id)
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("library.json"))) as? [[String: Any]])
+        XCTAssertNil(saved.first?["readChapters"])
+        XCTAssertEqual(saved.first?["title"] as? String, book.title)
+    }
 }
 
 extension LibraryTests {
@@ -487,7 +505,7 @@ extension LibraryTests {
         await library.preparation.waitForCurrentWork()
         let configurations = try AIConfigurationStore(root: root, secrets: secrets)
         let configuration = AIConfiguration(name: "Issue16 controlled", format: .openAI, address: "http://127.0.0.1:18776/v1", model: "slow")
-        try configurations.save(configuration, newKey: "not-a-real-credential"); try configurations.select(configuration.id)
+        try configurations.save(configuration, newKey: "not-a-real-credential", confirmingSendConsent: true); try configurations.select(configuration.id)
         func record(_ book: Book, marker: String) throws -> ReadingQuestion {
             let json = try indexRows(root.appendingPathComponent("book-index.sqlite"), "SELECT locator FROM fragments WHERE book_id='\(book.id)' LIMIT 1")[0][0]
             let locator = try XCTUnwrap(Locator(json: JSONValue(jsonString: json, warnings: nil), warnings: nil))

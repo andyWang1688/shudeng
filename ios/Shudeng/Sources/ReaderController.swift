@@ -13,9 +13,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private let content = UIView()
     private let toolbar = ReaderToolbarView()
     private let footer = ReaderFooterView()
+    private var controlsAnimationGeneration = 0
     private let statusPanel = UIView()
     private let status = UILabel()
     private let retry = UIButton(type: .system)
+    private var statusRequestedVisible = true
+    private var statusIsError = false
     private var pendingLocation: Locator?
     private var saveFailed = false
     private var loading = true
@@ -24,16 +27,54 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private var navigating = false
     private var navigationFailed = false
     private var curl: ReaderCurlController?
+    private var curlActivationObserver: InputObservableToken?
     private var curlBusy = false
     private var curlSize = CGSize.zero
     private var leaving = false
     private var changingBounds = false
     private var openingTarget: Locator?
+    // The reader's exact source occurrence survives a chain of reflows. Native
+    // page locations are still used for pagination, snapshots and progress.
+    private var readingFocus: Locator?
+    private var restoringFocus: Locator?
+    private var settlingFocus = false
+    private var focusObservation = 0
+    #if DEBUG
+    private var acceptanceObservation = 0
+    private struct ToolbarLatency: Encodable {
+        let action: Int
+        let started: CFTimeInterval
+        let targetHidden: Bool
+        var chromeMS: Double?
+        var usableMS: Double?
+        var rebuilds = 0
+        var curlStarts = 0
+        var curlStops = 0
+        var enteredLoading = false
+        var enteredCurlBusy = false
+        var navigatorGeneration: Int
+        var controlsHidden = false
+        var interactive = false
+    }
+    private var toolbarLatency: ToolbarLatency?
+    private var toolbarLatencyAction = 0
+    private var acceptanceNavigatorGeneration = 1
+    #endif
+    private var questionCitation: Locator?
     private var highlightedIDs: [UUID] = []
+    private struct HighlightExpectation: Encodable {
+        let id: String
+        let selector: String?
+        let before: String?
+        let highlight: String?
+    }
     var questionOrigin: Locator? {
         didSet {
             updateReferenceNavigation()
-            if questionOrigin == nil { navigator.apply(decorations: [], in: "question-citation") }
+            if questionOrigin == nil {
+                questionCitation = nil
+                navigator.apply(decorations: [], in: "question-citation")
+            }
         }
     }
     var referenceReturn: (() -> Void)?
@@ -48,8 +89,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         bookRevision = library.revision(for: book.id)
         self.publication = publication
         openingTarget = target
+        questionCitation = target
         settings = book.readingSettings ?? ReadingSettings()
-        navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: library.location(for: book.id),
+        let saved = try library.location(for: book.id)
+        readingFocus = saved?.text.highlight == nil ? nil : saved
+        restoringFocus = readingFocus
+        navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: saved,
                                                    config: Self.configuration(settings))
         super.init(nibName: nil, bundle: nil)
         navigator.delegate = self
@@ -131,19 +176,23 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         ])
         updateReferenceNavigation()
         content.accessibilityIdentifier = "reading-content"
-        for child in [toolbar, content, footer, statusPanel] {
+        // Chrome overlays a fixed reading viewport. Tapping the middle changes
+        // only its visibility, never pagination or the live navigator's bounds.
+        for child in [content, toolbar, footer, statusPanel] {
             child.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(child)
         }
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            content.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)
+        ])
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             toolbar.heightAnchor.constraint(equalToConstant: 51),
-            content.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
             content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            content.bottomAnchor.constraint(equalTo: footer.topAnchor),
             footer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
@@ -153,17 +202,22 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             statusPanel.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8)
         ])
         attachNavigator()
+        updateControlsAccessibilityAction()
         NotificationCenter.default.addObserver(self, selector: #selector(background), name: UIApplication.willResignActiveNotification, object: nil)
     }
     deinit { NotificationCenter.default.removeObserver(self) }
     private func attachNavigator() {
         applyHighlights()
-        if questionOrigin != nil, let target = openingTarget {
+        if questionOrigin != nil, let target = questionCitation {
             navigator.apply(decorations: [Decoration(id: "citation", locator: target, style: .highlight(tint: BookDesign.selection))], in: "question-citation")
         }
         navigator.observeDecorationInteractions(inGroup: "notes") { [weak self] event in
-            guard let self, !self.loading, !self.curlBusy, !self.navigating,
-                  let note = self.library.books.first(where: { $0.id == self.book.id })?.notes?.first(where: { $0.id.uuidString == event.decoration.id }) else { return }
+            guard let self, !self.loading, !self.curlBusy, !self.navigating else { return }
+            if self.toolbarHidden {
+                self.toggleToolbar()
+                return
+            }
+            guard let note = self.library.books.first(where: { $0.id == self.book.id })?.notes?.first(where: { $0.id.uuidString == event.decoration.id }) else { return }
             self.edit(note)
         }
         addChild(navigator)
@@ -214,9 +268,15 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         status.textColor = error ? BookDesign.error : BookDesign.secondary
         retry.isHidden = !retryVisible
         retry.isUserInteractionEnabled = retryVisible
-        statusPanel.alpha = visible ? 1 : 0
-        statusPanel.isUserInteractionEnabled = visible
-        if visible { view.bringSubviewToFront(statusPanel) }
+        statusRequestedVisible = visible
+        statusIsError = error
+        updateStatusVisibility()
+    }
+    private func updateStatusVisibility() {
+        let showStatus = statusRequestedVisible && (!toolbarHidden || statusIsError)
+        statusPanel.alpha = showStatus ? 1 : 0
+        statusPanel.isUserInteractionEnabled = showStatus
+        if showStatus { view.bringSubviewToFront(statusPanel) }
     }
     @objc private func openSettings() {
         let controller = ReadingSettingsController(settings: settings) { [weak self] changed in
@@ -228,9 +288,14 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         present(sheet, animated: true)
     }
     private func changeSettings(_ changed: ReadingSettings, force: Bool = false, restoring userLocation: Locator? = nil) {
-        guard (changed != settings || force), !loading, !curlBusy else { return }
+        guard (changed != settings || force), !leaving, !loading, !curlBusy, !navigating else { return }
+        // Capture the displayed user page before stop() reparents the native
+        // reader. A prefetched neighbor is never a source for reading focus.
+        let displayedFocus = readingFocus ?? userLocation ?? curl?.userLocation
         stopCurl()
         loading = true
+        recordToolbarLatency()
+        invalidateVisibleTextForAcceptance()
         toolbar.settingsButton.isEnabled = false
         toolbar.contentsButton.isEnabled = false
         content.isUserInteractionEnabled = false
@@ -238,15 +303,13 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         navigator.delegate = nil
         Task {
             do {
-                var location = userLocation ?? navigator.currentLocation ?? pendingLocation
-                // An interrupted prefetch is showing a temporary neighbor. Its
-                // JavaScript anchor must not overwrite the explicit user page.
-                if userLocation == nil,
-                   force || changed.scroll != settings.scroll || changed.pageCurl != settings.pageCurl || changed.fontSize != settings.fontSize,
-                   case let .success(anchor as [String: String]) = await navigator.evaluateJavaScript(Self.visibleTextAnchor) {
-                    location?.locations.cssSelector = anchor["selector"]
-                    location?.text = Locator.Text(after: anchor["after"], before: anchor["before"], highlight: anchor["highlight"])
-                }
+                var location = displayedFocus
+                if location == nil { location = await captureReadingFocus() }
+                location = location ?? navigator.currentLocation ?? pendingLocation
+                readingFocus = location?.text.highlight == nil ? nil : location
+                restoringFocus = readingFocus
+                settlingFocus = false
+                focusObservation += 1
                 // A fresh navigator emits its initial location even for theme-only
                 // changes. Save only its settled location with the new preferences.
                 let next = try EPUBNavigatorViewController(publication: publication,
@@ -261,6 +324,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 navigator.view.removeFromSuperview()
                 navigator.removeFromParent()
                 navigator = next
+                recordToolbarLatency(rebuilt: true)
                 settings = changed
                 setRetryVisible(saveFailed)
                 navigator.delegate = self
@@ -269,7 +333,83 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             } catch { showError() }
         }
     }
-    // Transient reflow anchor; native locations remain the persisted format.
+    private func captureReadingFocus() async -> Locator? {
+        let reader = navigator
+        guard var location = await reader.refreshLocationFromViewport(),
+              case let .success(anchor as [String: String]) = await reader.evaluateJavaScript(Self.visibleTextAnchor),
+              reader === navigator, let selector = anchor["selector"],
+              let quote = anchor["highlight"], !quote.isEmpty else { return nil }
+        location.locations.cssSelector = selector
+        location.locations.otherLocations.removeValue(forKey: "domRange")
+        location.text = Locator.Text(after: anchor["after"], before: anchor["before"], highlight: quote)
+        return location
+    }
+    private func sameNativePage(_ lhs: Locator?, _ rhs: Locator) -> Bool {
+        guard let lhs else { return false }
+        return lhs.href == rhs.href &&
+            abs((lhs.locations.progression ?? 0) - (rhs.locations.progression ?? 0)) < 0.0001
+    }
+    private func locationKeepingFocus(_ native: Locator) -> Locator {
+        guard let readingFocus, readingFocus.href.removingFragment() == native.href.removingFragment() else { return native }
+        var result = native
+        result.locations.cssSelector = readingFocus.locations.cssSelector
+        result.locations.otherLocations["domRange"] = readingFocus.locations.otherLocations["domRange"]
+        result.text = readingFocus.text
+        return result
+    }
+    // Initial-location callbacks only say that Readium loaded a page. Verify
+    // the requested occurrence before publishing it or preparing curl neighbors.
+    private func settleRestoredFocus(_ target: Locator) {
+        guard !settlingFocus else { return }
+        settlingFocus = true
+        let reader = navigator
+        Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            var retried = false
+            for _ in 0..<60 {
+                guard !leaving, !changingBounds, reader === navigator else { return }
+                if let actual = await reader.refreshLocationFromViewport(),
+                   actual.href.removingFragment() == target.href.removingFragment(),
+                   case let .success(visible as Bool) = await reader.evaluateJavaScript(Self.targetIsVisible(target, fullyVisible: true)), visible {
+                    restoringFocus = nil
+                    settlingFocus = false
+                    if settings.pageCurl == true {
+                        pendingLocation = actual
+                        startCurl()
+                    } else { publishNativeLocation(actual, userMoved: false) }
+                    return
+                }
+                if !retried {
+                    retried = true
+                    _ = await reader.go(to: target, options: .none)
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard reader === navigator, !leaving else { return }
+            settlingFocus = false
+            showError()
+        }
+    }
+    private func publishNativeLocation(_ locator: Locator, userMoved: Bool) {
+        focusObservation += 1
+        let observation = focusObservation
+        let reader = navigator
+        if userMoved { readingFocus = nil }
+        pendingLocation = locator
+        Task {
+            let captured = readingFocus == nil ? await captureReadingFocus() : nil
+            guard observation == focusObservation, reader === navigator, !leaving, !changingBounds, !navigating else { return }
+            if readingFocus == nil { readingFocus = captured }
+            loading = false
+            content.isUserInteractionEnabled = true
+            toolbar.settingsButton.isEnabled = true
+            toolbar.contentsButton.isEnabled = true
+            updateLocationChrome(locator)
+            hideSelectionMenu()
+            recordVisibleTextForAcceptance()
+            persistPending()
+        }
+    }
     // Preserve the first visible character, including inside a long paragraph,
     // with element-scoped quotation context rather than a paragraph start.
     fileprivate static let visibleTextAnchor = """
@@ -311,12 +451,108 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
       return null;
     })()
     """
+    // Fixture acceptance reads fresh DOM character geometry, independently of
+    // the curl cache and the restoration target. No release accessibility data.
+    private func invalidateVisibleTextForAcceptance() {
+        #if DEBUG
+        acceptanceObservation += 1
+        content.accessibilityValue = nil
+        recordToolbarLatency()
+        #endif
+    }
+    private func recordVisibleTextForAcceptance() {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("--reader-acceptance"),
+              arguments.contains(where: { $0.hasPrefix("--design-fixture=") }) else { return }
+        acceptanceObservation += 1
+        let observation = acceptanceObservation
+        let observed = navigator
+        let hostSize = content.bounds.size
+        Task {
+            let result = await observed.evaluateJavaScript("""
+            (() => {
+              const runs = [], walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+              const visible = r => r.width > 0 && r.height > 0 && r.left >= 0 &&
+                r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight;
+              let node;
+              while ((node = walker.nextNode())) {
+                if (!node.textContent.trim()) continue;
+                const root = node.parentElement.closest('[id]') || node.parentElement, path = [];
+                for (let el = root; el; el = el.parentElement) {
+                  if (el.id) { path.unshift('#' + CSS.escape(el.id)); break; }
+                  let index = 1;
+                  for (let sib = el.previousElementSibling; sib; sib = sib.previousElementSibling)
+                    if (sib.localName === el.localName) index++;
+                  path.unshift(el.localName + ':nth-of-type(' + index + ')');
+                }
+                const prefix = document.createRange();
+                prefix.selectNodeContents(root); prefix.setEnd(node, 0);
+                const base = prefix.toString().length, range = document.createRange();
+                let run = null;
+                for (let offset = 0; offset < node.length; offset++) {
+                  range.setStart(node, offset); range.setEnd(node, offset + 1);
+                  const rect = Array.from(range.getClientRects()).find(visible);
+                  if (!rect) { run = null; continue; }
+                  if (run && run.end === base + offset) run.end++;
+                  else {
+                    run = {selector: path.join(' > '), source: root.textContent, start: base + offset, end: base + offset + 1, left: rect.left, top: rect.top};
+                    runs.push(run);
+                  }
+                }
+              }
+              return JSON.stringify({width: innerWidth, height: innerHeight, runs});
+            })()
+            """)
+            guard observation == acceptanceObservation, observed === navigator, !loading, !curlBusy, !navigating,
+                  hostSize == content.bounds.size, case let .success(value as String) = result,
+                  let data = value.data(using: .utf8),
+                  var observationValue = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            // A scrolling WKWebView's DOM viewport can be shorter than its
+            // native frame (for example by 9pt). Keep the DOM geometry exact;
+            // validate observation freshness against its same-sample host size.
+            observationValue["hostWidth"] = hostSize.width
+            observationValue["hostHeight"] = hostSize.height
+            observationValue["observation"] = observation
+            recordToolbarLatency(usable: true)
+            if let toolbarLatency { observationValue["toolbarLatency"] = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(toolbarLatency)) }
+            guard let encoded = try? JSONSerialization.data(withJSONObject: observationValue),
+                  let json = String(data: encoded, encoding: .utf8) else { return }
+            content.accessibilityValue = json
+        }
+        #endif
+    }
     @objc private func toggleToolbar() {
-        toolbarHidden.toggle()
-        // The 51 pt strip always remains reserved so revealing the controls
-        // never repaginates or moves the reader's current line.
-        toolbar.setSideControlsHidden(toolbarHidden)
+        guard !leaving, !changingBounds, !navigationFailed, navigator.currentSelection == nil else { return }
+        beginToolbarLatency()
+        setControlsHidden(!toolbarHidden)
+    }
+    private func setControlsHidden(_ hidden: Bool) {
+        controlsAnimationGeneration += 1
+        let generation = controlsAnimationGeneration
+        toolbarHidden = hidden
         hideSelectionMenu()
+        for control in [toolbar, footer] {
+            // Reveal before fading in; stop hit testing and accessibility
+            // immediately when fading out so the live page receives taps.
+            control.isHidden = false
+            control.accessibilityElementsHidden = hidden
+            control.isUserInteractionEnabled = !hidden
+        }
+        updateStatusVisibility()
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.2, delay: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseInOut]) {
+            self.toolbar.alpha = hidden ? 0 : 1
+            self.footer.alpha = hidden ? 0 : 1
+        } completion: { [weak self] _ in
+            guard let self, self.controlsAnimationGeneration == generation else { return }
+            for control in [self.toolbar, self.footer] { control.isHidden = hidden }
+            self.recordToolbarLatency(chrome: true)
+            self.recordVisibleTextForAcceptance()
+        }
+        updateControlsAccessibilityAction()
+    }
+    private func updateControlsAccessibilityAction() {
         view.accessibilityCustomActions = [
             UIAccessibilityCustomAction(
                 name: toolbarHidden ? "显示工具栏" : "隐藏工具栏",
@@ -325,7 +561,49 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             )
         ]
     }
+    private func beginToolbarLatency() {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("--toolbar-latency-acceptance"), arguments.contains("--reader-acceptance"),
+              arguments.contains(where: { $0.hasPrefix("--design-fixture=") }) else { return }
+        toolbarLatencyAction += 1
+        toolbarLatency = ToolbarLatency(action: toolbarLatencyAction, started: CACurrentMediaTime(),
+            targetHidden: !toolbarHidden, navigatorGeneration: acceptanceNavigatorGeneration)
+        recordToolbarLatency()
+        #endif
+    }
+    private func recordToolbarLatency(chrome: Bool = false, rebuilt: Bool = false, usable: Bool = false, curlStarted: Bool = false, curlStopped: Bool = false) {
+        #if DEBUG
+        guard var measurement = toolbarLatency else { return }
+        if rebuilt { acceptanceNavigatorGeneration += 1; measurement.rebuilds += 1 }
+        if curlStarted { measurement.curlStarts += 1 }
+        if curlStopped { measurement.curlStops += 1 }
+        measurement.navigatorGeneration = acceptanceNavigatorGeneration
+        measurement.enteredLoading = measurement.enteredLoading || loading
+        measurement.enteredCurlBusy = measurement.enteredCurlBusy || curlBusy
+        measurement.controlsHidden = toolbarHidden
+        measurement.interactive = content.isUserInteractionEnabled && !loading && !curlBusy && !navigating
+        let elapsed = (CACurrentMediaTime() - measurement.started) * 1000
+        if chrome, measurement.chromeMS == nil { measurement.chromeMS = elapsed }
+        let finished = usable && measurement.interactive && measurement.usableMS == nil
+        if finished { measurement.usableMS = elapsed }
+        toolbarLatency = measurement
+        guard let encoded = try? JSONEncoder().encode(measurement),
+              let fields = try? JSONSerialization.jsonObject(with: encoded) else { return }
+        var observation: [String: Any] = [:]
+        if let value = content.accessibilityValue, let data = value.data(using: .utf8),
+           let current = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { observation = current }
+        observation["toolbarLatency"] = fields
+        if let data = try? JSONSerialization.data(withJSONObject: observation),
+           let value = String(data: data, encoding: .utf8) { content.accessibilityValue = value }
+        if finished, let value = String(data: encoded, encoding: .utf8) { print("[ReaderToolbarAcceptance] \(value)") }
+        #endif
+    }
     func navigator(_ navigator: VisualNavigator, didTapAt point: CGPoint) {
+        guard curl == nil else { return }
+        handleReadingTap(at: point)
+    }
+    private func handleReadingTap(at point: CGPoint) {
         // A long-press release is also delivered as a tap before Readium has
         // finished propagating the selection. Keep the just-presented menu.
         if selectionMenu != nil {
@@ -342,12 +620,32 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         guard point.x > content.bounds.width * 0.3, point.x < content.bounds.width * 0.7 else { return }
         toggleToolbar()
     }
+    private func setCurlActivationObserver(enabled: Bool) {
+        if let token = curlActivationObserver { navigator.removeObserver(token) }
+        curlActivationObserver = nil
+        guard enabled, let activeCurl = curl else { return }
+        let reader = navigator
+        // A curl drag can reparent the live WebView before its pointer ends.
+        // Start a fresh activation recognizer on every settled page, including
+        // a cancelled turn, so an old drag cannot swallow the next tap.
+        curlActivationObserver = reader.addObserver(.activate { [weak self, weak reader, weak activeCurl] event in
+            guard let self, let reader, let activeCurl, self.navigator === reader,
+                  self.curl === activeCurl, !self.curlBusy else { return false }
+            self.handleReadingTap(at: event.location)
+            return false
+        })
+    }
     func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
         guard !leaving, !changingBounds, navigator === self.navigator, !loadFailed, !navigating, !navigationFailed else { return }
         if let target = openingTarget {
             openingTarget = nil
+            restoringFocus = nil
             loading = false
             navigate(to: target)
+            return
+        }
+        if let restoringFocus {
+            settleRestoredFocus(restoringFocus)
             return
         }
         if let curl {
@@ -355,19 +653,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             stopCurl()
         }
         if settings.pageCurl == true {
+            if !loading { readingFocus = nil }
             pendingLocation = locator
             startCurl()
             return
         }
-        loading = false
-        content.isUserInteractionEnabled = true
-        toolbar.settingsButton.isEnabled = true
-        toolbar.contentsButton.isEnabled = true
-        pendingLocation = locator
-        updateLocationChrome(locator)
-        hideSelectionMenu()
-        // Never replace a native pagination location with a paragraph start.
-        persistPending()
+        publishNativeLocation(locator, userMoved: !loading && !sameNativePage(pendingLocation, locator))
     }
     private func setRetryVisible(_ visible: Bool) {
         retry.isHidden = !visible
@@ -378,7 +669,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         guard !leaving, !changingBounds, !loading, !curlBusy, !navigating, !navigationFailed, let pendingLocation else { return }
         do {
             try library.checkRevision(bookRevision, for: book.id)
-            try library.saveReadingState(pendingLocation, settings: settings, for: book.id)
+            try library.saveReadingState(locationKeepingFocus(pendingLocation), settings: settings, for: book.id)
             saveFailed = false
             setStatus("阅读位置已保存", visible: false)
         } catch {
@@ -522,6 +813,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             content.isUserInteractionEnabled = arrived
             navigationFailed = !arrived
             if arrived, let actual = navigator.currentLocation {
+                focusObservation += 1
+                readingFocus = target.text.highlight == nil ? await captureReadingFocus() : target
+                restoringFocus = nil
                 pendingLocation = actual
                 updateLocationChrome(actual)
                 if settings.pageCurl == true { startCurl() }
@@ -538,18 +832,26 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
 
     private func startCurl() {
         guard !leaving, curl == nil else { return }
+        recordToolbarLatency(curlStarted: true)
         navigator.nativePaginationEnabled = false
         curlSize = content.bounds.size
         let controller = ReaderCurlController(reader: navigator, publication: publication, host: content, parent: self,
+            requiredFocus: readingFocus,
             highlightsReady: { [weak self] in await self?.highlightsReady() ?? false },
             busy: { [weak self] in
                 guard let self else { return }
                 self.curlBusy = true
+                self.setCurlActivationObserver(enabled: false)
+                self.invalidateVisibleTextForAcceptance()
                 self.toolbar.settingsButton.isEnabled = false
                 self.toolbar.contentsButton.isEnabled = false
                 self.setStatus("正在准备翻页…", visible: true)
-            }, settled: { [weak self] actual, commit in
+            }, userTurned: { [weak self] focus in
+                self?.focusObservation += 1
+                self?.readingFocus = focus
+            }, settled: { [weak self] actual, pageFocus, commit in
                 guard let self else { return }
+                if self.readingFocus == nil { self.readingFocus = pageFocus }
                 self.curlBusy = false; self.loading = false
                 self.content.isUserInteractionEnabled = true
                 self.toolbar.settingsButton.isEnabled = true
@@ -565,6 +867,8 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                     self.setStatus("阅读位置已保存", visible: false)
                 }
                 self.view.setNeedsLayout()
+                self.setCurlActivationObserver(enabled: true)
+                self.recordVisibleTextForAcceptance()
             }, failed: { [weak self] in self?.curlPreparationFailed() })
         curl = controller
         addChild(controller)
@@ -575,6 +879,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         controller.start()
     }
     private func stopCurl() {
+        setCurlActivationObserver(enabled: false)
+        if curl != nil { recordToolbarLatency(curlStopped: true) }
+        invalidateVisibleTextForAcceptance()
         curl?.stop()
         curl = nil; curlBusy = false
     }
@@ -596,11 +903,8 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
-        guard settings.pageCurl == true else { return }
-        let userLocation = curl?.userLocation ?? pendingLocation
-        #if DEBUG
-        NSLog("SHUDENG_CURL rotate user=%@ actual=%@", userLocation?.description ?? "live", navigator.currentLocation?.description ?? "nil")
-        #endif
+        let userLocation = readingFocus ?? curl?.userLocation ?? pendingLocation
+        focusObservation += 1
         changingBounds = true
         stopCurl()
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in
@@ -633,17 +937,55 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private func highlightsReady() async -> Bool {
         let reader = navigator
         guard let href = reader.currentLocation?.href.removingFragment() else { return false }
-        let expected = notes.filter { (try? $0.location().href.removingFragment()) == href }.map { $0.id.uuidString }
+        let expected = notes.compactMap { note -> HighlightExpectation? in
+            guard let locator = try? note.location(),
+                  locator.href.removingFragment() == href else { return nil }
+            return HighlightExpectation(
+                id: note.id.uuidString,
+                selector: locator.locations.cssSelector,
+                before: locator.text.before,
+                highlight: locator.text.highlight
+            )
+        }
         guard !expected.isEmpty else { return true }
-        let ids = String(data: try! JSONEncoder().encode(expected), encoding: .utf8)!
+        let expectations = String(data: try! JSONEncoder().encode(expected), encoding: .utf8)!
         let script = """
         (() => {
-          const items = readium.getDecorations('notes').items;
-          return \(ids).every(id => {
-            const item = items.find(i => i.decoration.id === id);
+          const expectations = \(expectations), items = readium.getDecorations('notes').items;
+          function point(root, target) {
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            let seen = 0, node;
+            while ((node = walker.nextNode())) {
+              const next = seen + node.textContent.length;
+              if (target <= next) return { node, offset: target - seen };
+              seen = next;
+            }
+            return null;
+          }
+          function visible(note) {
+            if (!note.selector || !note.highlight) return true;
+            const root = document.querySelector(note.selector);
+            if (!root) return false;
+            const text = root.textContent;
+            let start = note.before != null && text.slice(0, note.before.length) === note.before
+              ? note.before.length : text.indexOf(note.highlight);
+            if (start < 0) return false;
+            const first = point(root, start), last = point(root, start + note.highlight.length);
+            if (!first || !last) return false;
+            const range = document.createRange();
+            range.setStart(first.node, first.offset); range.setEnd(last.node, last.offset);
+            return Array.from(range.getClientRects()).some(rect =>
+              rect.right > 0 && rect.left < innerWidth && rect.bottom > 0 && rect.top < innerHeight);
+          }
+          return expectations.every(note => {
+            if (!visible(note)) return true;
+            const item = items.find(i => i.decoration.id === note.id);
             if (!item || !item.container || !item.container.childElementCount) return false;
-            const loc = item.decoration.locator, root = document.querySelector(loc.locations.cssSelector);
-            if (!root || item.range.toString() !== loc.text.highlight) return false;
+            const loc = item.decoration.locator;
+            if (note.highlight != null && item.range.toString() !== note.highlight) return false;
+            if (note.before == null || !loc.locations.cssSelector) return true;
+            const root = document.querySelector(loc.locations.cssSelector);
+            if (!root) return false;
             const prefix = document.createRange(); prefix.selectNodeContents(root);
             prefix.setEnd(item.range.startContainer, item.range.startOffset);
             return prefix.toString() === loc.text.before;
@@ -760,6 +1102,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private func showQuestionReference(_ target: Locator, origin: Locator) {
         guard !loading, !navigating, !curlBusy else { return }
         questionOrigin = origin
+        questionCitation = target
         hideSelectionMenu()
         navigator.clearSelection()
         navigator.apply(decorations: [Decoration(id: "citation", locator: target, style: .highlight(tint: BookDesign.selection))], in: "question-citation")
@@ -991,7 +1334,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     })()
     """
 
-    private static func targetIsVisible(_ locator: Locator) -> String {
+    fileprivate static func targetIsVisible(_ locator: Locator, fullyVisible: Bool = false) -> String {
         // Verify the exact occurrence inside its original element. A matching
         // sentence elsewhere or a successful go() alone is insufficient.
         """
@@ -1004,7 +1347,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             else root = document.body;
           } catch (_) { return false; }
           if (!root) return false;
-          const visible = r => r.width > 0 && r.height > 0 && r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight;
+          const visible = r => r.width > 0 && r.height > 0 && (\(fullyVisible)
+            ? r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight
+            : r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight);
           let offset = 0;
           if (quote.highlight) {
             const text = root.textContent, before = quote.before || '';
@@ -1124,14 +1469,6 @@ final class ReaderToolbarView: UIView {
         backButton.configuration?.title = reference ? "返回问答" : nil
         backButton.accessibilityLabel = reference ? "返回问答" : "书架"
         backButton.accessibilityHint = reference ? nil : "返回书架"
-    }
-
-    func setSideControlsHidden(_ hidden: Bool) {
-        for control in [backButton, contentsButton, settingsButton] {
-            control.alpha = hidden ? 0 : 1
-            control.accessibilityElementsHidden = hidden
-            control.isUserInteractionEnabled = !hidden
-        }
     }
 
     private func configure(_ button: UIButton, image: String) {
@@ -1382,9 +1719,7 @@ private final class BookNavigationController: UITableViewController {
         tabs.addTarget(self, action: #selector(refresh), for: .valueChanged)
         navigationItem.titleView = tabs
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: "完成", style: .done, target: self, action: #selector(done))
-        toolbarItems = [UIBarButtonItem(title: "书内搜索", style: .plain, target: self, action: #selector(openSearch)),
-                        UIBarButtonItem(systemItem: .flexibleSpace),
-                        UIBarButtonItem(title: "已读范围", style: .plain, target: self, action: #selector(openReadChapters))]
+        toolbarItems = [UIBarButtonItem(title: "书内搜索", style: .plain, target: self, action: #selector(openSearch))]
         navigationController?.setToolbarHidden(false, animated: false)
         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addBookmark))
         navigationItem.rightBarButtonItem?.accessibilityLabel = "添加书签"
@@ -1404,9 +1739,6 @@ private final class BookNavigationController: UITableViewController {
     @objc private func openSearch() {
         guard let book = library.books.first(where: { $0.id == bookID }) else { return }
         navigationController?.pushViewController(BookSearchController(library: library, book: book, navigate: navigate), animated: true)
-    }
-    @objc private func openReadChapters() {
-        navigationController?.pushViewController(ReadChaptersController(publication: publication, library: library, bookID: bookID), animated: true)
     }
     @objc private func done() { dismiss(animated: true) }
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? { feedback }
@@ -1534,7 +1866,7 @@ private final class ReadingSettingsController: UIViewController {
             button.widthAnchor.constraint(equalToConstant: 44).isActive = true
         }
         for control in [mode, theme, decrease, increase] { control.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true }
-        let stack = UIStackView(arrangedSubviews: [label("阅读方式"), mode, label("字号"), font, label("主题"), theme, label("仅用于本书；点击完成后应用并保存。")])
+        let stack = UIStackView(arrangedSubviews: [label("阅读方式"), mode, label("字号"), font, label("主题"), theme, label("仅用于本书")])
         stack.axis = .vertical
         stack.spacing = 20
         let scroll = UIScrollView()
@@ -1579,78 +1911,6 @@ private final class ReadingSettingsController: UIViewController {
     }
 }
 
-@MainActor
-private final class ReadChaptersController: UITableViewController {
-    private let publication: Publication
-    private let library: LibraryStore
-    private let bookID: String
-    private var names: [String] = []
-    private var feedback: String?
-    init(publication: Publication, library: LibraryStore, bookID: String) {
-        self.publication = publication; self.library = library; self.bookID = bookID
-        super.init(style: .insetGrouped)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        title = "已读范围"; tableView.accessibilityIdentifier = "read-chapters"
-        names = publication.readingOrder.enumerated().map { $0.element.title ?? "正文\($0.offset + 1)" }
-        Task {
-            if let contents = try? await publication.tableOfContents().get() {
-                func titles(_ links: [Link], href: AnyURL) -> [String] {
-                    links.flatMap { link in
-                        (link.url().removingFragment() == href ? [link.title ?? "未命名章节"] : []) + titles(link.children, href: href)
-                    }
-                }
-                names = publication.readingOrder.enumerated().map { index, link in
-                    let values = titles(contents, href: link.url().removingFragment())
-                    return values.isEmpty ? names[index] : values.joined(separator: "、")
-                }
-                tableView.reloadData()
-            }
-        }
-    }
-    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        "请明确确认已读章节；可跳章勾选，不包含之前未勾选的章节。"
-    }
-    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        (feedback.map { $0 + "\n" } ?? "") + "每项对应原书一个完整正文文件，可能包含多个目录小节；全部读过才确认。仅浏览、翻页、搜索、引用往返及内部预取不会改变已读范围。旧阅读进度不推算为已读；仅已读可能缺少后文解释。"
-    }
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { names.count }
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-        cell.textLabel?.text = names[indexPath.row]
-        let read = library.readScope(for: bookID).permits(chapter: indexPath.row, ordinal: 0)
-        cell.detailTextLabel?.text = read ? "已确认已读" : "未确认已读"
-        cell.isAccessibilityElement = true
-        cell.accessibilityLabel = names[indexPath.row] + "，" + (read ? "已确认已读" : "未确认已读")
-        for label in [cell.textLabel, cell.detailTextLabel] { label?.numberOfLines = 0; label?.adjustsFontForContentSizeCategory = true }
-        cell.accessoryType = read ? .checkmark : .none
-        cell.accessibilityIdentifier = "read-chapter-\(indexPath.row)"
-        return cell
-    }
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true)
-        let chapter = indexPath.row
-        let read = library.readScope(for: bookID).permits(chapter: chapter, ordinal: 0)
-        let alert = UIAlertController(title: read ? "移出已读范围？" : "确认整项已读？",
-            message: names[chapter] + "\n包含此正文文件的全部内容及目录小节；确认后可用于仅已读问答。其他章节不受影响。", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: read ? "移出" : "确认已读", style: .default) { [weak self] _ in self?.save(chapter, read: !read) })
-        present(alert, animated: true)
-    }
-    private func save(_ chapter: Int, read: Bool) {
-        do {
-            try library.setChapterRead(chapter, read: read, for: bookID)
-            feedback = "已读范围已保存"; tableView.reloadData()
-        } catch {
-            let alert = UIAlertController(title: "已读范围保存失败", message: "此次变更未生效；仅已读仍使用上次已保存范围。", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-            alert.addAction(UIAlertAction(title: "重试保存", style: .default) { [weak self] _ in self?.save(chapter, read: read) })
-            present(alert, animated: true)
-        }
-    }
-}
 
 // Application-owned adaptation of the original isolated reader probe.
 // Only settled live pages report progress; all neighbor navigation stays private.
@@ -1684,9 +1944,11 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
     private let publication: Publication
     private unowned let host: UIView
     private let highlightsReady: () async -> Bool
+    private var requiredFocus: Locator?
     private unowned let readerParent: UIViewController
     private let busy: () -> Void
-    private let settled: (Locator, Bool) -> Void
+    private let userTurned: (Locator) -> Void
+    private let settled: (Locator, Locator, Bool) -> Void
     private let failed: () -> Void
     private let pager = UIPageViewController(transitionStyle: .pageCurl, navigationOrientation: .horizontal,
         options: [.spineLocation: UIPageViewController.SpineLocation.min.rawValue])
@@ -1703,11 +1965,14 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
     private var task: Task<Void, Never>?
 
     init(reader: EPUBNavigatorViewController, publication: Publication, host: UIView, parent: UIViewController,
+         requiredFocus: Locator?,
          highlightsReady: @escaping () async -> Bool,
-         busy: @escaping () -> Void, settled: @escaping (Locator, Bool) -> Void, failed: @escaping () -> Void) {
+         busy: @escaping () -> Void, userTurned: @escaping (Locator) -> Void,
+         settled: @escaping (Locator, Locator, Bool) -> Void, failed: @escaping () -> Void) {
         self.reader = reader; self.publication = publication; self.host = host; readerParent = parent
         self.highlightsReady = highlightsReady
-        self.busy = busy; self.settled = settled; self.failed = failed
+        self.requiredFocus = requiredFocus
+        self.busy = busy; self.userTurned = userTurned; self.settled = settled; self.failed = failed
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -1720,6 +1985,10 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
         pager.didMove(toParent: self)
         pager.dataSource = self; pager.delegate = self
         pager.isDoubleSided = false
+        // Curl owns drag transitions. Its default tap turns compete with the
+        // live WebView's middle-tap controls and must not turn a page instead.
+        let tapGestures = pager.gestureRecognizers.compactMap { $0 as? UITapGestureRecognizer }
+        tapGestures.forEach { $0.isEnabled = false }
     }
     func start() {
         working = true; busy()
@@ -1778,31 +2047,45 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
         return CurlPage(locator: page.locator, image: page.image)
     }
     private func capture(_ locator: Locator) async throws -> Page {
-        guard await highlightsReady(), active else { throw MoveError.failed }
+        let highlights = await highlightsReady()
+        guard highlights, active else {
+            trace("capture unavailable highlights=\(highlights) active=\(active)")
+            throw MoveError.highlights
+        }
+        // Highlight/layout work can finish after the initial location callback.
+        // Give the snapshot and its cache entry the native viewport's position,
+        // rather than the stale callback that started preparation.
+        guard let native = await reader.refreshLocationFromViewport(),
+              native.href == locator.href else { throw MoveError.display }
         let first = await reader.firstVisibleElementLocator()
-        var reflowLocation = locator
+        var reflowLocation = native
         if case let .success(anchor as [String: String]) = await reader.evaluateJavaScript(ReaderController.visibleTextAnchor) {
             reflowLocation.locations.cssSelector = anchor["selector"]
+            reflowLocation.locations.otherLocations.removeValue(forKey: "domRange")
             reflowLocation.text = Locator.Text(after: anchor["after"], before: anchor["before"], highlight: anchor["highlight"])
         }
         let image = UIGraphicsImageRenderer(bounds: reader.view.bounds).image { _ in
             reader.view.drawHierarchy(in: reader.view.bounds, afterScreenUpdates: true)
         }
-        return Page(locator: locator, reflowLocation: reflowLocation, image: image, selector: first?.locations.cssSelector)
+        return Page(locator: native, reflowLocation: reflowLocation, image: image, selector: first?.locations.cssSelector)
     }
     private func trace(_ message: String) {
         #if DEBUG
         NSLog("SHUDENG_CURL %@", message)
         #endif
     }
-    private enum MoveError: Error { case failed }
+    private enum MoveError: Error { case highlights, failed, display }
 
     // Success requires BOTH go completion and a matching location callback.
     // The timer is only a failure watchdog; it never makes a page ready.
     private func move(to expected: Locator? = nil, direction: Int = 0) async throws -> Locator? {
         guard active, let start = reader.currentLocation else { throw MoveError.failed }
         trace("move start=\(key(start)) target=\(expected.map(key) ?? String(direction))")
-        if let expected, same(start, expected) { return start }
+        if let expected, same(start, expected),
+           expected.locations.cssSelector == nil ||
+           start.locations.cssSelector == expected.locations.cssSelector {
+            return start
+        }
         let location: Locator? = try await withCheckedThrowingContinuation { continuation in
             var finished = false
             var accepted = false
@@ -1867,7 +2150,8 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
     }
 
     private func prepare() async {
-        guard active, let original = reader.currentLocation else { return }
+        guard active, var original = reader.currentLocation else { return }
+        trace("prepare start=\(key(original))")
         userLocation = original
         working = true; busy()
         pager.view.isUserInteractionEnabled = false
@@ -1876,7 +2160,8 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
             if let existing = cache[key(original)] { record = existing }
             else { record = try await capture(original) }
             guard active else { return }
-            userLocation = record.reflowLocation
+            original = record.locator
+            userLocation = requiredFocus ?? record.reflowLocation
             let page = CurlPage(locator: original, image: record.image)
             current = page
             pager.setViewControllers([page], direction: .forward, animated: false)
@@ -1887,35 +2172,45 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
                 if let location = try await move(direction: 1) {
                     var neighbor = try await capture(location)
                     neighbor.previous = key(original); neighbor.previousKnown = true
-                    store(neighbor); record.following = key(location); following = controller(record.following)
-                    _ = try await move(to: original)
+                    store(neighbor); record.following = key(neighbor.locator); following = controller(record.following)
+                    _ = try await move(direction: -1)
                 }
                 record.nextKnown = true
+                trace("prepare nextKnown")
             }
             if !record.previousKnown || (record.previous != nil && previous == nil) {
                 if let location = try await move(direction: -1) {
                     var neighbor = try await capture(location)
                     neighbor.following = key(original); neighbor.nextKnown = true
-                    store(neighbor); record.previous = key(location); previous = controller(record.previous)
-                    _ = try await move(to: original)
+                    store(neighbor); record.previous = key(neighbor.locator); previous = controller(record.previous)
+                    _ = try await move(direction: 1)
                 }
                 record.previousKnown = true
+                trace("prepare previousKnown")
             }
             guard active else { return }
             store(record)
             attach(to: page, container: page.view)
             let displayed = await reader.firstVisibleElementLocator()
             guard active else { return }
-            guard let actual = reader.currentLocation, same(actual, original), displayed?.locations.cssSelector == record.selector else {
+            let exactVisible: Bool
+            if case let .success(visible as Bool) = await reader.evaluateJavaScript(ReaderController.targetIsVisible(requiredFocus ?? record.reflowLocation, fullyVisible: true)) {
+                exactVisible = visible
+            } else { exactVisible = false }
+            guard let actual = await reader.refreshLocationFromViewport(), same(actual, original),
+                  displayed?.locations.cssSelector == record.selector, exactVisible else {
                 trace("display mismatch native=\(reader.currentLocation.map(key) ?? "nil") expected=\(key(original)) selector=\(displayed?.locations.cssSelector ?? "nil") wanted=\(record.selector ?? "nil")")
-                throw MoveError.failed
+                throw MoveError.display
             }
             pager.dataSource = nil; pager.dataSource = self
             pager.view.isUserInteractionEnabled = true
             working = false
             trace("ready \(key(actual))")
-            settled(actual, true)
-        } catch { if active { working = true; failed() } }
+            settled(actual, record.reflowLocation, true)
+        } catch {
+            trace("prepare failed \(error)")
+            if active { working = true; failed() }
+        }
     }
     func pageViewController(_ pageViewController: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
         guard !working else { return nil }
@@ -1937,12 +2232,16 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
                             previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
         guard completed, let target = pager.viewControllers?.first as? CurlPage else {
             // No navigation and no save on a cancelled drag.
-            if let current { settled(current.locator, false) }
+            if let current { settled(current.locator, cache[key(current.locator)]?.reflowLocation ?? current.locator, false) }
             return
         }
         // Publish the completed target synchronously, before go or prepare can
         // suspend. Rotation must keep it even while the reader visits neighbors.
         userLocation = cache[key(target.locator)]?.reflowLocation ?? target.locator
+        requiredFocus = userLocation
+        // Unlike prepare(), this event is an explicit completed user action.
+        // Publish synchronously so interruption/rotation retains its target.
+        if let userLocation { userTurned(userLocation) }
         working = true; pager.view.isUserInteractionEnabled = false
         task = Task {
             guard active else { return }

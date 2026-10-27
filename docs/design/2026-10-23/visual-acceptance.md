@@ -1,4 +1,6 @@
-# 原生视觉验收矩阵
+# 原生视觉验收矩阵（历史基准）
+
+> 2026-10-25 更新：以下记录证明 2026-10-23 设计稿按当时标准完成，不代表满足当前界面基准。后续视觉以 [ADR-0010](../../adr/0010-reading-first-progressive-disclosure.md)和 [#34](https://github.com/andyWang1688/shudeng/issues/34)为准。
 
 状态：2026-10-25，#24-#31 的固定夹具及全部页面已通过逐页视觉验收；#32 的聚焦 Release 验收已独立终审通过，30/30 tests、Release 构建与原 Shudeng Small 正常启动通过。尚未完成完整旧测试集、完整 VoiceOver、真机与 App Store 分发。
 
@@ -56,7 +58,7 @@
 | 书架 | 品牌行、31pt 左标题、搜索、继续阅读完整信息、两列书库、平直底栏 | [Issue #25 证据](issue25-shelf-acceptance.md) | 通过 |
 | 笔记 | 页头、说明、四类过滤、书封分组、宋体引用、系统字体笔记、返回原文 | [Issue #26 证据](issue26-notes-acceptance.md) | 通过 |
 | 对话 | 页头、说明、搜索、书封分组、问题摘要、时间、平直底栏 | [Issue #27 验收证据](issue27-conversations-acceptance.md) | 通过 |
-| 我的 | 左标题、居中品牌、原图标、紧凑设置行、服务摘要、原文发送说明 | [Issue #28 验收证据](issue28-profile-implementation.md) | 通过 |
+| 我的 | 左标题、居中品牌、原图标、紧凑设置行、服务摘要；隐私与发送详情从“关于”进入 | [Issue #28 验收证据](issue28-profile-implementation.md)、[Issue #40 页面层级审计](../../design/2026-10-26/page-hierarchy-audit.md) | 通过 |
 | 阅读 | 51pt 顶部栏、29pt 正文边距、20pt/1.95 宋体、居中提问胶囊 | [Issue #29 证据](issue29-reader-implementation.md) | 通过 |
 | 选文 | 高亮、工具栏位置、高亮/笔记/提问入口、无遮挡 | [Issue #29 证据](issue29-reader-implementation.md) | 通过 |
 | 问答 | 76% 底部面板、把手、品牌头、用户右侧气泡、AI 左侧身份、附件、输入区 | [Issue #30 实施证据](issue30-question-panel-implementation.md) | 通过 |

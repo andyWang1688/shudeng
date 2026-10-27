@@ -122,19 +122,14 @@ final class ProfileController: UIViewController {
         let motto = BookDesign.label("一盏照书的灯", size: 19)
         motto.font = BookDesign.readingFont(19)
         motto.textAlignment = .center
-
-        let subtitle = BookDesign.label("AI 照亮你读不懂的地方", size: 12, colour: BookDesign.secondary)
-        subtitle.textAlignment = .center
-        motto.accessibilityLabel = "一盏照书的灯，AI 照亮你读不懂的地方"
+        motto.accessibilityLabel = "一盏照书的灯"
         motto.accessibilityIdentifier = "profile-motto"
-        subtitle.isAccessibilityElement = false
 
-        let identity = UIStackView(arrangedSubviews: [icon, wordmark, motto, subtitle])
+        let identity = UIStackView(arrangedSubviews: [icon, wordmark, motto])
         identity.axis = .vertical
         identity.alignment = .center
         identity.spacing = 13
         identity.setCustomSpacing(12, after: wordmark)
-        identity.setCustomSpacing(4, after: motto)
         identity.accessibilityIdentifier = "profile-brand"
 
         let settings = UIStackView()
@@ -149,19 +144,11 @@ final class ProfileController: UIViewController {
         settings.addArrangedSubview(separator())
         settings.accessibilityIdentifier = "profile-settings"
 
-        let caption = BookDesign.label(
-            "阅读进度、笔记与对话保存在本机。\n提问时，问题与必要原文会发送给你选择的 AI 服务。",
-            size: 11,
-            colour: BookDesign.secondary
-        )
-        caption.accessibilityIdentifier = "profile-storage-disclosure"
-
-        let page = UIStackView(arrangedSubviews: [title, identity, settings, caption])
+        let page = UIStackView(arrangedSubviews: [title, identity, settings])
         page.axis = .vertical
         page.spacing = 0
         page.setCustomSpacing(28, after: title)
         page.setCustomSpacing(30, after: identity)
-        page.setCustomSpacing(20, after: settings)
 
         let scroll = UIScrollView()
         scroll.alwaysBounceVertical = true
@@ -230,7 +217,7 @@ final class ProfileController: UIViewController {
     }
 
     private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
     }
 
     private var selectedAppearance: UIUserInterfaceStyle {
@@ -420,7 +407,7 @@ private final class AboutController: UIViewController {
         motto.font = BookDesign.readingFont(15)
         motto.textAlignment = .center
 
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
         let release = BookDesign.label("版本 " + version, size: 12, colour: BookDesign.secondary)
         release.textAlignment = .center
 
@@ -431,7 +418,14 @@ private final class AboutController: UIViewController {
         )
         thirdParty.addTarget(self, action: #selector(showLicenses), for: .touchUpInside)
 
-        let group = UIStackView(arrangedSubviews: [separator(), thirdParty, separator()])
+        let privacy = ProfileSettingsRow(
+            symbol: "hand.raised",
+            title: "隐私政策",
+            identifier: "about-privacy-policy"
+        )
+        privacy.addTarget(self, action: #selector(showPrivacy), for: .touchUpInside)
+
+        let group = UIStackView(arrangedSubviews: [separator(), privacy, separator(), thirdParty, separator()])
         group.axis = .vertical
         group.spacing = 0
 
@@ -474,6 +468,10 @@ private final class AboutController: UIViewController {
         line.backgroundColor = BookDesign.line
         line.heightAnchor.constraint(equalToConstant: 1).isActive = true
         return line
+    }
+
+    @objc private func showPrivacy() {
+        navigationController?.pushViewController(AIPrivacyController(), animated: true)
     }
 
     @objc private func showLicenses() {

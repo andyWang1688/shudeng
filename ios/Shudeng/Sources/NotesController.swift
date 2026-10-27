@@ -95,17 +95,87 @@ private enum NoteRecord {
     }
 }
 
+/// Independent presentation preferences for each grouped list, scoped to its library.
+@MainActor
+final class BookGroupListState {
+    private struct Snapshot: Codable {
+        var expanded: [String: Bool] = [:]
+        var offsetY: Double = 0
+    }
+
+    private let file: URL
+    private var snapshot: Snapshot?
+    private var restoredScroll = false
+
+    init(root: URL, page: String) {
+        file = root.appendingPathComponent("\(page)-book-groups.json")
+        snapshot = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(Snapshot.self, from: $0) }
+    }
+
+    func initialize(latestBookID: String?) {
+        guard snapshot == nil, let latestBookID else { return }
+        snapshot = Snapshot(expanded: [latestBookID: true])
+        save()
+    }
+
+    func isExpanded(_ bookID: String, searching: Bool = false) -> Bool {
+        searching || snapshot?.expanded[bookID] == true
+    }
+
+    func toggle(_ bookID: String) {
+        if snapshot == nil { snapshot = Snapshot() }
+        let expanded = isExpanded(bookID)
+        snapshot?.expanded[bookID] = !expanded
+        save()
+    }
+
+    func reload(_ table: UITableView) {
+        let offset = table.contentOffset.y
+        table.reloadData()
+        if restoredScroll {
+            table.layoutIfNeeded()
+            setOffset(offset, in: table)
+        }
+    }
+
+    func restoreScroll(in table: UITableView) {
+        guard !restoredScroll, table.bounds.height > 0 else { return }
+        restoredScroll = true
+        setOffset(CGFloat(snapshot?.offsetY ?? 0), in: table)
+    }
+
+    func rememberScroll(in table: UITableView) {
+        guard restoredScroll, snapshot != nil else { return }
+        snapshot?.offsetY = Double(table.contentOffset.y)
+        save()
+    }
+
+    private func setOffset(_ y: CGFloat, in table: UITableView) {
+        let minimum = -table.adjustedContentInset.top
+        let maximum = max(minimum, table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom)
+        table.setContentOffset(CGPoint(x: 0, y: min(maximum, max(minimum, y))), animated: false)
+    }
+
+    private func save() {
+        guard let snapshot, let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: file, options: .atomic)
+    }
+}
+
 @MainActor
 final class NotesController: UITableViewController {
     private let library: LibraryStore
     private let covers = BookCoverStore()
     private let pageHeader = NotesPageHeader()
+    private let groupState: BookGroupListState
     private var filter: NotesFilter = .all
+    private var query = ""
     private var sections: [(book: Book, records: [NoteRecord])] = []
     private var libraryObserver: NSObjectProtocol?
 
     init(library: LibraryStore) {
         self.library = library
+        groupState = BookGroupListState(root: library.root, page: "notes")
         super.init(style: .plain)
     }
 
@@ -125,6 +195,7 @@ final class NotesController: UITableViewController {
         tableView.separatorStyle = .none
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 190
+        tableView.estimatedSectionHeaderHeight = 53
         tableView.keyboardDismissMode = .onDrag
         tableView.sectionHeaderTopPadding = 0
         tableView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 24, right: 0)
@@ -138,6 +209,12 @@ final class NotesController: UITableViewController {
             refresh()
         }
         pageHeader.setFilter(filter)
+        pageHeader.onSearch = { [weak self] text in
+            guard let self else { return }
+            rememberScroll()
+            query = text
+            refresh()
+        }
         tableView.tableHeaderView = pageHeader
 
         libraryObserver = NotificationCenter.default.addObserver(
@@ -159,6 +236,28 @@ final class NotesController: UITableViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         layoutPageHeader()
+        groupState.restoreScroll(in: tableView)
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        rememberScroll()
+    }
+
+    override func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { rememberScroll() }
+    }
+
+    override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        rememberScroll()
+    }
+
+    private var searching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func rememberScroll() {
+        if !searching, filter == .all { groupState.rememberScroll(in: tableView) }
     }
 
     private func layoutPageHeader() {
@@ -175,12 +274,32 @@ final class NotesController: UITableViewController {
     }
 
     private func refresh() {
-        sections = library.books.filter { $0.removal == nil }.compactMap { book in
-            let records = records(for: book).filter(filter.includes)
+        let all = library.books.filter { $0.removal == nil }.compactMap { book -> (book: Book, records: [NoteRecord])? in
+            let records = records(for: book)
             return records.isEmpty ? nil : (book, records)
         }
-        tableView.reloadData()
+        let latest = all.max { latestTimestamp(in: $0) < latestTimestamp(in: $1) }
+        groupState.initialize(latestBookID: latest?.book.id)
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        sections = all.compactMap { section in
+            let records = section.records.filter { record in
+                filter.includes(record) && (needle.isEmpty || [section.book.title, record.quote, record.body, record.chapter]
+                    .joined(separator: "\n").localizedCaseInsensitiveContains(needle))
+            }
+            return records.isEmpty ? nil : (section.book, records)
+        }
+        groupState.reload(tableView)
         updateEmptyState()
+    }
+
+    private func latestTimestamp(in section: (book: Book, records: [NoteRecord])) -> Date {
+        section.records.compactMap { record in
+            library.recordTimestamp(
+                kind: { if case .bookmark = record { return .bookmark }; return .note }(),
+                bookID: section.book.id,
+                recordID: record.id
+            )
+        }.max() ?? .distantPast
     }
 
     private func records(for book: Book) -> [NoteRecord] {
@@ -197,18 +316,20 @@ final class NotesController: UITableViewController {
             tableView.backgroundView = nil
             return
         }
-        let filtered = filter != .all
+        let filtered = filter != .all || searching
         let empty = NotesEmptyView(
-            title: filtered ? "没有这类阅读痕迹" : "还没有阅读痕迹",
-            detail: filtered
+            title: searching ? "没有找到相关阅读痕迹" : (filtered ? "没有这类阅读痕迹" : "还没有阅读痕迹"),
+            detail: searching ? "换一个关键词，或查看全部阅读痕迹。" : (filtered
                 ? "换一个筛选，看看其他高亮、笔记和书签。"
-                : "阅读时选中原文，即可高亮或写下自己的想法。",
+                : "阅读时选中原文，即可高亮或写下自己的想法。"),
             actionTitle: filtered ? "查看全部" : "去书架读书"
         )
         empty.onAction = { [weak self] in
             guard let self else { return }
             if filtered {
                 filter = .all
+                query = ""
+                pageHeader.clearSearch()
                 pageHeader.setFilter(.all)
                 refresh()
             } else {
@@ -232,7 +353,7 @@ final class NotesController: UITableViewController {
     }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        sections[section].records.count
+        groupState.isExpanded(sections[section].book.id, searching: searching) ? sections[section].records.count : 0
     }
 
     override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
@@ -243,13 +364,23 @@ final class NotesController: UITableViewController {
             book: sections[section].book,
             covers: covers,
             library: library,
-            identifierPrefix: "notes-book"
+            identifierPrefix: "notes-book",
+            countText: "\(sections[section].records.count) 条记录",
+            expanded: groupState.isExpanded(sections[section].book.id, searching: searching),
+            searching: searching
         )
+        let bookID = sections[section].book.id
+        header.onToggle = { [weak self] in
+            guard let self, !searching else { return }
+            groupState.toggle(bookID)
+            refresh()
+            rememberScroll()
+        }
         return header
     }
 
     override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        53
+        UITableView.automaticDimension
     }
 
     override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
@@ -371,6 +502,8 @@ final class NotesController: UITableViewController {
 private final class NotesPageHeader: UIView {
     var onExport: (() -> Void)?
     var onFilter: ((NotesFilter) -> Void)?
+    var onSearch: ((String) -> Void)?
+    private let searchField = UISearchTextField()
     let exportButton = CircularTextlessButton(symbol: "square.and.arrow.up", label: "导出笔记")
     private let filters = NotesFilterBar()
 
@@ -399,7 +532,18 @@ private final class NotesPageHeader: UIView {
         filters.accessibilityIdentifier = "note-filter"
         filters.onSelect = { [weak self] selected in self?.onFilter?(selected) }
 
-        for child in [titleRow, description, filters] {
+        searchField.placeholder = "搜索阅读痕迹"
+        searchField.font = BookDesign.font(15)
+        searchField.adjustsFontForContentSizeCategory = true
+        searchField.textColor = BookDesign.ink
+        searchField.backgroundColor = BookDesign.wash
+        searchField.returnKeyType = .search
+        searchField.accessibilityIdentifier = "notes-search"
+        searchField.addAction(UIAction { [weak self] _ in
+            self?.onSearch?(self?.searchField.text ?? "")
+        }, for: .editingChanged)
+
+        for child in [titleRow, description, filters, searchField] {
             child.translatesAutoresizingMaskIntoConstraints = false
             addSubview(child)
         }
@@ -415,7 +559,11 @@ private final class NotesPageHeader: UIView {
             filters.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             filters.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             filters.heightAnchor.constraint(equalToConstant: 44),
-            filters.bottomAnchor.constraint(equalTo: bottomAnchor)
+            searchField.topAnchor.constraint(equalTo: filters.bottomAnchor, constant: 12),
+            searchField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            searchField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            searchField.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            searchField.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
     }
 
@@ -423,6 +571,10 @@ private final class NotesPageHeader: UIView {
 
     func setFilter(_ filter: NotesFilter) {
         filters.setSelected(filter)
+    }
+
+    func clearSearch() {
+        searchField.text = ""
     }
 }
 

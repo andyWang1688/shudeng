@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0010
 date: 2026-10-23
 ---
 
@@ -10,3 +10,5 @@ date: 2026-10-23
 因此 UIKit 实现必须保留设计中的品牌行、左对齐大标题、平直四栏底栏、继续阅读卡片、底部问答面板和页面层级。系统导航栏、标准 Tab Bar、`insetGrouped` 列表或通用弹层只有在不改变设计结构时才可使用；当前为适配小屏而改成紧凑居中的标题不能作为通过依据。代价是部分页面需要自定义 UIKit 组件并承担布局、无障碍和 Dynamic Type 的维护成本，换来品牌与交互在不同设备上保持一致。
 
 具体实现规范见[书灯 UIKit 界面开发规范](../design/ui-development-standard.md)，证据见[原生视觉验收矩阵](../design/2026-10-23/visual-acceptance.md)。设计稿确认不等于应用已验收；当前原生视觉验收明确为未通过。
+
+2026-10-25 更新：用户在实际使用后选择更简洁、渐进披露的界面方向，本基准已由 [ADR-0010](0010-reading-first-progressive-disclosure.md)取代。本文和对应设计稿保留为历史证据。

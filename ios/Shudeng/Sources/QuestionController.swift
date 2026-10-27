@@ -94,15 +94,13 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     private let composer = UIStackView()
     private let composerDivider = UIView()
     private let composerContext = UIStackView()
+    private let serviceHint = UIButton(type: .system)
     private let input = UITextView()
     private let placeholder = BookDesign.label("问问书灯…", size: 16, colour: BookDesign.secondary)
     private let statusBox = UIView()
     private let status = BookDesign.label(nil, size: 12, colour: BookDesign.secondary)
-    private let scope = BookDesign.label(nil, size: 12, colour: BookDesign.secondary)
     private let quote = BookDesign.label(nil)
     private let selection = UIButton(type: .system)
-    private let range = UISegmentedControl(items: ["整书", "仅已读"])
-    private let help = UIButton(type: .system)
     private let send = UIButton(type: .system)
     private let cancel = UIButton(type: .system)
     private let retry = UIButton(type: .system)
@@ -112,6 +110,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     private var expanded: Set<UUID> = []
     private var rendered = ""
     private var referenceFocus: (identifier: String, range: NSRange?)?
+    private var serviceHintLoaded = false
     private var returningFromReference = false
 
     init(library: LibraryStore, id: UUID, jump: ((Locator, Locator) -> Void)? = nil) {
@@ -146,7 +145,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         composer.layoutMargins = .init(top: 12, left: 20, bottom: 12, right: 20)
         composer.accessibilityIdentifier = "question-composer"
 
-        status.accessibilityIdentifier = "question-status"; scope.accessibilityIdentifier = "question-scope"
+        status.accessibilityIdentifier = "question-status"
         statusBox.accessibilityIdentifier = "question-status-box"
         statusBox.layer.cornerRadius = 12
         status.translatesAutoresizingMaskIntoConstraints = false
@@ -166,18 +165,10 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         selection.tintColor = BookDesign.lamp
         selection.accessibilityLabel = "展开／收起提问选文"
         selection.addTarget(self, action: #selector(toggleQuote), for: .touchUpInside)
-        range.accessibilityIdentifier = "question-reading-range"
-        range.addTarget(self, action: #selector(changeRange), for: .valueChanged)
-        help.setImage(UIImage(systemName: "info.circle"), for: .normal); help.accessibilityLabel = "问答范围说明"
-        help.tintColor = BookDesign.lamp
-        help.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        help.addAction(UIAction { [weak self] _ in self?.rangeInformation() }, for: .touchUpInside)
-        let ranges = UIStackView(arrangedSubviews: [range, help]); ranges.spacing = 8
         composerContext.axis = .vertical
         composerContext.spacing = 4
         composerContext.addArrangedSubview(selection)
         composerContext.addArrangedSubview(quote)
-        composerContext.addArrangedSubview(ranges)
 
         input.font = BookDesign.font(14); input.adjustsFontForContentSizeCategory = true
         input.textColor = BookDesign.ink; input.backgroundColor = .clear
@@ -229,7 +220,22 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         retryGeneration.contentHorizontalAlignment = .leading
         retryGeneration.accessibilityIdentifier = "question-retry-generation"
         retryGeneration.addTarget(self, action: #selector(retryGenerationTapped), for: .touchUpInside)
+        var serviceConfiguration = UIButton.Configuration.plain()
+        serviceConfiguration.image = BookDesign.symbol("lock.shield", size: 13)
+        serviceConfiguration.imagePadding = 5
+        serviceConfiguration.baseForegroundColor = BookDesign.secondary
+        serviceConfiguration.contentInsets = .zero
+        serviceConfiguration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookDesign.font(11, style: .caption1)
+            return outgoing
+        }
+        serviceHint.configuration = serviceConfiguration
+        serviceHint.contentHorizontalAlignment = .leading
+        serviceHint.accessibilityIdentifier = "question-ai-service"
+        serviceHint.addTarget(self, action: #selector(openAISettings), for: .touchUpInside)
         composer.addArrangedSubview(composerContext)
+        composer.addArrangedSubview(serviceHint)
         composer.addArrangedSubview(field)
         composer.addArrangedSubview(cancel)
         composer.addArrangedSubview(retry)
@@ -268,6 +274,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(true, animated: false)
+        refreshServiceHint()
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -289,8 +296,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         selection.isHidden = record.freeQuestion == true || !editable
         quote.text = (record.selectionParts ?? [record.selection]).map(\.quote).joined(separator: "\n")
         quote.isHidden = selection.isHidden || !expanded.contains(id)
-        range.selectedSegmentIndex = record.onlyRead == true ? 1 : 0; range.isEnabled = editable
-        composerContext.isHidden = !editable
+        composerContext.isHidden = !editable || selection.isHidden
         let busy = record.state == .preparing || record.state == .generating
         let unsaved = library.questions.unsaved(id), available = library.sourceAvailable(for: record.bookID)
         send.isHidden = busy
@@ -299,7 +305,11 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         cancel.isHidden = !busy; retry.isHidden = !unsaved
         status.text = unsaved ? "保存失败：当前内容尚未保存，请重试保存。" : record.state.label
         if let failure = record.failure { status.text! += "\n" + failure }
+        let citationWarning = record.notice.components(separatedBy: "\n").dropFirst().joined(separator: "\n")
+        if !citationWarning.isEmpty { status.text! += "\n" + citationWarning }
         if !available { status.text! += "\n原书不可用，记录仍保留；重新导入相同文件后可返回原文。" }
+        if !serviceHintLoaded { refreshServiceHint() }
+        serviceHint.isHidden = record.state == .preparing || record.state == .generating
         status.textColor = unsaved || record.failure != nil ? BookDesign.error : BookDesign.secondary
         if unsaved || record.failure != nil {
             statusBox.backgroundColor = BookDesign.errorWash
@@ -308,8 +318,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         } else {
             statusBox.backgroundColor = .clear
         }
-        statusBox.isHidden = record.state == .complete && !unsaved && record.failure == nil && available
-        scope.text = record.notice.isEmpty ? "仅围绕当前书回答；发送前会告知服务与原文范围。" : record.notice
+        statusBox.isHidden = record.state == .complete && !unsaved && record.failure == nil && available && citationWarning.isEmpty
         materials.isHidden = record.evidence.isEmpty
         retryGeneration.isHidden = record.state != .incomplete || record.failure == nil
         let turns = library.questions.conversation(record.conversation)?.turns ?? [record]
@@ -319,7 +328,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             let offset = scroll.contentOffset
             for view in messages.arrangedSubviews { messages.removeArrangedSubview(view); view.removeFromSuperview() }
             for turn in turns where turn.state != .draft { append(turn, latest: turn.id == id) }
-            for child in [statusBox, retryGeneration, scope, materials] {
+            for child in [statusBox, retryGeneration, materials] {
                 messages.addArrangedSubview(child)
             }
             view.layoutIfNeeded(); scroll.setContentOffset(offset, animated: false)
@@ -495,7 +504,6 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     @objc private func toggleQuote() {
         if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }; refresh()
     }
-    @objc private func changeRange() { library.questions.setOnlyRead(id, value: range.selectedSegmentIndex == 1); refresh() }
     @objc private func closePanel() { input.resignFirstResponder(); dismiss(animated: true) }
     @objc private func cancelQuestion() { library.questions.cancel(id) }
     @objc private func retrySave() { library.questions.retrySave(id) }
@@ -505,9 +513,30 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         navigationController?.setNavigationBarHidden(false, animated: false)
         navigationController?.pushViewController(EvidenceController(values: record.evidence), animated: true)
     }
-    private func rangeInformation() {
-        let alert = UIAlertController(title: "问答范围", message: "整书允许参考未读章节。仅已读只参考在“目录与书签 → 已读范围”明确确认的章节，可能缺少后文解释；访问与翻页不会自动确认。历史越界时请新建问题。", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "知道了", style: .default)); present(alert, animated: true)
+    @objc private func openAISettings() {
+        let settings = AISettingsController(root: library.root, secrets: library.secrets)
+        navigationController?.setNavigationBarHidden(false, animated: true)
+        navigationController?.pushViewController(settings, animated: true)
+    }
+    private func refreshServiceHint() {
+        let title: String
+        do {
+            let store = try AIConfigurationStore(root: library.root, secrets: library.secrets)
+            if let configuration = store.configurations.first(where: { $0.id == store.selectedID }) {
+                title = store.hasSendConsent(for: configuration)
+                    ? "发送给 \(configuration.name)"
+                    : "确认 \(configuration.name) 的发送说明"
+            } else {
+                title = "设置 AI 服务"
+            }
+        } catch {
+            title = "检查 AI 服务"
+        }
+        var configuration = serviceHint.configuration ?? .plain()
+        configuration.title = title
+        serviceHint.configuration = configuration
+        serviceHint.accessibilityLabel = title + "，轻点查看或修改 AI 服务"
+        serviceHintLoaded = true
     }
     @objc private func sendQuestion() {
         input.resignFirstResponder()
@@ -515,25 +544,48 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         do {
             guard library.sourceAvailable(for: record.bookID) else { throw LibraryError.missing }
             let store = try AIConfigurationStore(root: library.root, secrets: library.secrets)
-            guard let configuration = store.configurations.first(where: { $0.id == store.selectedID }) else { throw QuestionError.configuration }
+            let configuration = try store.selectedConfigurationForSending()
+            _ = try store.key(for: configuration)
             let ready = library.preparation.states[record.bookID]?.ready == true
             let continuing = (record.turnIndex ?? 0) > 0
             if continuing && !ready {
                 let alert = UIAlertController(title: "资料尚未准备完整", message: "追问需要重新查书，请等待资料准备；草稿已保留。", preferredStyle: .alert)
                 alert.addAction(UIAlertAction(title: "等待资料准备", style: .cancel)); present(alert, animated: true); return
             }
+            if ready {
+                library.questions.send(id, library: library, local: false)
+                return
+            }
             let free = record.freeQuestion == true
-            let message = (free ? "问题与本次查到的书内原文" : "问题、提问选文与本次查到的书内原文") + (ready ? "（可能来自其他章节）" : "（当前资料未齐，仅可主动选择局部解释）") + "将交给“\(configuration.name)”（\(configuration.address)），请求一次回答，可能产生费用。实际材料会记录在本对话；有限片段不代表完整概括全书。"
-            let extra = continuing ? "本次还会发送此前各轮问题与回答以理解追问，历史回答不作为原文依据。容量不足会明确提示。" : ""
-            let restriction = record.onlyRead == true ? "仅已读：仅发送明确确认已读章节内的原文，可能缺少后文解释。没有已读资料或选文、历史越界时不发送，请确认已读范围或新建问题。" : "整书：允许参考未读内容。"
-            let alert = UIAlertController(title: ready ? "发送书内原文" : "资料尚未准备完整", message: restriction + message + extra, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: ready ? "发送并查找书内依据" : (free ? "仅用已准备资料解释" : "仅用选文解释"), style: .default) { [weak self] _ in
-                guard let self else { return }; self.library.questions.send(self.id, library: self.library, local: !ready)
+            let alert = UIAlertController(
+                title: "资料尚未准备完整",
+                message: "可以继续等待，或先用本次\(free ? "已准备资料" : "选文")解释。",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: free ? "仅用已准备资料解释" : "仅用选文解释", style: .default) { [weak self] _ in
+                guard let self else { return }
+                self.library.questions.send(self.id, library: self.library, local: true)
             })
-            alert.addAction(UIAlertAction(title: ready ? "取消" : "等待资料准备", style: .cancel)); present(alert, animated: true)
+            alert.addAction(UIAlertAction(title: "等待资料准备", style: .cancel))
+            present(alert, animated: true)
+        } catch let error as AIError {
+            let alert = UIAlertController(
+                title: error == .consentRequired ? "先确认发送说明" : "AI 服务需要处理",
+                message: error.errorDescription,
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "去 AI 服务", style: .default) { [weak self] _ in
+                self?.openAISettings()
+            })
+            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+            present(alert, animated: true)
         } catch {
-            let alert = UIAlertController(title: "尚未发送", message: (error as? QuestionError)?.errorDescription ?? "服务配置无法读取，请到“我的 → AI 服务”检查。", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "知道了", style: .default)); present(alert, animated: true)
+            let alert = UIAlertController(title: "尚未发送", message: error.localizedDescription, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "去 AI 服务", style: .default) { [weak self] _ in
+                self?.openAISettings()
+            })
+            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+            present(alert, animated: true)
         }
     }
     private func open(_ evidence: QuestionEvidence, origin record: ReadingQuestion) {
@@ -674,12 +726,14 @@ final class QuestionHistoryController: UITableViewController {
     private let library: LibraryStore
     private let covers = BookCoverStore()
     private let pageHeader = ConversationsPageHeader()
+    private let groupState: BookGroupListState
     private var sections: [Section] = []
     private var query = ""
     private var observers: [NSObjectProtocol] = []
 
     init(library: LibraryStore) {
         self.library = library
+        groupState = BookGroupListState(root: library.root, page: "conversations")
         super.init(style: .plain)
     }
 
@@ -696,6 +750,7 @@ final class QuestionHistoryController: UITableViewController {
         tableView.separatorStyle = .none
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 132
+        tableView.estimatedSectionHeaderHeight = 53
         tableView.keyboardDismissMode = .onDrag
         tableView.sectionHeaderTopPadding = 0
         tableView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 24, right: 0)
@@ -704,6 +759,7 @@ final class QuestionHistoryController: UITableViewController {
 
         pageHeader.onSearch = { [weak self] text in
             guard let self else { return }
+            rememberScroll()
             query = text
             reload()
         }
@@ -736,6 +792,28 @@ final class QuestionHistoryController: UITableViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         layoutPageHeader()
+        groupState.restoreScroll(in: tableView)
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        rememberScroll()
+    }
+
+    override func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { rememberScroll() }
+    }
+
+    override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        rememberScroll()
+    }
+
+    private var searching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func rememberScroll() {
+        if !searching { groupState.rememberScroll(in: tableView) }
     }
 
     private func layoutPageHeader() {
@@ -759,6 +837,7 @@ final class QuestionHistoryController: UITableViewController {
             return
         }
         let all = library.questions.conversations
+        groupState.initialize(latestBookID: all.max(by: { $0.updated < $1.updated })?.first.bookID)
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered = needle.isEmpty ? all : all.filter { matches($0, needle: needle) }
         let grouped = Dictionary(grouping: filtered, by: { $0.first.bookID })
@@ -771,7 +850,7 @@ final class QuestionHistoryController: UITableViewController {
                 conversations: conversations.sorted { $0.updated > $1.updated }
             )
         }.sorted { $0.conversations[0].updated > $1.conversations[0].updated }
-        tableView.reloadData()
+        groupState.reload(tableView)
         updateBackground()
     }
 
@@ -838,7 +917,7 @@ final class QuestionHistoryController: UITableViewController {
     }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        sections[section].conversations.count
+        groupState.isExpanded(sections[section].bookID, searching: searching) ? sections[section].conversations.count : 0
     }
 
     override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
@@ -850,13 +929,22 @@ final class QuestionHistoryController: UITableViewController {
             book: item.book,
             covers: covers,
             library: library,
-            identifierPrefix: "conversations-book"
+            identifierPrefix: "conversations-book",
+            countText: "\(item.conversations.count) 段对话",
+            expanded: groupState.isExpanded(item.bookID, searching: searching),
+            searching: searching
         )
+        header.onToggle = { [weak self] in
+            guard let self, !searching else { return }
+            groupState.toggle(item.bookID)
+            reload()
+            rememberScroll()
+        }
         return header
     }
 
     override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        53
+        UITableView.automaticDimension
     }
 
     override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
@@ -1089,7 +1177,7 @@ private final class ConversationRecordCell: UITableViewCell {
     func configure(_ conversation: ReadingConversation, dateText: String, unsaved: Bool) {
         question.text = conversation.title
         answer.text = String(conversation.latest.answer.prefix(180))
-        var values = [dateText, "\(conversation.turns.count) 次提问"]
+        var values = [dateText, "\(conversation.submittedCount) 次提问"]
         if unsaved { values.append("尚未保存") }
         meta.text = values.joined(separator: " · ")
         accessibilityIdentifier = "question-\(conversation.id)"
