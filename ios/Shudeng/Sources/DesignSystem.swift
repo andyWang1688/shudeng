@@ -1,53 +1,148 @@
 import UIKit
 import ReadiumShared
 
-/// Shared paper, ink and lamp colours. All values adapt without changing system text size.
+/// 纸与灯 / Paper & Lamp —— 2026-10-27 确认的视觉系统令牌。
+/// 规范：docs/design/2026-10-27/visual-system/visual-system.md
 enum BookDesign {
-    static let paper = colour(0xFCFBF8, 0x20231F)
-    static let surface = colour(0xFFFFFF, 0x292D27)
-    static let wash = colour(0xF2F0E9, 0x31362E)
-    static let ink = colour(0x282B26, 0xF0F1E9)
-    static let secondary = colour(0x64675F, 0xC0C4B8)
-    static let muted = colour(0x696C63, 0xA8AD9F)
-    static let lamp = colour(0x8A590D, 0xEDC579)
-    static let accent = lamp
-    static let accentWash = colour(0xF5E9CC, 0x403725)
-    static let selection = colour(0xF4E3AC, 0x5B4D2D)
-    static let glow = accentWash
-    static let line = colour(0xE6E3DA, 0x3D4338)
-    static let error = colour(0xA13C30, 0xF2AEA2)
-    static let errorWash = colour(0xFAEBE7, 0x472E28)
+    // MARK: 颜色（浅 / 深）
+
+    static let paper = colour(0xFAF7F1, 0x1B1A17)
+    static let paperDeep = colour(0xF2EDE2, 0x24221E)
+    static let surface = colour(0xFFFFFF, 0x2A2723)
+    static let ink = colour(0x211E18, 0xF3EEE3)
+    static let ink2 = colour(0x57534A, 0xC3BCAE)
+    static let ink3 = colour(0x6E6A60, 0x948D80)
+    static let line = colour(0xE7E0D2, 0x3A362F)
+    static let lamp = colour(0xB4712A, 0xE0AE6A)
+    static let lampInk = colour(0x8A5413, 0xF0C98B)
+    static let lampWash = colour(0xF6E7CC, 0x3A2F1F)
+    static let selection = colour(0xF2DBA6, 0x5A4A2A)
+    static let error = colour(0xA63A2B, 0xF0A79A)
+    static let errorWash = colour(0xF8E7E1, 0x3A2823)
+
+    // MARK: 高亮四色（浅色低饱和纸色 / 深色深底亮字；旧数据 nil 语义=黄）
+    static let highlightYellow = selection
+    static let highlightGreen = colour(0xDEE8D3, 0x30402C)
+    static let highlightBlue = colour(0xDCE6EC, 0x2C3A44)
+    static let highlightRose = colour(0xF3DEDA, 0x472F2C)
+
+    // 旧名称保留为别名，避免一次性改动所有调用方；新代码请使用上面的语义令牌。
+    static let accentWash = lampWash
+    static let glow = lampWash
+    static let wash = paperDeep
+    static let secondary = ink2
+
     private static func colour(_ light: Int, _ dark: Int) -> UIColor {
         UIColor { rgb($0.userInterfaceStyle == .dark ? dark : light) }
     }
+
     static func rgb(_ value: Int) -> UIColor {
         UIColor(red: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255,
                 blue: CGFloat(value & 255) / 255, alpha: 1)
     }
+
+    // MARK: 字体工具
+
     static func font(_ size: CGFloat, weight: UIFont.Weight = .regular, style: UIFont.TextStyle = .body) -> UIFont {
         UIFontMetrics(forTextStyle: style).scaledFont(for: .systemFont(ofSize: size, weight: weight))
     }
+
     static func readingFont(_ size: CGFloat = 17) -> UIFont {
         UIFontMetrics(forTextStyle: .body).scaledFont(for: UIFont(name: "SongtiSC-Regular", size: size) ?? .systemFont(ofSize: size))
     }
+
+    // MARK: 外观安装
+
     static func install() {
         UIView.appearance().tintColor = lamp
         let navigation = UINavigationBarAppearance()
-        navigation.configureWithOpaqueBackground(); navigation.backgroundColor = paper; navigation.shadowColor = .clear
-        navigation.titleTextAttributes = [.foregroundColor: ink, .font: font(17, weight: .semibold)]
-        navigation.largeTitleTextAttributes = [.foregroundColor: ink, .font: font(31, weight: .semibold, style: .largeTitle)]
+        navigation.configureWithOpaqueBackground()
+        navigation.backgroundColor = paper
+        navigation.shadowColor = .clear
+        navigation.titleTextAttributes = [.foregroundColor: ink, .font: BookType.headline]
+        navigation.largeTitleTextAttributes = [.foregroundColor: ink, .font: BookType.display]
         UINavigationBar.appearance().standardAppearance = navigation
-        UINavigationBar.appearance().scrollEdgeAppearance = navigation
         UINavigationBar.appearance().compactAppearance = navigation
-        let tab = UITabBarAppearance(); tab.configureWithOpaqueBackground(); tab.backgroundColor = paper
-        for item in [tab.stackedLayoutAppearance, tab.inlineLayoutAppearance, tab.compactInlineLayoutAppearance] {
-            item.normal.iconColor = secondary; item.normal.titleTextAttributes = [.foregroundColor: secondary]
-            item.selected.iconColor = lamp; item.selected.titleTextAttributes = [.foregroundColor: lamp]
+        if #available(iOS 26.0, *) {
+            // iOS 26：自定义不透明导航栏背景会在「大标题 ↔ 搜索」状态切换后把大标题压到背景层下
+            // （FB20986869，Apple 建议减少自定义背景）。大标题所在的 scrollEdge 态改为透明背景，
+            // 纸白由各页面 view 背景承接；滚动后的 standard/compact 态保留纸白不透明背景。
+            let scrollEdge = UINavigationBarAppearance()
+            scrollEdge.configureWithTransparentBackground()
+            scrollEdge.titleTextAttributes = navigation.titleTextAttributes
+            scrollEdge.largeTitleTextAttributes = navigation.largeTitleTextAttributes
+            UINavigationBar.appearance().scrollEdgeAppearance = scrollEdge
+            UINavigationBar.appearance().compactScrollEdgeAppearance = scrollEdge
+        } else {
+            UINavigationBar.appearance().scrollEdgeAppearance = navigation
         }
-        UITabBar.appearance().standardAppearance = tab; UITabBar.appearance().scrollEdgeAppearance = tab
+        let tab = UITabBarAppearance()
+        tab.configureWithOpaqueBackground()
+        tab.backgroundColor = paper
+        for item in [tab.stackedLayoutAppearance, tab.inlineLayoutAppearance, tab.compactInlineLayoutAppearance] {
+            item.normal.iconColor = ink3
+            item.normal.titleTextAttributes = [.foregroundColor: ink3, .font: BookType.caption]
+            item.selected.iconColor = ink
+            item.selected.titleTextAttributes = [.foregroundColor: ink, .font: BookType.caption]
+        }
+        UITabBar.appearance().standardAppearance = tab
+        UITabBar.appearance().scrollEdgeAppearance = tab
         UITableView.appearance().backgroundColor = paper
         UITableViewCell.appearance().backgroundColor = paper
     }
+
+    /// 列表分组头内容（笔记/对话共用）：封面缩略图 + 书名 + 计数。
+    static func listGroupHeaderContent(
+        title: String,
+        countText: String,
+        image: UIImage
+    ) -> UIListContentConfiguration {
+        var content = UIListContentConfiguration.subtitleCell()
+        content.image = image
+        content.imageProperties.maximumSize = CGSize(width: 22, height: 30)
+        content.imageProperties.cornerRadius = 3
+        content.text = title
+        content.textProperties.font = BookType.sans(13, weight: .semibold, style: .subheadline)
+        content.textProperties.color = ink
+        content.textProperties.numberOfLines = 2
+        content.secondaryText = countText
+        content.secondaryTextProperties.font = BookType.caption
+        content.secondaryTextProperties.color = ink3
+        return content
+    }
+
+    /// 列表页逐 item 导航栏外观（iOS 26+）：自定义不透明背景会在「大标题 ↔ 搜索」状态切换后
+    /// 盖住大标题（FB20986869）。大标题所在的 scrollEdge 态改用透明背景（纸白由页面自身提供），
+    /// 滚动后的 standard/compact 态保留纸白不透明背景；旧系统沿用全局 appearance。
+    @MainActor
+    static func applyListPageNavigationAppearance(to item: UINavigationItem) {
+        guard #available(iOS 26.0, *) else { return }
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: ink,
+            .font: BookType.headline
+        ]
+        let largeTitleAttributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: ink,
+            .font: BookType.display
+        ]
+        let standard = UINavigationBarAppearance()
+        standard.configureWithOpaqueBackground()
+        standard.backgroundColor = paper
+        standard.shadowColor = .clear
+        standard.titleTextAttributes = titleAttributes
+        standard.largeTitleTextAttributes = largeTitleAttributes
+        let scrollEdge = UINavigationBarAppearance()
+        scrollEdge.configureWithTransparentBackground()
+        scrollEdge.titleTextAttributes = titleAttributes
+        scrollEdge.largeTitleTextAttributes = largeTitleAttributes
+        item.standardAppearance = standard
+        item.compactAppearance = standard
+        item.scrollEdgeAppearance = scrollEdge
+        item.compactScrollEdgeAppearance = scrollEdge
+    }
+
+    // MARK: 标签与基础控件
+
     static func label(
         _ text: String?,
         size: CGFloat = 16,
@@ -55,28 +150,72 @@ enum BookDesign {
         colour: UIColor = ink,
         style: UIFont.TextStyle = .body
     ) -> UILabel {
-        let label = UILabel(); label.text = text; label.font = font(size, weight: weight, style: style)
-        label.textColor = colour; label.numberOfLines = 0; label.adjustsFontForContentSizeCategory = true
+        let label = UILabel()
+        label.text = text
+        label.font = font(size, weight: weight, style: style)
+        label.textColor = colour
+        label.numberOfLines = 0
+        label.adjustsFontForContentSizeCategory = true
         return label
     }
-    static func table(_ table: UITableView) {
-        table.backgroundColor = paper; table.separatorColor = line
-        table.rowHeight = UITableView.automaticDimension; table.estimatedRowHeight = 100
+
+    static func label(_ text: String?, font: UIFont, colour: UIColor = ink) -> UILabel {
+        let label = UILabel()
+        label.text = text
+        label.font = font
+        label.textColor = colour
+        label.numberOfLines = 0
+        label.adjustsFontForContentSizeCategory = true
+        return label
     }
+
+    static func table(_ table: UITableView) {
+        table.backgroundColor = paper
+        table.separatorColor = line
+        table.rowHeight = UITableView.automaticDimension
+        table.estimatedRowHeight = 100
+    }
+
     static func button(_ button: UIButton, title: String, symbol: String? = nil, filled: Bool = false) {
         var config = filled ? UIButton.Configuration.filled() : UIButton.Configuration.plain()
-        config.title = title; config.image = symbol.flatMap(UIImage.init(systemName:)); config.imagePadding = 8
-        config.baseForegroundColor = filled ? paper : lamp; config.baseBackgroundColor = ink
+        config.title = title
+        config.image = symbol.flatMap(UIImage.init(systemName:))
+        config.imagePadding = 8
+        config.baseForegroundColor = filled ? paper : lampInk
+        config.baseBackgroundColor = ink
         config.cornerStyle = .medium
+        // configuration 会覆盖 titleLabel.font；字体通过文字属性 transformer 生效。
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookType.subhead
+            return outgoing
+        }
         button.configuration = config
-        button.titleLabel?.font = font(15, weight: .medium); button.titleLabel?.adjustsFontForContentSizeCategory = true
+        button.titleLabel?.adjustsFontForContentSizeCategory = true
         button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
     }
+
+    /// 纸白表单：AI 设置等系统 UIViewController 表单页使用。
+    static func formTable(_ table: UITableView) {
+        table.backgroundColor = paper
+        table.separatorColor = line
+        table.separatorInset = UIEdgeInsets(top: 0, left: BookSpacing.screen, bottom: 0, right: BookSpacing.screen)
+        table.rowHeight = UITableView.automaticDimension
+        table.estimatedRowHeight = 56
+        table.sectionHeaderTopPadding = 20
+        table.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 24, right: 0)
+    }
+
+    static func formHeaderFooter(_ view: UIView) {
+        guard let container = view as? UITableViewHeaderFooterView else { return }
+        container.contentView.backgroundColor = paper
+        container.textLabel?.font = BookType.caption
+        container.textLabel?.textColor = ink3
+        container.textLabel?.numberOfLines = 0
+    }
+
     static func symbol(_ name: String, size: CGFloat, weight: UIImage.SymbolWeight = .regular) -> UIImage? {
-        UIImage(
-            systemName: name,
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: weight)
-        )
+        UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: weight))
     }
 
     static let brandMark: UIImage? = {
@@ -124,6 +263,104 @@ enum BookDesign {
     }()
 }
 
+/// 九档字号：7 个界面角色 + 2 个阅读角色。
+enum BookType {
+    static func serif(_ size: CGFloat, weight: UIFont.Weight = .regular, style: UIFont.TextStyle = .body) -> UIFont {
+        let name = weight.rawValue >= UIFont.Weight.semibold.rawValue ? "SongtiSC-Bold" : "SongtiSC-Regular"
+        let base = UIFont(name: name, size: size) ?? UIFont.systemFont(ofSize: size, weight: weight)
+        return UIFontMetrics(forTextStyle: style).scaledFont(for: base)
+    }
+
+    static func sans(_ size: CGFloat, weight: UIFont.Weight = .regular, style: UIFont.TextStyle = .body) -> UIFont {
+        UIFontMetrics(forTextStyle: style).scaledFont(for: .systemFont(ofSize: size, weight: weight))
+    }
+
+    static var display: UIFont { serif(30, weight: .semibold, style: .largeTitle) }
+    static var title: UIFont { serif(22, weight: .semibold, style: .title2) }
+    static var headline: UIFont { serif(17, weight: .semibold, style: .headline) }
+    static var body: UIFont { sans(15, weight: .regular, style: .body) }
+    static var subhead: UIFont { sans(13, weight: .medium, style: .subheadline) }
+    static var footnote: UIFont { sans(12, weight: .regular, style: .footnote) }
+    static var caption: UIFont { sans(10.5, weight: .medium, style: .caption1) }
+    static var quote: UIFont { serif(14.5, weight: .regular, style: .body) }
+    static var reading: UIFont { BookDesign.readingFont(18.5) }
+    static func reading(_ size: CGFloat) -> UIFont { BookDesign.readingFont(size) }
+}
+
+/// 4pt 网格与页面边距。
+enum BookSpacing {
+    static let screen: CGFloat = 20
+    static let reading: CGFloat = 28
+    static let xxs: CGFloat = 4
+    static let xs: CGFloat = 8
+    static let sm: CGFloat = 12
+    static let md: CGFloat = 16
+    static let lg: CGFloat = 24
+    static let xl: CGFloat = 32
+}
+
+/// 列表行时间文案；复用 DateFormatter，避免每配置一个 cell 就新建。
+enum BookDateFormat {
+    private static let clock: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+
+    private static let monthDay: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "M月d日"
+        return formatter
+    }()
+
+    private static let monthDayTime: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "M月d日 HH:mm"
+        return formatter
+    }()
+
+    /// 笔记行：今天 HH:mm / 昨天 HH:mm / M月d日
+    static func recordTime(_ date: Date) -> String {
+        let calendar = Calendar.autoupdatingCurrent
+        if calendar.isDateInToday(date) { return "今天 " + clock.string(from: date) }
+        if calendar.isDateInYesterday(date) { return "昨天 " + clock.string(from: date) }
+        return monthDay.string(from: date)
+    }
+
+    /// 对话行：今天 HH:mm / 昨天 HH:mm / M月d日 HH:mm
+    static func conversationTime(_ date: Date) -> String {
+        let calendar = Calendar.autoupdatingCurrent
+        if calendar.isDateInToday(date) { return "今天 " + clock.string(from: date) }
+        if calendar.isDateInYesterday(date) { return "昨天 " + clock.string(from: date) }
+        return monthDayTime.string(from: date)
+    }
+}
+
+/// 4 档圆角 + 胶囊。
+enum BookRadius {
+    static let cover: CGFloat = 4
+    static let field: CGFloat = 10
+    static let card: CGFloat = 14
+    static let sheet: CGFloat = 22
+    static let pill: CGFloat = 999
+}
+
+/// 两档阴影；不与描边同时使用。
+enum BookElevation {
+    static func floating(_ view: UIView) {
+        view.layer.shadowColor = UIColor.black.cgColor
+        view.layer.shadowOpacity = 0.26
+        view.layer.shadowRadius = 34
+        view.layer.shadowOffset = CGSize(width: 0, height: 14)
+    }
+}
+
 /// Four destinations rendered by the app-owned, flat bottom bar.
 enum RootDestination: Int, CaseIterable {
     case library, notes, conversations, profile
@@ -143,6 +380,16 @@ enum RootDestination: Int, CaseIterable {
         case .notes: return "square.and.pencil"
         case .conversations: return "bubble.left.and.bubble.right"
         case .profile: return "person.crop.circle"
+        }
+    }
+
+    /// 选中态优先填充；没有 fill 变体的符号回退到线性符号 + 墨色。
+    var selectedSymbol: String {
+        switch self {
+        case .library: return "books.vertical.fill"
+        case .notes: return "square.and.pencil"
+        case .conversations: return "bubble.left.and.bubble.right.fill"
+        case .profile: return "person.crop.circle.fill"
         }
     }
 
@@ -204,7 +451,7 @@ final class RootTabController: UIViewController {
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             tabBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            tabBar.heightAnchor.constraint(equalToConstant: 81)
+            tabBar.heightAnchor.constraint(equalToConstant: 56)
         ])
 
         tabBar.onSelect = { [weak self] index in self?.select(index) }
@@ -273,10 +520,10 @@ final class RootTabBar: UIView {
             line.leadingAnchor.constraint(equalTo: leadingAnchor),
             line.trailingAnchor.constraint(equalTo: trailingAnchor),
             line.heightAnchor.constraint(equalToConstant: 1),
-            row.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            row.heightAnchor.constraint(equalToConstant: 50)
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
         for (index, button) in buttons.enumerated() {
@@ -296,9 +543,8 @@ final class RootTabBar: UIView {
 }
 
 private final class RootTabButton: UIControl {
-    private let marker = UIView()
     private let icon = UIImageView()
-    private let label = BookDesign.label(nil, size: 10, weight: .medium, colour: BookDesign.secondary)
+    private let label = BookDesign.label(nil, font: BookType.caption, colour: BookDesign.ink3)
     private let destination: RootDestination
 
     init(destination: RootDestination) {
@@ -309,14 +555,9 @@ private final class RootTabButton: UIControl {
         accessibilityLabel = destination.title
         accessibilityIdentifier = destination.accessibilityIdentifier
 
-        marker.backgroundColor = BookDesign.accent
-        marker.layer.cornerRadius = 2
-        marker.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(marker)
-
-        icon.image = BookDesign.symbol(destination.symbol, size: 23)
+        icon.image = BookDesign.symbol(destination.symbol, size: 22)
         icon.contentMode = .scaleAspectFit
-        icon.tintColor = BookDesign.secondary
+        icon.tintColor = BookDesign.ink3
         icon.isAccessibilityElement = false
         label.text = destination.title
         label.textAlignment = .center
@@ -325,19 +566,15 @@ private final class RootTabButton: UIControl {
         let stack = UIStackView(arrangedSubviews: [icon, label])
         stack.axis = .vertical
         stack.alignment = .center
-        stack.spacing = 4
+        stack.spacing = 3
         stack.isUserInteractionEnabled = false
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
-            marker.topAnchor.constraint(equalTo: topAnchor),
-            marker.centerXAnchor.constraint(equalTo: centerXAnchor),
-            marker.widthAnchor.constraint(equalToConstant: 19),
-            marker.heightAnchor.constraint(equalToConstant: 3),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 23),
-            icon.heightAnchor.constraint(equalToConstant: 23)
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 22),
+            icon.heightAnchor.constraint(equalToConstant: 22)
         ])
     }
 
@@ -345,9 +582,11 @@ private final class RootTabButton: UIControl {
 
     override var isSelected: Bool {
         didSet {
-            marker.isHidden = !isSelected
-            icon.tintColor = isSelected ? BookDesign.ink : BookDesign.secondary
-            label.textColor = isSelected ? BookDesign.ink : BookDesign.secondary
+            let symbol = isSelected ? destination.selectedSymbol : destination.symbol
+            icon.image = BookDesign.symbol(symbol, size: 22)
+                ?? BookDesign.symbol(destination.symbol, size: 22)
+            icon.tintColor = isSelected ? BookDesign.ink : BookDesign.ink3
+            label.textColor = isSelected ? BookDesign.ink : BookDesign.ink3
             accessibilityTraits = isSelected ? [.button, .selected] : .button
         }
     }
@@ -357,55 +596,42 @@ private final class RootTabButton: UIControl {
     }
 }
 
-final class BrandRow: UIView {
-    private let mark = UIImageView()
-
-    init(motto: String = "一盏照书的灯") {
-        super.init(frame: .zero)
-        accessibilityIdentifier = "brand-row"
-        mark.image = BookDesign.brandMark
-        mark.tintColor = BookDesign.ink
-        mark.contentMode = .scaleAspectFit
-        mark.isAccessibilityElement = false
-        let wordmark = BookDesign.label("书灯", size: 21, weight: .semibold)
-        wordmark.accessibilityIdentifier = "brand-wordmark"
-        let identity = UIStackView(arrangedSubviews: [mark, wordmark])
-        identity.axis = .horizontal
-        identity.alignment = .center
-        identity.spacing = 8
-        let quiet = BookDesign.label(motto, size: 12, colour: BookDesign.muted)
-        quiet.textAlignment = .right
-        quiet.accessibilityIdentifier = "brand-motto"
-        let row = UIStackView(arrangedSubviews: [identity, UIView(), quiet])
-        row.axis = .horizontal
-        row.alignment = .center
-        row.spacing = 12
-        row.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(row)
-        NSLayoutConstraint.activate([
-            mark.widthAnchor.constraint(equalToConstant: 25),
-            mark.heightAnchor.constraint(equalToConstant: 25),
-            row.topAnchor.constraint(equalTo: topAnchor, constant: 9),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-            row.leadingAnchor.constraint(equalTo: leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor)
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-}
-
 final class CircularIconButton: UIButton {
-    init(symbol: String, label: String) {
+    enum Style { case ghost, solid, fill }
+
+    private let baseTint: UIColor
+
+    init(symbol: String, label: String, style: Style = .ghost, identifier: String = "library-import") {
+        switch style {
+        case .ghost: baseTint = BookDesign.ink2
+        case .solid: baseTint = BookDesign.paper
+        case .fill: baseTint = BookDesign.ink
+        }
         super.init(frame: .zero)
-        backgroundColor = BookDesign.wash
-        layer.cornerRadius = 22
-        setImage(BookDesign.symbol(symbol, size: 20), for: .normal)
-        tintColor = BookDesign.ink
+        switch style {
+        case .ghost:
+            backgroundColor = .clear
+        case .solid:
+            backgroundColor = BookDesign.ink
+        case .fill:
+            backgroundColor = BookDesign.paperDeep
+        }
+        tintColor = baseTint
+        layer.cornerRadius = 18
+        let iconSize: CGFloat
+        switch style {
+        case .solid: iconSize = 17
+        case .ghost, .fill: iconSize = 19
+        }
+        var config = UIButton.Configuration.plain()
+        config.image = BookDesign.symbol(symbol, size: iconSize, weight: .medium)
+        config.baseForegroundColor = baseTint
+        config.contentInsets = .zero
+        configuration = config
         accessibilityLabel = label
-        accessibilityIdentifier = "library-import"
-        widthAnchor.constraint(equalToConstant: 44).isActive = true
-        heightAnchor.constraint(equalToConstant: 44).isActive = true
+        accessibilityIdentifier = identifier
+        widthAnchor.constraint(equalToConstant: 36).isActive = true
+        heightAnchor.constraint(equalToConstant: 36).isActive = true
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -413,91 +639,115 @@ final class CircularIconButton: UIButton {
     override var isHighlighted: Bool {
         didSet { alpha = isHighlighted ? 0.72 : 1 }
     }
+
+    /// 视觉 36pt，命中区 44pt。
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        bounds.insetBy(dx: -4, dy: -4).contains(point)
+    }
 }
 
-/// Original EPUB cover, with a title-only fallback (never a made-up publisher cover).
+/// 无原封面时的字体书衣：四组低饱和纸色 + 宋体书名 + 极细内框 + 底部灯点。
 final class BookCoverView: UIView {
     private let image = UIImageView()
-    private let name = BookDesign.label(nil, size: 23, weight: .medium)
-    private let author = BookDesign.label(nil, size: 11)
-    private let imprint = BookDesign.label("书 灯 · 藏 书", size: 9)
-    private let type = UIStackView()
-    private let frameLine = UIView()
-    private var typeTop: NSLayoutConstraint!
-    private var typeLeading: NSLayoutConstraint!
-    private var typeTrailing: NSLayoutConstraint!
-    private var typeBottom: NSLayoutConstraint!
+    private let name = UILabel()
+    private let author = UILabel()
+    private let rule = UIView()
+    private let dot = UIView()
+    private let inset = UIView()
+
     override init(frame: CGRect) {
         super.init(frame: frame)
-        layer.cornerRadius = 5; clipsToBounds = true
-        image.contentMode = .scaleAspectFill; image.clipsToBounds = true
-        name.font = BookDesign.readingFont(23)
-        for label in [name, author, imprint] { label.textColor = BookDesign.rgb(0xF5EEDC) }
+        layer.cornerRadius = BookRadius.cover
+        clipsToBounds = true
+
+        image.contentMode = .scaleAspectFill
+        image.clipsToBounds = true
+
+        name.font = BookType.serif(19, weight: .semibold)
+        name.textAlignment = .center
+        name.numberOfLines = 2
         name.lineBreakMode = .byCharWrapping
-        for label in [name, author, imprint] {
-            label.adjustsFontForContentSizeCategory = false
+        name.adjustsFontForContentSizeCategory = false
+        author.font = BookType.sans(8, weight: .medium, style: .caption2)
+        author.textAlignment = .center
+        author.numberOfLines = 1
+        author.adjustsFontForContentSizeCategory = false
+
+        dot.layer.cornerRadius = 2
+        inset.layer.borderWidth = 1
+        inset.isUserInteractionEnabled = false
+        inset.layer.cornerRadius = 2
+
+        for child in [image, inset, name, rule, author, dot] {
+            child.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(child)
         }
-        type.addArrangedSubview(name)
-        type.addArrangedSubview(author)
-        type.addArrangedSubview(UIView())
-        type.addArrangedSubview(imprint)
-        type.axis = .vertical
-        type.spacing = 10
-        let spine = UIView(); spine.backgroundColor = UIColor.black.withAlphaComponent(0.12)
-        frameLine.layer.borderWidth = 1
-        frameLine.isUserInteractionEnabled = false
-        for child in [frameLine, type, image, spine] { child.translatesAutoresizingMaskIntoConstraints = false; addSubview(child) }
-        typeTop = type.topAnchor.constraint(equalTo: topAnchor, constant: 20)
-        typeLeading = type.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 17)
-        typeTrailing = type.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
-        typeBottom = type.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
         NSLayoutConstraint.activate([
-            typeTop, typeLeading, typeTrailing, typeBottom,
-            image.topAnchor.constraint(equalTo: topAnchor), image.bottomAnchor.constraint(equalTo: bottomAnchor),
-            image.leadingAnchor.constraint(equalTo: leadingAnchor), image.trailingAnchor.constraint(equalTo: trailingAnchor),
-            frameLine.topAnchor.constraint(equalTo: topAnchor, constant: 9),
-            frameLine.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
-            frameLine.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
-            frameLine.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
-            spine.topAnchor.constraint(equalTo: topAnchor), spine.bottomAnchor.constraint(equalTo: bottomAnchor),
-            spine.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5), spine.widthAnchor.constraint(equalToConstant: 2)
+            image.topAnchor.constraint(equalTo: topAnchor),
+            image.bottomAnchor.constraint(equalTo: bottomAnchor),
+            image.leadingAnchor.constraint(equalTo: leadingAnchor),
+            image.trailingAnchor.constraint(equalTo: trailingAnchor),
+            inset.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            inset.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            inset.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            inset.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+            name.centerXAnchor.constraint(equalTo: centerXAnchor),
+            name.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -6),
+            name.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 10),
+            name.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            rule.centerXAnchor.constraint(equalTo: centerXAnchor),
+            rule.topAnchor.constraint(equalTo: name.bottomAnchor, constant: 7),
+            rule.widthAnchor.constraint(equalToConstant: 14),
+            rule.heightAnchor.constraint(equalToConstant: 1),
+            author.centerXAnchor.constraint(equalTo: centerXAnchor),
+            author.topAnchor.constraint(equalTo: rule.bottomAnchor, constant: 7),
+            author.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 8),
+            author.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
+            dot.centerXAnchor.constraint(equalTo: centerXAnchor),
+            dot.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
+            dot.widthAnchor.constraint(equalToConstant: 4),
+            dot.heightAnchor.constraint(equalToConstant: 4)
         ])
-        isAccessibilityElement = false; accessibilityElementsHidden = true
+        isAccessibilityElement = false
+        accessibilityElementsHidden = true
     }
+
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
     func configure(_ book: Book, image: UIImage?, compact: Bool = false) {
-        let style: (background: Int, ink: Int, titleSize: CGFloat, framed: Bool)
-        switch book.title {
-        case "红楼梦":
-            style = (0xE4DBBA, 0x493D28, compact ? 21 : 30, true)
-        case "瓦尔登湖":
-            style = (0x3F5148, 0xF4F0DB, compact ? 19 : 27, false)
-        case "论语":
-            style = (0xC4B7AA, 0x3B302C, compact ? 19 : 28, false)
-        default:
-            let palette = [0x565D4A, 0x79513E, 0x4E626B, 0x75634C]
-            let index = book.id.utf8.reduce(0) { ($0 + Int($1)) % palette.count }
-            style = (palette[index], 0xF5EEDC, compact ? 17 : 23, false)
-        }
-        backgroundColor = BookDesign.rgb(style.background)
-        let ink = BookDesign.rgb(style.ink)
+        name.font = BookType.serif(compact ? 11 : 19, weight: .semibold)
+        author.font = BookType.sans(compact ? 6.5 : 8, weight: .medium, style: .caption2)
         name.text = book.title
         author.text = book.author
-        for label in [name, author, imprint] { label.textColor = ink }
-        frameLine.layer.borderColor = ink.withAlphaComponent(0.3).cgColor
-        frameLine.isHidden = !style.framed
-        name.font = BookDesign.readingFont(style.titleSize)
-        author.font = BookDesign.font(compact ? 8 : 11, style: .caption2)
-        imprint.font = BookDesign.font(compact ? 7 : 9, style: .caption2)
-        type.spacing = compact ? 4 : 10
-        typeTop.constant = compact ? 12 : 20
-        typeLeading.constant = compact ? 12 : 17
-        typeTrailing.constant = compact ? -8 : -12
-        typeBottom.constant = compact ? -10 : -16
+        let style = palette(for: book.title)
+        backgroundColor = style.background
+        name.textColor = style.ink
+        author.textColor = style.ink.withAlphaComponent(0.78)
+        rule.backgroundColor = style.ink.withAlphaComponent(0.4)
+        dot.backgroundColor = style.ink.withAlphaComponent(0.45)
+        inset.layer.borderColor = style.ink.withAlphaComponent(0.18).cgColor
+
         self.image.image = image
         self.image.isHidden = image == nil
-        type.isHidden = image != nil
-        frameLine.isHidden = image != nil || !style.framed
+        for child in [name, rule, author, dot, inset] as [UIView] { child.isHidden = image != nil }
+        isAccessibilityElement = false
+        accessibilityElementsHidden = true
+    }
+
+    private struct Palette {
+        let background: UIColor
+        let ink: UIColor
+    }
+
+    private func palette(for title: String) -> Palette {
+        let groups: [Palette] = [
+            Palette(background: BookDesign.rgb(0xF0E5CE), ink: BookDesign.rgb(0x3B332A)),
+            Palette(background: BookDesign.rgb(0x38483F), ink: BookDesign.rgb(0xF1EAD9)),
+            Palette(background: BookDesign.rgb(0x8F5336), ink: BookDesign.rgb(0xF7EBDF)),
+            Palette(background: BookDesign.rgb(0x3A4653), ink: BookDesign.rgb(0xEFF0E8))
+        ]
+        let index = title.utf8.reduce(0) { ($0 + Int($1)) % groups.count }
+        return groups[index]
     }
 }
 
@@ -520,109 +770,318 @@ final class BookCoverStore {
     }
 }
 
-/// Shared book identity row used above grouped notes and conversations.
+/// 列表分组头使用的小封面：优先真实 EPUB 封面，无封面时回退到书名首字纸色块。
 @MainActor
-final class BookGroupHeader: UIControl {
-    private let cover = UIView()
-    private let coverImage = UIImageView()
-    private let initial = BookDesign.label(nil, size: 11, weight: .semibold, colour: BookDesign.paper)
-    private let title = BookDesign.label(nil, size: 12, colour: BookDesign.secondary)
-    private let count = BookDesign.label(nil, size: 11, colour: BookDesign.secondary)
-    private let chevron = UIImageView(image: BookDesign.symbol("chevron.right", size: 13, weight: .semibold))
-    private var token = UUID()
-    var onToggle: (() -> Void)?
+final class BookThumbnailStore {
+    private let cache = NSCache<NSString, UIImage>()
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = BookDesign.paper
-        cover.layer.cornerRadius = 2
-        cover.clipsToBounds = true
-        coverImage.contentMode = .scaleAspectFill
-        coverImage.clipsToBounds = true
-        initial.textAlignment = .center
-        initial.isHidden = true
-        for child in [coverImage, initial] {
-            child.translatesAutoresizingMaskIntoConstraints = false
-            cover.addSubview(child)
+    func placeholder(for title: String) -> UIImage {
+        let key = "placeholder-\(title)" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        let image = Self.renderPlaceholder(for: title)
+        cache.setObject(image, forKey: key)
+        return image
+    }
+
+    func image(for book: Book, covers: BookCoverStore, library: LibraryStore) async -> UIImage {
+        if let cached = cache.object(forKey: book.id as NSString) { return cached }
+        guard let image = await covers.image(for: book, library: library) else {
+            return placeholder(for: book.title)
         }
-        let text = UIStackView(arrangedSubviews: [title, count])
-        text.axis = .vertical
-        text.spacing = 2
-        chevron.tintColor = BookDesign.secondary
-        chevron.contentMode = .scaleAspectFit
-        let row = UIStackView(arrangedSubviews: [cover, text, chevron])
-        row.axis = .horizontal
-        row.alignment = .center
-        row.spacing = 8
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.isUserInteractionEnabled = false
-        addSubview(row)
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
-            cover.widthAnchor.constraint(equalToConstant: 22),
-            cover.heightAnchor.constraint(equalToConstant: 30),
-            coverImage.topAnchor.constraint(equalTo: cover.topAnchor),
-            coverImage.leadingAnchor.constraint(equalTo: cover.leadingAnchor),
-            coverImage.trailingAnchor.constraint(equalTo: cover.trailingAnchor),
-            coverImage.bottomAnchor.constraint(equalTo: cover.bottomAnchor),
-            initial.centerXAnchor.constraint(equalTo: cover.centerXAnchor),
-            initial.centerYAnchor.constraint(equalTo: cover.centerYAnchor),
-            chevron.widthAnchor.constraint(equalToConstant: 16),
-            chevron.heightAnchor.constraint(equalToConstant: 20),
-            row.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
-        ])
-        isAccessibilityElement = true
-        accessibilityTraits = [.header, .button]
-        accessibilityHint = "轻点展开或收起本书的记录"
-        addAction(UIAction { [weak self] _ in self?.onToggle?() }, for: .touchUpInside)
+        cache.setObject(image, forKey: book.id as NSString)
+        return image
+    }
+
+    private static func renderPlaceholder(for title: String) -> UIImage {
+        let colours = [0x38483F, 0x8F5336, 0x3A4653, 0x6D5A3A]
+        let index = title.utf8.reduce(0) { ($0 + Int($1)) % colours.count }
+        let size = CGSize(width: 36, height: 48)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { _ in
+            BookDesign.rgb(colours[index]).setFill()
+            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 4).fill()
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont(name: "SongtiSC-Semibold", size: 15) ?? UIFont.systemFont(ofSize: 15, weight: .semibold),
+                .foregroundColor: BookDesign.paper
+            ]
+            let text = NSAttributedString(string: String(title.prefix(1)), attributes: attributes)
+            let measured = text.size()
+            text.draw(at: CGPoint(x: (size.width - measured.width) / 2, y: (size.height - measured.height) / 2))
+        }
+    }
+}
+
+/// 列表页空态配置：沿用纸白令牌与既有操作标题。
+@available(iOS 17.0, *)
+@MainActor
+enum BookContentUnavailable {
+    static func configuration(
+        title: String,
+        detail: String,
+        symbol: String,
+        actionTitle: String,
+        action: @escaping () -> Void
+    ) -> UIContentUnavailableConfiguration {
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.image = BookDesign.symbol(symbol, size: 44, weight: .light)
+        configuration.imageProperties.tintColor = BookDesign.secondary
+        configuration.text = title
+        configuration.textProperties.font = BookType.serif(24, weight: .semibold, style: .title2)
+        configuration.textProperties.color = BookDesign.ink
+        configuration.secondaryText = detail
+        configuration.secondaryTextProperties.font = BookType.subhead
+        configuration.secondaryTextProperties.color = BookDesign.ink2
+        var button = configuration.button
+        button.title = actionTitle
+        button.baseForegroundColor = BookDesign.paper
+        button.baseBackgroundColor = BookDesign.ink
+        button.cornerStyle = .capsule
+        button.contentInsets = NSDirectionalEdgeInsets(top: 11, leading: 22, bottom: 11, trailing: 22)
+        configuration.button = button
+        configuration.buttonProperties.primaryAction = UIAction { _ in action() }
+        return configuration
+    }
+}
+
+/// 纸与灯风格的弹层动作；与 UIAlertAction 的调用形态一致。
+final class BookAlertAction {
+    enum Style { case `default`, cancel, destructive }
+    let title: String?
+    let style: Style
+    let handler: ((BookAlertAction) -> Void)?
+
+    init(title: String?, style: Style, handler: ((BookAlertAction) -> Void)? = nil) {
+        self.title = title
+        self.style = style
+        self.handler = handler
+    }
+}
+
+/// 纸与灯风格的轻量弹层：替代系统 UIAlertController 的 alert / actionSheet。
+@MainActor
+final class BookAlertController: UIViewController {
+    enum Style { case alert, actionSheet }
+
+    /// 兼容旧代码里的 popover 配置；自定义弹层忽略这些值。
+    final class Popover {
+        var sourceView: UIView?
+        var sourceRect: CGRect = .zero
+        var barButtonItem: UIBarButtonItem?
+    }
+
+    let bookPopover = Popover()
+
+    private let alertTitle: String?
+    private let alertMessage: String?
+    private let alertStyle: Style
+    private var actions: [BookAlertAction] = []
+    private let dim = UIView()
+    private let card = UIView()
+    private(set) var textFields: [UITextField]?
+
+    init(title: String?, message: String?, preferredStyle: Style) {
+        self.alertTitle = title
+        self.alertMessage = message
+        self.alertStyle = preferredStyle
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .overFullScreen
+        modalTransitionStyle = .crossDissolve
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    func configure(
-        bookID: String,
-        bookTitle: String,
-        book: Book?,
-        covers: BookCoverStore,
-        library: LibraryStore,
-        identifierPrefix: String,
-        countText: String,
-        expanded: Bool,
-        searching: Bool = false
-    ) {
-        token = UUID()
-        let current = token
-        title.text = bookTitle
-        count.text = countText
-        chevron.transform = expanded ? CGAffineTransform(rotationAngle: .pi / 2) : .identity
-        accessibilityIdentifier = "\(identifierPrefix)-\(bookID)"
-        accessibilityLabel = "\(bookTitle)，\(countText)"
-        accessibilityValue = expanded ? "已展开" : "已收起"
-        accessibilityHint = searching ? "搜索期间自动展开匹配记录" : "轻点展开或收起本书的记录"
-        cover.backgroundColor = palette(for: bookTitle)
-        coverImage.image = nil
-        initial.text = String(bookTitle.prefix(1))
-        initial.isHidden = false
-        guard let book else { return }
-        Task { [weak self] in
-            let image = await covers.image(for: book, library: library)
-            guard let self, token == current else { return }
-            coverImage.image = image
-            initial.isHidden = image != nil
+    func addAction(_ action: BookAlertAction) {
+        actions.append(action)
+    }
+
+    func addTextField(configurationHandler: ((UITextField) -> Void)? = nil) {
+        let field = UITextField()
+        field.font = BookType.body
+        field.textColor = BookDesign.ink
+        field.backgroundColor = BookDesign.paperDeep
+        field.layer.cornerRadius = BookRadius.field
+        field.borderStyle = .none
+        field.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 10, height: 1))
+        field.leftViewMode = .always
+        field.rightView = UIView(frame: CGRect(x: 0, y: 0, width: 10, height: 1))
+        field.rightViewMode = .always
+        field.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        configurationHandler?(field)
+        if textFields == nil { textFields = [] }
+        textFields?.append(field)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.accessibilityViewIsModal = true
+        view.accessibilityIdentifier = "book-dialog"
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0.34)
+        dim.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(dim)
+        NSLayoutConstraint.activate([
+            dim.topAnchor.constraint(equalTo: view.topAnchor),
+            dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            dim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            dim.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        let tap = UITapGestureRecognizer(target: self, action: #selector(backgroundTapped))
+        dim.addGestureRecognizer(tap)
+
+        card.backgroundColor = BookDesign.paper
+        card.layer.cornerRadius = BookRadius.sheet
+        card.layer.cornerCurve = .continuous
+        BookElevation.floating(card)
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.accessibilityIdentifier = alertTitle ?? "book-dialog"
+        view.addSubview(card)
+        buildCard()
+
+        switch alertStyle {
+        case .alert:
+            NSLayoutConstraint.activate([
+                card.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                card.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+                card.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
+                card.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -24),
+                card.widthAnchor.constraint(lessThanOrEqualToConstant: 320)
+            ])
+            let preferred = card.widthAnchor.constraint(equalToConstant: 320)
+            preferred.priority = .defaultHigh
+            preferred.isActive = true
+        case .actionSheet:
+            NSLayoutConstraint.activate([
+                card.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+                card.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+                card.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8)
+            ])
         }
     }
 
-    override func accessibilityActivate() -> Bool {
-        sendActions(for: .touchUpInside)
-        return true
+    private func buildCard() {
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.spacing = 0
+        stack.isLayoutMarginsRelativeArrangement = true
+        stack.layoutMargins = UIEdgeInsets(top: 20, left: 20, bottom: 16, right: 20)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: card.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor)
+        ])
+
+        if let alertTitle {
+            let title = BookDesign.label(alertTitle, font: BookType.serif(17, weight: .semibold, style: .headline))
+            title.textAlignment = alertStyle == .alert ? .center : .left
+            stack.addArrangedSubview(title)
+        }
+        if let alertMessage, !alertMessage.isEmpty {
+            let message = BookDesign.label(alertMessage, font: BookType.sans(13, weight: .regular, style: .footnote), colour: BookDesign.ink2)
+            message.textAlignment = alertStyle == .alert ? .center : .left
+            message.numberOfLines = 0
+            if let last = stack.arrangedSubviews.last { stack.setCustomSpacing(6, after: last) }
+            stack.addArrangedSubview(message)
+        }
+        if let fields = textFields, !fields.isEmpty {
+            let fieldStack = UIStackView(arrangedSubviews: fields)
+            fieldStack.axis = .vertical
+            fieldStack.spacing = 8
+            if let last = stack.arrangedSubviews.last { stack.setCustomSpacing(14, after: last) }
+            stack.addArrangedSubview(fieldStack)
+        }
+
+        let cancelActions = actions.filter { $0.style == .cancel }
+        let mainActions = actions.filter { $0.style != .cancel }
+
+        let actionStack = UIStackView()
+        actionStack.axis = .vertical
+        actionStack.spacing = alertStyle == .actionSheet ? 0 : 8
+        if let last = stack.arrangedSubviews.last { stack.setCustomSpacing(18, after: last) }
+        stack.addArrangedSubview(actionStack)
+
+        var primaryUsed = false
+        for action in mainActions {
+            let isPrimary = alertStyle == .alert && action.style != .destructive && !primaryUsed
+            if isPrimary { primaryUsed = true }
+            actionStack.addArrangedSubview(makeButton(action, primary: isPrimary))
+            if alertStyle == .actionSheet, let last = mainActions.last, action !== last {
+                let line = UIView()
+                line.backgroundColor = BookDesign.line
+                line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+                actionStack.addArrangedSubview(line)
+            }
+        }
+        if let cancel = cancelActions.first {
+            stack.setCustomSpacing(alertStyle == .alert ? 8 : 10, after: actionStack)
+            stack.addArrangedSubview(makeButton(cancel, primary: false))
+        }
     }
 
-    private func palette(for title: String) -> UIColor {
-        let colours = [0x565D4A, 0x79513E, 0x4E626B, 0x75634C]
-        let index = title.utf8.reduce(0) { ($0 + Int($1)) % colours.count }
-        return BookDesign.rgb(colours[index])
+    private func makeButton(_ action: BookAlertAction, primary: Bool) -> UIButton {
+        let button = UIButton(type: .system)
+        var configuration = UIButton.Configuration.plain()
+        configuration.title = action.title
+        let isCancel = action.style == .cancel
+        let isDestructive = action.style == .destructive
+        if alertStyle == .alert {
+            configuration.baseForegroundColor = isDestructive ? BookDesign.error : (primary ? BookDesign.paper : BookDesign.ink)
+            configuration.background.backgroundColor = isDestructive ? BookDesign.errorWash : (primary ? BookDesign.ink : BookDesign.paperDeep)
+            configuration.background.cornerRadius = 12
+        } else {
+            configuration.baseForegroundColor = isCancel ? BookDesign.ink2 : (isDestructive ? BookDesign.error : BookDesign.ink)
+            configuration.background.backgroundColor = isCancel ? BookDesign.paperDeep : .clear
+            configuration.background.cornerRadius = isCancel ? 12 : 0
+        }
+        configuration.contentInsets = NSDirectionalEdgeInsets(
+            top: alertStyle == .alert ? 11 : 14,
+            leading: 16,
+            bottom: alertStyle == .alert ? 11 : 14,
+            trailing: 16
+        )
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookType.sans(14, weight: .medium, style: .subheadline)
+            return outgoing
+        }
+        button.configuration = configuration
+        if alertStyle == .alert {
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        }
+        button.addAction(UIAction { [weak self] _ in self?.trigger(action) }, for: .touchUpInside)
+        return button
+    }
+
+    private func trigger(_ action: BookAlertAction) {
+        let handler = action.handler
+        let animate = !UIAccessibility.isReduceMotionEnabled
+        UIView.animate(withDuration: animate ? 0.16 : 0, animations: {
+            self.dim.alpha = 0
+            self.card.alpha = 0
+        }) { _ in
+            self.dismiss(animated: false) { handler?(action) }
+        }
+    }
+
+    @objc private func backgroundTapped() {
+        guard alertStyle == .actionSheet else { return }
+        if let cancel = actions.first(where: { $0.style == .cancel }) {
+            trigger(cancel)
+        }
+    }
+}
+
+// MARK: 高亮颜色令牌
+
+extension HighlightColor {
+    /// 阅读器 decoration 背景色；旧数据 nil 已由 BookNote.highlightColor 归一为黄。
+    var tint: UIColor {
+        switch self {
+        case .yellow: return BookDesign.highlightYellow
+        case .green: return BookDesign.highlightGreen
+        case .blue: return BookDesign.highlightBlue
+        case .rose: return BookDesign.highlightRose
+        }
     }
 }

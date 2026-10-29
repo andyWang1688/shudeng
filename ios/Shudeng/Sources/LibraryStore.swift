@@ -29,16 +29,37 @@ enum BookRemoval: String, Codable {
     var pending: Bool { self != .removed }
 }
 
+/// 高亮四色。旧数据缺少 color 时按 .yellow 渲染。
+enum HighlightColor: String, Codable, CaseIterable, Identifiable {
+    case yellow, green, blue, rose
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .yellow: return "黄色"
+        case .green: return "青瓷"
+        case .blue: return "雾蓝"
+        case .rose: return "胭脂"
+        }
+    }
+}
+
 struct BookNote: Codable, Identifiable {
     let id: UUID
     let locatorJSON: String
     var body: String
+    /// 可选以兼容旧 JSON/导出；nil 语义等同 .yellow。
+    var color: HighlightColor?
 
-    init(locator: Locator, body: String = "") {
+    init(locator: Locator, body: String = "", color: HighlightColor? = nil) {
         id = UUID()
         locatorJSON = locator.description
         self.body = body
+        self.color = color
     }
+
+    var highlightColor: HighlightColor { color ?? .yellow }
 
     func location() throws -> Locator {
         guard let locator = try Locator(json: JSONValue(jsonString: locatorJSON, warnings: nil), warnings: nil) else {
@@ -365,6 +386,42 @@ final class LibraryStore {
         }
         do { try commit(updated) } catch { throw LibraryError.save }
         recordTimestamps.recordIfAbsent(kind: .note, bookID: id, recordID: note.id)
+    }
+
+    /// 删除一条高亮/笔记记录（同时清理同名草稿）；不改动 JSON 结构与其他记录。
+    func removeNote(_ noteID: UUID, bookID: String) throws {
+        guard let index = books.firstIndex(where: { $0.id == bookID }) else { throw LibraryError.missing }
+        var updated = books
+        var changed = false
+        if let notes = updated[index].notes, notes.contains(where: { $0.id == noteID }) {
+            updated[index].notes = notes.filter { $0.id != noteID }
+            changed = true
+        }
+        if let drafts = updated[index].noteDrafts, drafts.contains(where: { $0.id == noteID }) {
+            updated[index].noteDrafts = drafts.filter { $0.id != noteID }
+            changed = true
+        }
+        guard changed else { throw LibraryError.missing }
+        do { try commit(updated) } catch { throw LibraryError.save }
+    }
+
+    /// 仅修改已有高亮的颜色（含同名草稿），保留正文与位置。
+    func updateNoteColor(_ color: HighlightColor, forNoteID noteID: UUID, bookID: String) throws {
+        guard let index = books.firstIndex(where: { $0.id == bookID }) else { throw LibraryError.missing }
+        var updated = books
+        var changed = false
+        if var notes = updated[index].notes, let noteIndex = notes.firstIndex(where: { $0.id == noteID }) {
+            notes[noteIndex].color = color
+            updated[index].notes = notes
+            changed = true
+        }
+        if var drafts = updated[index].noteDrafts, let draftIndex = drafts.firstIndex(where: { $0.id == noteID }) {
+            drafts[draftIndex].color = color
+            updated[index].noteDrafts = drafts
+            changed = true
+        }
+        guard changed else { throw LibraryError.missing }
+        do { try commit(updated) } catch { throw LibraryError.save }
     }
 
     func recordTimestamp(kind: SavedRecordKind, bookID: String, recordID: UUID) -> Date? {

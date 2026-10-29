@@ -2,6 +2,13 @@ import UIKit
 import ReadiumShared
 import ReadiumNavigator
 
+/// 波浪线装饰用的非隔离颜色工具：decoration 模板闭包在 Readium 侧调用，不能依赖主线程隔离。
+private func noteWaveCSSColor(_ color: UIColor) -> String {
+    var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 1
+    guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return "rgb(180,113,42)" }
+    return "rgb(\(Int((red * 255).rounded())),\(Int((green * 255).rounded())),\(Int((blue * 255).rounded())))"
+}
+
 @MainActor
 final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private let book: Book
@@ -17,7 +24,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private let statusPanel = UIView()
     private let status = UILabel()
     private let retry = UIButton(type: .system)
-    private var statusRequestedVisible = true
+    private var statusRequestedVisible = false
     private var statusIsError = false
     private var pendingLocation: Locator?
     private var saveFailed = false
@@ -61,7 +68,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private var acceptanceNavigatorGeneration = 1
     #endif
     private var questionCitation: Locator?
-    private var highlightedIDs: [UUID] = []
+    private var appliedHighlightSignatures: [String] = []
     private struct HighlightExpectation: Encodable {
         let id: String
         let selector: String?
@@ -79,9 +86,17 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     }
     var referenceReturn: (() -> Void)?
     private var activeQuestion: UINavigationController?
+    private var finishedInitialLoad = false
     private var currentChapter = ""
     private var selectionMenu: ReaderSelectionMenu?
+    private var highlightColorBar: HighlightColorBar?
+    private var highlightColorCatcher: UIView?
     private var menuPresentedAt: CFTimeInterval = 0
+    private let bookmarkRibbon = BookmarkRibbonButton()
+    private var pageBookmarks: [Bookmark] = []
+    private var bookmarkRibbonVisible = false
+    private var bookmarkRefreshGeneration = 0
+    private var bookmarkInitialRefreshScheduled = false
 
     init(book: Book, publication: Publication, library: LibraryStore, target: Locator? = nil) throws {
         self.book = book
@@ -100,9 +115,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         navigator.delegate = self
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    static let designedFontSize: CGFloat = 20
-    static let designedLineHeight: Double = 1.95
-    static let designedGutter: CGFloat = 29
+    static let designedFontSize: CGFloat = 18.5
+    static let designedLineHeight: Double = 1.75
+    static let designedGutter: CGFloat = 28
     private static let readiumCJKBaseFontSize: CGFloat = 14
 
     static func readingPreferences(_ settings: ReadingSettings) -> EPUBPreferences {
@@ -118,21 +133,53 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                         publisherStyles: false,
                         scroll: settings.scroll && settings.pageCurl != true,
                         textAlign: .justify,
-                        textColor: Color(uiColor: BookDesign.ink.resolvedColor(with: traits)), theme: settings.dark ? .dark : .light)
+                        textColor: Color(uiColor: BookDesign.ink.resolvedColor(with: traits)),
+                        theme: settings.dark ? .dark : .light,
+                        typeScale: 1)
     }
 
     static func configuration(_ settings: ReadingSettings) -> EPUBNavigatorViewController.Configuration {
         var rs = CSSRSProperties()
         rs.pageGutter = CSSPxLength(designedGutter)
-        rs.selectionBackgroundColor = CSSIntColor(settings.dark ? 0x5B4D2D : 0xF4E3AC)
-        rs.selectionTextColor = CSSIntColor(settings.dark ? 0xF0F1E9 : 0x282B26)
+        rs.selectionBackgroundColor = CSSIntColor(settings.dark ? 0x5A4A2A : 0xF2DBA6)
+        rs.selectionTextColor = CSSIntColor(settings.dark ? 0xF3EEE3 : 0x211E18)
         let inset = EPUBContentInsets(top: designedGutter, bottom: 22)
+        var templates = HTMLDecorationTemplate.defaultTemplates()
+        templates[noteWaveStyleID] = noteWaveTemplate()
         return .init(preferences: readingPreferences(settings), editingActions: [
             EditingAction(title: "高亮", action: #selector(highlightSelection)),
             EditingAction(title: "写笔记", action: #selector(noteSelection)),
             EditingAction(title: "提问", action: #selector(askSelection))
-        ], contentInset: [.compact: inset, .regular: inset], readiumCSSRSProperties: rs)
+        ], contentInset: [.compact: inset, .regular: inset],
+           decorationTemplates: templates,
+           readiumCSSRSProperties: rs)
     }
+    /// 笔记用自定义波浪线 decoration；Readium 无原生 wavy，用平铺 SVG 背景模拟。
+    static let noteWaveStyleID: Decoration.Style.Id = "note-wave"
+
+    static func noteWaveTemplate() -> HTMLDecorationTemplate {
+        HTMLDecorationTemplate(
+            layout: .boxes,
+            element: { decoration in
+                let tint = (decoration.style.config as? Decoration.Style.HighlightConfig)?.tint ?? BookDesign.lampInk
+                let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"4\" viewBox=\"0 0 8 4\">"
+                    + "<path d=\"M0 3 Q2 0.5 4 3 T8 3\" fill=\"none\" stroke=\"\(noteWaveCSSColor(tint))\" "
+                    + "stroke-width=\"1.6\" stroke-linecap=\"round\"/></svg>"
+                let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.!~*()/:"))
+                let encoded = svg.addingPercentEncoding(withAllowedCharacters: allowed) ?? svg
+                return "<div class=\"shudeng-note-wave\""
+                    + " style=\"background-image: url('data:image/svg+xml,\(encoded)')\"></div>"
+            },
+            stylesheet: """
+            .shudeng-note-wave {
+                background-repeat: repeat-x;
+                background-position: left bottom;
+                background-size: 8px 4px;
+            }
+            """
+        )
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         applyTheme()
@@ -149,14 +196,15 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         footer.askButton.addTarget(self, action: #selector(askCurrentBook), for: .touchUpInside)
 
         statusPanel.backgroundColor = BookDesign.wash
-        statusPanel.layer.cornerRadius = 12
+        statusPanel.layer.cornerRadius = BookRadius.field
         statusPanel.layer.borderWidth = 1
         statusPanel.layer.borderColor = BookDesign.line.cgColor
-        status.font = BookDesign.font(12, style: .caption1)
-        status.textColor = BookDesign.secondary
+        status.font = BookType.caption
+        status.textColor = BookDesign.ink3
         status.numberOfLines = 0
         status.accessibilityIdentifier = "reading-save-status"
-        status.text = "正在打开…"
+        // 加载进度由中间的点状 spinner 表达，不再显示底部提示条。
+        status.text = ""
         BookDesign.button(retry, title: "重试保存")
         retry.addTarget(self, action: #selector(retrySave), for: .touchUpInside)
         retry.isHidden = true
@@ -190,20 +238,33 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            toolbar.heightAnchor.constraint(equalToConstant: 51),
+            toolbar.heightAnchor.constraint(equalToConstant: 64),
             content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             footer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-            footer.heightAnchor.constraint(equalToConstant: 66),
+            footer.heightAnchor.constraint(equalToConstant: 76),
             statusPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
             statusPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
             statusPanel.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8)
         ])
+        bookmarkRibbon.translatesAutoresizingMaskIntoConstraints = false
+        bookmarkRibbon.addTarget(self, action: #selector(togglePageBookmark), for: .touchUpInside)
+        bookmarkRibbon.isHidden = true
+        bookmarkRibbon.alpha = 0
+        view.addSubview(bookmarkRibbon)
+        NSLayoutConstraint.activate([
+            bookmarkRibbon.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -2),
+            bookmarkRibbon.topAnchor.constraint(equalTo: content.topAnchor, constant: 74),
+            bookmarkRibbon.widthAnchor.constraint(equalToConstant: 24),
+            bookmarkRibbon.heightAnchor.constraint(equalToConstant: 34)
+        ])
         attachNavigator()
+        updateStatusVisibility()
         updateControlsAccessibilityAction()
         NotificationCenter.default.addObserver(self, selector: #selector(background), name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(libraryChanged), name: LibraryStore.changed, object: library)
     }
     deinit { NotificationCenter.default.removeObserver(self) }
     private func attachNavigator() {
@@ -218,7 +279,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 return
             }
             guard let note = self.library.books.first(where: { $0.id == self.book.id })?.notes?.first(where: { $0.id.uuidString == event.decoration.id }) else { return }
-            self.edit(note)
+            self.presentHighlightOptions(for: note)
         }
         addChild(navigator)
         navigator.view.translatesAutoresizingMaskIntoConstraints = false
@@ -264,11 +325,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         retryVisible: Bool = false,
         visible: Bool = true
     ) {
-        status.text = text
+        // 仅错误状态显示底部提示条；加载中的“正在打开/正在应用设置/正在定位…”等不再弹出。
+        status.text = error ? text : ""
         status.textColor = error ? BookDesign.error : BookDesign.secondary
         retry.isHidden = !retryVisible
         retry.isUserInteractionEnabled = retryVisible
-        statusRequestedVisible = visible
+        statusRequestedVisible = visible && error
         statusIsError = error
         updateStatusVisibility()
     }
@@ -276,6 +338,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         let showStatus = statusRequestedVisible && (!toolbarHidden || statusIsError)
         statusPanel.alpha = showStatus ? 1 : 0
         statusPanel.isUserInteractionEnabled = showStatus
+        statusPanel.accessibilityElementsHidden = !showStatus
         if showStatus { view.bringSubviewToFront(statusPanel) }
     }
     @objc private func openSettings() {
@@ -330,6 +393,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 navigator.delegate = self
                 applyTheme()
                 attachNavigator()
+                refreshBookmarkRibbon()
             } catch { showError() }
         }
     }
@@ -401,10 +465,13 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             guard observation == focusObservation, reader === navigator, !leaving, !changingBounds, !navigating else { return }
             if readingFocus == nil { readingFocus = captured }
             loading = false
+            finishedInitialLoad = true
             content.isUserInteractionEnabled = true
             toolbar.settingsButton.isEnabled = true
             toolbar.contentsButton.isEnabled = true
             updateLocationChrome(locator)
+            refreshBookmarkRibbon()
+            scheduleBookmarkInitialRefresh()
             hideSelectionMenu()
             recordVisibleTextForAcceptance()
             persistPending()
@@ -655,6 +722,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         if settings.pageCurl == true {
             if !loading { readingFocus = nil }
             pendingLocation = locator
+            refreshBookmarkRibbon()
             startCurl()
             return
         }
@@ -681,6 +749,215 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             )
         }
     }
+    @objc private func libraryChanged() { refreshBookmarkRibbon() }
+
+    /// 页角书签丝带：当前页（href + progression/可见原文锚点）有书签时显示。
+    private func refreshBookmarkRibbon() {
+        guard isViewLoaded else { return }
+        bookmarkRefreshGeneration += 1
+        let generation = bookmarkRefreshGeneration
+        guard !leaving, finishedInitialLoad, !loading, !navigating,
+              let location = pendingLocation ?? navigator.currentLocation else {
+            applyBookmarkMatches([])
+            return
+        }
+        let bookmarks = library.books.first(where: { $0.id == book.id })?.bookmarks ?? []
+        let resource = location.href.removingFragment()
+        let candidates = bookmarks.filter { bookmark in
+            guard let saved = try? bookmark.location() else { return false }
+            return saved.href.removingFragment() == resource
+        }
+        let fastMatches = candidates.filter { isBookmarkOnCurrentPage($0, location: location, focus: readingFocus) }
+        #if DEBUG
+        NSLog("SHUDENG_BOOKMARK candidates=%ld fast=%ld resource=%@ progression=%@",
+              candidates.count, fastMatches.count, String(describing: resource),
+              String(describing: location.locations.progression))
+        #endif
+        if !fastMatches.isEmpty || candidates.isEmpty {
+            applyBookmarkMatches(fastMatches)
+            return
+        }
+        // 首次恢复时页起点段落与书签段落可能不同（例：书签在首屏第一段之前），
+        // 用 DOM 确认书签原文范围是否真的落在当前视口内。
+        var expectationIDs: [String] = []
+        var expectations: [[String: Any]] = []
+        for bookmark in candidates {
+            guard let saved = try? bookmark.location(),
+                  let selector = saved.locations.cssSelector, !selector.isEmpty,
+                  let quote = saved.text.highlight, !quote.isEmpty else { continue }
+            var expectation: [String: Any] = [
+                "id": bookmark.id.uuidString,
+                "selector": selector,
+                "quote": quote
+            ]
+            if let before = saved.text.before { expectation["beforeLength"] = before.utf16.count }
+            expectationIDs.append(bookmark.id.uuidString)
+            expectations.append(expectation)
+        }
+        guard !expectations.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: expectations),
+              let json = String(data: data, encoding: .utf8) else {
+            applyBookmarkMatches([])
+            return
+        }
+        let reader = navigator
+        Task {
+            guard case let .success(result as String) = await reader.evaluateJavaScript(Self.bookmarkVisibilityScript(json)),
+                  generation == bookmarkRefreshGeneration,
+                  reader === navigator, !leaving, !loading, !navigating,
+                  let resultData = result.data(using: .utf8),
+                  let flags = try? JSONDecoder().decode([Bool].self, from: resultData),
+                  flags.count == expectationIDs.count,
+                  let current = pendingLocation ?? navigator.currentLocation,
+                  sameNativePage(current, location) || current.href == location.href else { return }
+            let visibleIDs = Set(zip(expectationIDs, flags).filter { $0.1 }.map { $0.0 })
+            #if DEBUG
+            NSLog("SHUDENG_BOOKMARK domVisible=%@", visibleIDs.description)
+            #endif
+            applyBookmarkMatches(candidates.filter { visibleIDs.contains($0.id.uuidString) })
+        }
+    }
+
+    private func applyBookmarkMatches(_ matches: [Bookmark]) {
+        pageBookmarks = matches
+        let visible = !matches.isEmpty
+        bookmarkRibbon.accessibilityLabel = visible ? "取消本页书签" : "添加本页书签"
+        bookmarkRibbon.accessibilityValue = visible ? "此页已有书签" : nil
+        bookmarkRibbon.accessibilityHint = visible ? "轻点删除此页书签" : "轻点在此页添加书签"
+        setBookmarkRibbonVisible(visible)
+    }
+
+    /// 首屏布局/恢复完成后再补一次刷新，避免首次视口尚未稳定时 DOM 可见性判定为 false。
+    private func scheduleBookmarkInitialRefresh() {
+        guard !bookmarkInitialRefreshScheduled else { return }
+        bookmarkInitialRefreshScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            self?.refreshBookmarkRibbon()
+        }
+    }
+
+    private static func bookmarkVisibilityScript(_ expectationsJSON: String) -> String {
+        """
+        (() => {
+          const expectations = \(expectationsJSON);
+          const visible = r => r.width > 0 && r.height > 0 &&
+            r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+          function point(root, offset) {
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            let seen = 0, node;
+            while ((node = walker.nextNode())) {
+              const next = seen + node.textContent.length;
+              if (offset <= next) return { node: node, offset: offset - seen };
+              seen = next;
+            }
+            return null;
+          }
+          return JSON.stringify(expectations.map(e => {
+            const root = document.querySelector(e.selector);
+            if (!root || !e.quote) return false;
+            const text = root.textContent;
+            let start = typeof e.beforeLength === 'number' ? e.beforeLength : text.indexOf(e.quote);
+            if (start < 0 || start + e.quote.length > text.length) start = text.indexOf(e.quote);
+            if (start < 0) return false;
+            const a = point(root, start), b = point(root, start + e.quote.length);
+            if (!a || !b) return false;
+            const range = document.createRange();
+            try { range.setStart(a.node, a.offset); range.setEnd(b.node, b.offset); } catch (_) { return false; }
+            return Array.from(range.getClientRects()).some(visible);
+          }));
+        })()
+        """
+    }
+
+    private func isBookmarkOnCurrentPage(_ bookmark: Bookmark, location: Locator, focus: Locator?) -> Bool {
+        guard let saved = try? bookmark.location(),
+              saved.href.removingFragment() == location.href.removingFragment() else { return false }
+        // 同一原生页：progression 一致时直接命中。
+        if sameNativePage(saved, location) { return true }
+        // 同一页/同一段落：恢复位置与已保存书签的 progression 可能不同步（例如页首 0.08 与恢复 0.18），
+        // 但 cssSelector 或可见原文锚点一致，视为同一页书签。
+        if let selector = saved.locations.cssSelector, !selector.isEmpty,
+           selector == location.locations.cssSelector || selector == focus?.locations.cssSelector {
+            return true
+        }
+        if let highlight = saved.text.highlight, !highlight.isEmpty,
+           highlight == location.text.highlight || highlight == focus?.text.highlight {
+            return true
+        }
+        guard let savedProgression = saved.locations.totalProgression ?? saved.locations.progression,
+              let currentProgression = location.locations.totalProgression ?? location.locations.progression else { return false }
+        return abs(savedProgression - currentProgression) < 0.001
+    }
+
+    private func setBookmarkRibbonVisible(_ visible: Bool) {
+        guard visible != bookmarkRibbonVisible else { return }
+        bookmarkRibbonVisible = visible
+        if visible {
+            bookmarkRibbon.isHidden = false
+            bookmarkRibbon.alpha = 0
+            bookmarkRibbon.transform = CGAffineTransform(scaleX: 0.7, y: 0.7)
+            UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.22,
+                           delay: 0,
+                           usingSpringWithDamping: 0.72,
+                           initialSpringVelocity: 0.4) {
+                self.bookmarkRibbon.alpha = 1
+                self.bookmarkRibbon.transform = .identity
+            }
+        } else {
+            UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.15) {
+                self.bookmarkRibbon.alpha = 0
+            } completion: { _ in
+                if !self.bookmarkRibbonVisible { self.bookmarkRibbon.isHidden = true }
+            }
+        }
+    }
+
+    @objc private func togglePageBookmark() {
+        guard !leaving, finishedInitialLoad, !loading, !curlBusy, !navigating else { return }
+        if !pageBookmarks.isEmpty {
+            do {
+                try library.checkRevision(bookRevision, for: book.id)
+                for bookmark in pageBookmarks { try library.removeBookmark(bookmark.id, for: book.id) }
+                UISelectionFeedbackGenerator().selectionChanged()
+                refreshBookmarkRibbon()
+            } catch {
+                showBookmarkFailure(title: "无法移除书签", message: "书签未被删除，可返回后重试。")
+            }
+            return
+        }
+        guard let base = pendingLocation ?? navigator.currentLocation else {
+            showBookmarkFailure(title: "无法添加书签", message: "当前没有可确认的原文位置，请返回正文后重试。")
+            return
+        }
+        let reader = navigator
+        Task {
+            do {
+                try library.checkRevision(bookRevision, for: book.id)
+                var location = base
+                if case let .success(anchor as [String: String]) = await reader.evaluateJavaScript(Self.visibleTextAnchor),
+                   reader === navigator,
+                   let selector = anchor["selector"], let highlight = anchor["highlight"], !highlight.isEmpty {
+                    location.locations.cssSelector = selector
+                    location.locations.otherLocations.removeValue(forKey: "domRange")
+                    location.text = Locator.Text(after: anchor["after"], before: anchor["before"], highlight: highlight)
+                }
+                try library.saveBookmark(Bookmark(locator: location), for: book.id)
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                refreshBookmarkRibbon()
+            } catch {
+                showBookmarkFailure(title: "无法添加书签", message: "当前没有可确认的原文位置，请返回正文后重试。")
+            }
+        }
+    }
+
+    private func showBookmarkFailure(title: String, message: String) {
+        guard !leaving, presentedViewController == nil else { return }
+        let alert = BookAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(BookAlertAction(title: "知道了", style: .cancel))
+        present(alert, animated: true)
+    }
+
     @objc private func retrySave() {
         if loadFailed {
             stopCurl()
@@ -703,11 +980,13 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     @objc private func background() { persistPending() }
     @objc private func closeReader() {
         if questionOrigin != nil { backToQuestion(); return }
+        // 首次加载完成前返回：不做“未保存”拦截，避免刚打开书就弹警告。
+        if !finishedInitialLoad { finishReading(); return }
         persistPending()
         guard !saveFailed, !loading else {
-            let alert = UIAlertController(title: "位置与设置尚未保存", message: "返回书架后，未保存的变更可能丢失。", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "留在阅读页", style: .cancel))
-            alert.addAction(UIAlertAction(title: "仍然返回", style: .destructive) { [weak self] _ in self?.finishReading() })
+            let alert = BookAlertController(title: "位置与设置尚未保存", message: "返回书架后，未保存的变更可能丢失。", preferredStyle: .alert)
+            alert.addAction(BookAlertAction(title: "留在阅读页", style: .cancel))
+            alert.addAction(BookAlertAction(title: "仍然返回", style: .destructive) { [weak self] _ in self?.finishReading() })
             present(alert, animated: true)
             return
         }
@@ -732,8 +1011,8 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         toolbar.contentsButton.isEnabled = false
         saveFailed = true
         guard presentedViewController == nil else { return }
-        let alert = UIAlertController(title: "原文加载失败", message: "无法读取此处内容，请返回书架后重新打开。", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "知道了", style: .default))
+        let alert = BookAlertController(title: "原文加载失败", message: "无法读取此处内容，请返回书架后重新打开。", preferredStyle: .alert)
+        alert.addAction(BookAlertAction(title: "知道了", style: .default))
         present(alert, animated: true)
     }
 
@@ -818,12 +1097,13 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 restoringFocus = nil
                 pendingLocation = actual
                 updateLocationChrome(actual)
+                refreshBookmarkRibbon()
                 if settings.pageCurl == true { startCurl() }
                 else { persistPending() }
             } else {
                 setStatus("未能到达原文，未保存此次跳转；请重新选择目录或书签", error: true)
-                let alert = UIAlertController(title: "无法定位原文", message: "目标位置无效或原文未显示，未覆盖上次阅读位置。", preferredStyle: .alert)
-                alert.addAction(UIAlertAction(title: "知道了", style: .default))
+                let alert = BookAlertController(title: "无法定位原文", message: "目标位置无效或原文未显示，未覆盖上次阅读位置。", preferredStyle: .alert)
+                alert.addAction(BookAlertAction(title: "知道了", style: .default))
                 present(alert, animated: true)
             }
             completion?(arrived)
@@ -866,6 +1146,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 } else {
                     self.setStatus("阅读位置已保存", visible: false)
                 }
+                self.refreshBookmarkRibbon()
                 self.view.setNeedsLayout()
                 self.setCurlActivationObserver(enabled: true)
                 self.recordVisibleTextForAcceptance()
@@ -893,12 +1174,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         toolbar.settingsButton.isEnabled = false
         toolbar.contentsButton.isEnabled = false
         setStatus("仿真翻页准备失败，请重试或使用分页", error: true, retryVisible: true)
-        let alert = UIAlertController(title: "翻页准备失败", message: "未保存内部准备位置，可重试或恢复普通分页阅读。", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "使用分页", style: .default) { [weak self] _ in
+        let alert = BookAlertController(title: "翻页准备失败", message: "未保存内部准备位置，可重试或恢复普通分页阅读。", preferredStyle: .alert)
+        alert.addAction(BookAlertAction(title: "使用分页", style: .default) { [weak self] _ in
             self?.settings.pageCurl = false
             self?.retrySave()
         })
-        alert.addAction(UIAlertAction(title: "稍后重试", style: .cancel))
+        alert.addAction(BookAlertAction(title: "稍后重试", style: .cancel))
         if presentedViewController == nil { present(alert, animated: true) }
     }
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
@@ -914,6 +1195,11 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             self.changeSettings(self.settings, force: true, restoring: userLocation)
         }
     }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        refreshBookmarkRibbon()
+        scheduleBookmarkInitialRefresh()
+    }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // New bounds require new pagination and snapshots, including rotation and
@@ -925,11 +1211,32 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
 
     private var notes: [BookNote] { library.books.first { $0.id == book.id }?.notes ?? [] }
 
+    private var highlightSignatures: [String] {
+        notes.map { note in
+            note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? note.id.uuidString + ":highlight:" + note.highlightColor.rawValue
+                : note.id.uuidString + ":note"
+        }
+    }
     private func applyHighlights() {
-        highlightedIDs = notes.map(\.id)
+        appliedHighlightSignatures = highlightSignatures
+        let traits = traitCollection
+        // 笔记使用固定暖灯色波浪线（不再跟随 4 色）；高亮仍按用户选择的颜色。
+        let noteTint = BookDesign.lampInk.resolvedColor(with: traits)
         navigator.apply(decorations: notes.compactMap { note in
             guard let locator = try? note.location() else { return nil }
-            return Decoration(id: note.id.uuidString, locator: locator, style: .highlight(tint: BookDesign.selection))
+            if note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return Decoration(
+                    id: note.id.uuidString,
+                    locator: locator,
+                    style: .highlight(tint: note.highlightColor.tint.resolvedColor(with: traits))
+                )
+            }
+            return Decoration(
+                id: note.id.uuidString,
+                locator: locator,
+                style: Decoration.Style(id: Self.noteWaveStyleID, config: Decoration.Style.HighlightConfig(tint: noteTint))
+            )
         }, in: "notes")
     }
     // Readium applies decorations asynchronously. Verify actual ranges before
@@ -1000,7 +1307,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         return false
     }
     private func refreshHighlights() {
-        guard highlightedIDs != notes.map(\.id) else { return }
+        guard appliedHighlightSignatures != highlightSignatures else { return }
         let wasCurl = curl != nil
         stopCurl() // Discard every neighbor snapshot on annotation changes.
         applyHighlights()
@@ -1016,10 +1323,160 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         navigator.clearSelection()
         let editor = NoteEditorController(library: library, bookID: book.id, note: note,
             changed: { [weak self] in self?.refreshHighlights() })
-        let sheet = UINavigationController(rootViewController: editor)
-        sheet.overrideUserInterfaceStyle = overrideUserInterfaceStyle
-        sheet.modalPresentationStyle = .fullScreen
-        present(sheet, animated: true)
+        // NoteEditor 自带 overFullScreen 底部卡片与滑入动画，这里不再包系统 sheet。
+        editor.overrideUserInterfaceStyle = overrideUserInterfaceStyle
+        present(editor, animated: false)
+    }
+    private static let preferredHighlightColorKey = "reader-highlight-color"
+    private var preferredHighlightColor: HighlightColor {
+        HighlightColor(rawValue: UserDefaults.standard.string(forKey: Self.preferredHighlightColorKey) ?? "") ?? .yellow
+    }
+    private func rememberHighlightColor(_ color: HighlightColor) {
+        UserDefaults.standard.set(color.rawValue, forKey: Self.preferredHighlightColorKey)
+    }
+    /// Apple Books / 微信读书式：先按上次颜色立即上色，再弹轻量调色条微调。
+    private func chooseHighlightColor(for selection: Selection) {
+        guard !loading, !curlBusy, !navigating else { return }
+        hideSelectionMenu()
+        hideHighlightColorBar()
+        Task {
+            do {
+                let (_, base) = try await capturedHighlightAnchor(selection)
+                guard saveHighlight(base, color: preferredHighlightColor) else { return }
+                showHighlightColorBar(for: base, selected: preferredHighlightColor)
+            } catch {
+                let alert = BookAlertController(title: "无法保存选文", message: "未能确认原文选区，请重新选择。", preferredStyle: .alert)
+                alert.addAction(BookAlertAction(title: "知道了", style: .cancel))
+                present(alert, animated: true)
+            }
+        }
+    }
+    private func showHighlightColorBar(for note: BookNote, selected: HighlightColor) {
+        hideHighlightColorBar()
+        let catcher = UIView()
+        catcher.backgroundColor = .clear
+        catcher.translatesAutoresizingMaskIntoConstraints = false
+        catcher.accessibilityIdentifier = "highlight-color-bar-dismiss"
+        view.addSubview(catcher)
+        NSLayoutConstraint.activate([
+            catcher.topAnchor.constraint(equalTo: view.topAnchor),
+            catcher.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            catcher.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            catcher.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        catcher.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(dismissHighlightColorBar)))
+        highlightColorCatcher = catcher
+
+        let bar = HighlightColorBar(selected: selected)
+        var current = selected
+        bar.onPick = { [weak self] color in
+            guard let self, color != current else { return }
+            current = color
+            self.rememberHighlightColor(color)
+            self.updateHighlightColor(color, noteID: note.id)
+            self.highlightColorBar?.update(selected: color)
+        }
+        bar.onClose = { [weak self] in self?.hideHighlightColorBar() }
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bar)
+        bar.place(in: view)
+        highlightColorBar = bar
+        bar.appear()
+    }
+    @objc private func dismissHighlightColorBar() { hideHighlightColorBar() }
+    private func hideHighlightColorBar() {
+        highlightColorCatcher?.removeFromSuperview()
+        highlightColorCatcher = nil
+        guard let bar = highlightColorBar else { return }
+        highlightColorBar = nil
+        bar.disappear { bar.removeFromSuperview() }
+    }
+    /// 在弹调色盘前先固定选区的 DOM 锚点，避免模态呈现后选区失效。
+    private func capturedHighlightAnchor(_ selection: Selection) async throws -> (locator: Locator, note: BookNote) {
+        guard case let .success(anchor as [String: Any]) = await navigator.evaluateJavaScript(Self.selectionAnchor),
+              let selector = anchor["selector"] as? String,
+              let highlight = anchor["highlight"] as? String, !highlight.isEmpty,
+              let range = anchor["domRange"] as? [String: Any] else { throw LibraryError.invalidLocation }
+        var locator = selection.locator
+        locator.locations.cssSelector = selector
+        locator.locations.otherLocations["domRange"] = try JSONValue(
+            jsonString: String(data: JSONSerialization.data(withJSONObject: range), encoding: .utf8)!,
+            warnings: nil
+        )
+        locator.text = Locator.Text(after: anchor["after"] as? String, before: anchor["before"] as? String, highlight: highlight)
+        let candidates = notes + (library.books.first { $0.id == book.id }?.noteDrafts ?? [])
+        let existing = candidates.first { note in
+            guard let saved = try? note.location() else { return false }
+            return saved.href == locator.href && saved.locations.domRange == locator.locations.domRange && saved.text == locator.text
+        }
+        return (locator, existing ?? BookNote(locator: locator))
+    }
+    private func presentHighlightOptions(for note: BookNote) {
+        navigator.clearSelection()
+        let hasBody = !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if hasBody {
+            // 点波浪线笔记直接进编辑弹层（不再有「查看笔记」中间层）。
+            edit(note)
+        } else {
+            presentHighlightColorPalette(
+                selected: note.highlightColor,
+                onPick: { [weak self] color in self?.applyHighlightColor(color, to: note) },
+                onDelete: { [weak self] in self?.deleteHighlight(note) },
+                deleteTitle: "取消高亮"
+            )
+        }
+    }
+    private func updateHighlightColor(_ color: HighlightColor, noteID: UUID) {
+        do {
+            try library.checkRevision(bookRevision, for: book.id)
+            try library.updateNoteColor(color, forNoteID: noteID, bookID: book.id)
+            UISelectionFeedbackGenerator().selectionChanged()
+            refreshHighlights()
+        } catch {
+            let alert = BookAlertController(title: "颜色保存失败", message: "高亮颜色未保存，可重试。", preferredStyle: .alert)
+            alert.addAction(BookAlertAction(title: "知道了", style: .cancel))
+            present(alert, animated: true)
+        }
+    }
+    private func applyHighlightColor(_ color: HighlightColor, to note: BookNote) {
+        guard note.highlightColor != color else { return }
+        rememberHighlightColor(color)
+        do {
+            try library.checkRevision(bookRevision, for: book.id)
+            try library.updateNoteColor(color, forNoteID: note.id, bookID: book.id)
+            UISelectionFeedbackGenerator().selectionChanged()
+            refreshHighlights()
+        } catch {
+            let alert = BookAlertController(title: "颜色保存失败", message: "高亮颜色未保存，可重试。", preferredStyle: .alert)
+            alert.addAction(BookAlertAction(title: "知道了", style: .cancel))
+            present(alert, animated: true)
+        }
+    }
+    private func presentHighlightColorPalette(
+        selected: HighlightColor?,
+        onPick: @escaping (HighlightColor) -> Void,
+        onDelete: (() -> Void)? = nil,
+        deleteTitle: String = "删除高亮"
+    ) {
+        guard presentedViewController == nil else { return }
+        hideSelectionMenu()
+        let palette = HighlightColorPaletteController(
+            selected: selected, onPick: onPick, onDelete: onDelete, deleteTitle: deleteTitle
+        )
+        palette.overrideUserInterfaceStyle = overrideUserInterfaceStyle
+        present(palette, animated: true)
+    }
+    private func deleteHighlight(_ note: BookNote) {
+        do {
+            try library.checkRevision(bookRevision, for: book.id)
+            try library.removeNote(note.id, bookID: book.id)
+            UISelectionFeedbackGenerator().selectionChanged()
+            refreshHighlights()
+        } catch {
+            let alert = BookAlertController(title: "删除失败", message: "内容未被删除，可重试。", preferredStyle: .alert)
+            alert.addAction(BookAlertAction(title: "知道了", style: .cancel))
+            present(alert, animated: true)
+        }
     }
     func navigator(
         _ navigator: SelectableNavigator,
@@ -1057,7 +1514,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
 
             let menu = ReaderSelectionMenu()
             menu.onHighlight = { [weak self] in
-                self?.captureSelection(writeNote: false, selection: selection)
+                self?.chooseHighlightColor(for: selection)
             }
             menu.onNote = { [weak self] in
                 self?.captureSelection(writeNote: true, selection: selection)
@@ -1076,7 +1533,10 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         selectionMenu = nil
         menuPresentedAt = 0
     }
-    @objc private func highlightSelection() { captureSelection(writeNote: false) }
+    @objc private func highlightSelection() {
+        guard let selection = navigator.currentSelection else { return }
+        chooseHighlightColor(for: selection)
+    }
     @objc private func noteSelection() { captureSelection(writeNote: true) }
     @objc private func askSelection() { captureSelection(writeNote: false, question: true) }
     @objc private func askCurrentBook() {
@@ -1112,9 +1572,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         guard loadFailed || (!loading && !navigating && !curlBusy) else { return }
         persistPending()
         if saveFailed {
-            let alert = UIAlertController(title: "位置与设置尚未保存", message: "返回问答后，未保存的阅读位置或设置可能丢失。", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "留在阅读页", style: .cancel))
-            alert.addAction(UIAlertAction(title: "仍然返回问答", style: .destructive) { [weak self] _ in self?.finishQuestionReturn() })
+            let alert = BookAlertController(title: "位置与设置尚未保存", message: "返回问答后，未保存的阅读位置或设置可能丢失。", preferredStyle: .alert)
+            alert.addAction(BookAlertAction(title: "留在阅读页", style: .cancel))
+            alert.addAction(BookAlertAction(title: "仍然返回问答", style: .destructive) { [weak self] _ in self?.finishQuestionReturn() })
             present(alert, animated: true)
             return
         }
@@ -1210,23 +1670,33 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
                 if writeNote { edit(note) }
                 else { saveHighlight(note) }
             } catch {
-                let alert = UIAlertController(title: "无法保存选文", message: "未能确认原文选区，请重新选择。", preferredStyle: .alert)
-                alert.addAction(UIAlertAction(title: "知道了", style: .default))
+                let alert = BookAlertController(title: "无法保存选文", message: "未能确认原文选区，请重新选择。", preferredStyle: .alert)
+                alert.addAction(BookAlertAction(title: "知道了", style: .default))
                 present(alert, animated: true)
             }
         }
     }
-    private func saveHighlight(_ note: BookNote) {
+    @discardableResult
+    private func saveHighlight(_ note: BookNote, color: HighlightColor? = nil) -> Bool {
+        var note = note
+        if let color { note.color = color }
+        let isSaved = notes.contains { $0.id == note.id }
         do {
             try library.checkRevision(bookRevision, for: book.id)
-            try library.saveNote(note, for: book.id, highlightOnly: true)
+            if isSaved, let color = note.color {
+                try library.updateNoteColor(color, forNoteID: note.id, bookID: book.id)
+            } else {
+                try library.saveNote(note, for: book.id, highlightOnly: true)
+            }
             navigator.clearSelection()
             refreshHighlights()
+            return true
         } catch {
-            let alert = UIAlertController(title: "高亮保存失败", message: "尚未保存；重试仍使用同一条记录。", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "重试保存高亮", style: .default) { [weak self] _ in self?.saveHighlight(note) })
-            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+            let alert = BookAlertController(title: "高亮保存失败", message: "尚未保存；重试仍使用同一条记录。", preferredStyle: .alert)
+            alert.addAction(BookAlertAction(title: "重试保存高亮", style: .default) { [weak self] _ in self?.saveHighlight(note) })
+            alert.addAction(BookAlertAction(title: "取消", style: .cancel))
             present(alert, animated: true)
+            return false
         }
     }
     private static let selectionAnchor = """
@@ -1381,8 +1851,9 @@ final class ReaderToolbarView: UIView {
     let backButton = UIButton(type: .system)
     let contentsButton = UIButton(type: .system)
     let settingsButton = UIButton(type: .system)
-    private let titleLabel = BookDesign.label(nil, size: 13, weight: .semibold)
-    private let chapterLabel = BookDesign.label(nil, size: 10, colour: BookDesign.secondary, style: .caption2)
+    private let titleLabel = BookDesign.label(nil, font: BookType.sans(12, weight: .medium, style: .subheadline), colour: BookDesign.ink2)
+    private let chapterLabel = BookDesign.label(nil, font: BookType.caption, colour: BookDesign.ink3)
+    private let hairline = UIView()
     private let leadingRegion = UIView()
     private let trailingRegion = UIView()
     private var leadingWidth: NSLayoutConstraint!
@@ -1390,8 +1861,17 @@ final class ReaderToolbarView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = BookDesign.paper
+        backgroundColor = BookDesign.paper.withAlphaComponent(0.94)
         accessibilityIdentifier = "reader-toolbar"
+        hairline.backgroundColor = BookDesign.line
+        hairline.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hairline)
+        NSLayoutConstraint.activate([
+            hairline.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hairline.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hairline.bottomAnchor.constraint(equalTo: bottomAnchor),
+            hairline.heightAnchor.constraint(equalToConstant: 1)
+        ])
 
         configure(backButton, image: "arrow.left")
         configure(contentsButton, image: "list.bullet")
@@ -1473,8 +1953,8 @@ final class ReaderToolbarView: UIView {
 
     private func configure(_ button: UIButton, image: String) {
         var config = UIButton.Configuration.plain()
-        config.image = BookDesign.symbol(image, size: 20)
-        config.baseForegroundColor = BookDesign.ink
+        config.image = BookDesign.symbol(image, size: 18, weight: .medium)
+        config.baseForegroundColor = BookDesign.ink2
         config.contentInsets = .zero
         config.imagePlacement = .leading
         config.imagePadding = 5
@@ -1490,9 +1970,9 @@ final class ReaderToolbarView: UIView {
 
 @MainActor
 final class ReaderFooterView: UIView {
-    let askButton = UIButton(type: .system)
-    private let progressLabel = BookDesign.label(nil, size: 11, colour: BookDesign.secondary, style: .caption2)
-    private let chapterLabel = BookDesign.label(nil, size: 11, colour: BookDesign.secondary, style: .caption2)
+    let askButton = ReaderAskButton(type: .system)
+    private let progressLabel = BookDesign.label(nil, font: BookType.caption, colour: BookDesign.ink3)
+    private let chapterLabel = BookDesign.label(nil, font: BookType.caption, colour: BookDesign.ink3)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1501,26 +1981,24 @@ final class ReaderFooterView: UIView {
 
         var config = UIButton.Configuration.plain()
         config.title = "问问书灯"
-        config.image = BookDesign.symbol("lightbulb", size: 19)
-        config.imagePadding = 7
+        config.image = BookDesign.symbol("lightbulb", size: 16)
+        config.imagePadding = 6
         config.baseForegroundColor = BookDesign.ink
-        config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+        config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 14)
         config.background.backgroundColor = BookDesign.surface
-        config.background.strokeColor = BookDesign.line
-        config.background.strokeWidth = 1
-        config.background.cornerRadius = 24
+        config.background.cornerRadius = BookRadius.pill
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
             var attributes = $0
-            attributes.font = BookDesign.font(13, weight: .semibold)
+            attributes.font = BookType.sans(12, weight: .medium, style: .footnote)
             return attributes
         }
         askButton.configuration = config
         askButton.accessibilityLabel = "问问书灯"
         askButton.accessibilityIdentifier = "reader-ask-book"
-        askButton.layer.shadowColor = BookDesign.ink.cgColor
-        askButton.layer.shadowOpacity = 0.06
-        askButton.layer.shadowRadius = 5
-        askButton.layer.shadowOffset = CGSize(width: 0, height: 3)
+        askButton.layer.shadowColor = UIColor.black.cgColor
+        askButton.layer.shadowOpacity = 0.16
+        askButton.layer.shadowRadius = 22
+        askButton.layer.shadowOffset = CGSize(width: 0, height: 8)
 
         progressLabel.accessibilityIdentifier = "reader-progress"
         chapterLabel.accessibilityIdentifier = "reader-footer-chapter"
@@ -1533,12 +2011,12 @@ final class ReaderFooterView: UIView {
         }
         NSLayoutConstraint.activate([
             askButton.centerXAnchor.constraint(equalTo: centerXAnchor),
-            askButton.heightAnchor.constraint(equalToConstant: 44),
+            askButton.heightAnchor.constraint(equalToConstant: 36),
             askButton.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            progressLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            progressLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            chapterLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            chapterLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            progressLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 26),
+            progressLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            chapterLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -26),
+            chapterLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
             chapterLabel.leadingAnchor.constraint(greaterThanOrEqualTo: progressLabel.trailingAnchor, constant: 12)
         ])
     }
@@ -1548,6 +2026,14 @@ final class ReaderFooterView: UIView {
     func update(progress: String, chapter: String) {
         progressLabel.text = progress
         chapterLabel.text = chapter
+    }
+}
+
+/// 视觉更小的「问问书灯」按钮；命中区仍保证 44pt 高，保持可点性。
+final class ReaderAskButton: UIButton {
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let vertical = max(0, (44 - bounds.height) / 2)
+        return bounds.insetBy(dx: 0, dy: -vertical).contains(point)
     }
 }
 
@@ -1715,6 +2201,8 @@ private final class BookNavigationController: UITableViewController {
     }
     override func viewDidLoad() {
         super.viewDidLoad()
+        BookDesign.formTable(tableView)
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "navigation-row")
         tabs.selectedSegmentIndex = 0
         tabs.addTarget(self, action: #selector(refresh), for: .valueChanged)
         navigationItem.titleView = tabs
@@ -1735,52 +2223,152 @@ private final class BookNavigationController: UITableViewController {
             refresh()
         }
     }
-    @objc private func refresh() { tableView.reloadData() }
+    @objc private func refresh() {
+        tableView.reloadData()
+        updateEmptyState()
+    }
     @objc private func openSearch() {
         guard let book = library.books.first(where: { $0.id == bookID }) else { return }
         navigationController?.pushViewController(BookSearchController(library: library, book: book, navigate: navigate), animated: true)
     }
     @objc private func done() { dismiss(animated: true) }
+
+    private var isContentsTab: Bool { tabs.selectedSegmentIndex == 0 }
+
+    /// 书签行第二行：优先显示阅读进度百分比，缺失时退回 Readium position。
+    private func bookmarkProgress(_ bookmark: Bookmark) -> String {
+        guard let locator = try? bookmark.location() else { return bookmark.excerpt }
+        if let value = locator.locations.totalProgression ?? locator.locations.progression {
+            return "进度 " + String(Int((max(0, min(1, value)) * 100).rounded())) + "%"
+        }
+        if let position = locator.locations.position {
+            return "位置 " + String(position)
+        }
+        return bookmark.excerpt
+    }
+
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? { feedback }
+    override func tableView(_ tableView: UITableView, willDisplayFooterView view: UIView, forSection section: Int) {
+        BookDesign.formHeaderFooter(view)
+    }
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        max(1, tabs.selectedSegmentIndex == 0 ? contents.count : bookmarks.count)
+        max(1, isContentsTab ? contents.count : bookmarks.count)
     }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-        cell.textLabel?.font = .preferredFont(forTextStyle: .body)
-        cell.detailTextLabel?.font = .preferredFont(forTextStyle: .caption1)
-        for label in [cell.textLabel, cell.detailTextLabel] { label?.numberOfLines = 0; label?.adjustsFontForContentSizeCategory = true }
-        if tabs.selectedSegmentIndex == 0 {
-            if contents.isEmpty { cell.textLabel?.text = contentsMessage; cell.selectionStyle = .none }
-            else {
-                let (link, depth) = contents[indexPath.row]
-                cell.textLabel?.text = link.title ?? "未命名章节"
-                cell.indentationLevel = min(depth, 4)
-                cell.accessoryType = .disclosureIndicator
-            }
-        } else if bookmarks.isEmpty { cell.textLabel?.text = "暂无书签"; cell.selectionStyle = .none }
-        else {
-            let bookmark = bookmarks[indexPath.row]
-            cell.textLabel?.text = bookmark.title
-            cell.detailTextLabel?.text = bookmark.excerpt
-            cell.accessibilityIdentifier = "bookmark-\(bookmark.id)"
+        let cell = tableView.dequeueReusableCell(withIdentifier: "navigation-row", for: indexPath)
+        cell.accessoryType = .none
+        cell.selectionStyle = .default
+        cell.accessibilityIdentifier = nil
+        if isContentsTab {
+            guard !contents.isEmpty else { return messageCell(cell, text: contentsMessage) }
+            let (link, depth) = contents[indexPath.row]
+            var content = UIListContentConfiguration.cell()
+            content.text = link.title ?? "未命名章节"
+            content.textProperties.font = BookType.body
+            content.textProperties.color = BookDesign.ink
+            content.textProperties.numberOfLines = 0
+            content.directionalLayoutMargins = NSDirectionalEdgeInsets(
+                top: 10,
+                leading: 20 + CGFloat(min(depth, 4)) * 16,
+                bottom: 10,
+                trailing: 20
+            )
+            cell.contentConfiguration = content
             cell.accessoryType = .disclosureIndicator
+        } else {
+            guard !bookmarks.isEmpty else { return messageCell(cell, text: "暂无书签") }
+            let bookmark = bookmarks[indexPath.row]
+            var content = UIListContentConfiguration.subtitleCell()
+            content.image = BookDesign.symbol("bookmark.fill", size: 13, weight: .medium)
+            content.imageProperties.tintColor = BookDesign.lamp
+            content.text = bookmark.title
+            content.textProperties.font = BookType.body
+            content.textProperties.color = BookDesign.ink
+            content.textProperties.numberOfLines = 1
+            content.secondaryText = bookmarkProgress(bookmark)
+            content.secondaryTextProperties.font = BookType.footnote
+            content.secondaryTextProperties.color = BookDesign.ink3
+            content.secondaryTextProperties.numberOfLines = 1
+            cell.contentConfiguration = content
+            cell.accessoryType = .disclosureIndicator
+            cell.accessibilityIdentifier = "bookmark-\(bookmark.id)"
+            cell.accessibilityValue = bookmark.excerpt
         }
         return cell
     }
+    private func messageCell(_ cell: UITableViewCell, text: String) -> UITableViewCell {
+        var content = UIListContentConfiguration.cell()
+        content.text = text
+        content.textProperties.font = BookType.footnote
+        content.textProperties.color = BookDesign.ink3
+        content.textProperties.numberOfLines = 0
+        cell.contentConfiguration = content
+        cell.selectionStyle = .none
+        cell.accessoryType = .none
+        return cell
+    }
+    private func updateEmptyState() {
+        if #available(iOS 17.0, *) {
+            updateContentUnavailable()
+        } else {
+            tableView.backgroundView = nil
+        }
+    }
+    @available(iOS 17.0, *)
+    private func updateContentUnavailable() {
+        if isContentsTab {
+            if !contents.isEmpty || contentsMessage == "正在读取目录…" {
+                contentUnavailableConfiguration = nil
+            } else if contentsMessage.hasPrefix("目录读取失败") {
+                contentUnavailableConfiguration = BookContentUnavailable.configuration(
+                    title: "目录读取失败",
+                    detail: "请关闭后重试；仍可阅读正文。",
+                    symbol: "exclamationmark.triangle",
+                    actionTitle: "关闭",
+                    action: { [weak self] in self?.done() }
+                )
+            } else {
+                contentUnavailableConfiguration = BookContentUnavailable.configuration(
+                    title: contentsMessage,
+                    detail: "可用书内搜索定位原文。",
+                    symbol: "list.bullet",
+                    actionTitle: "搜索原文",
+                    action: { [weak self] in self?.openSearch() }
+                )
+            }
+        } else if bookmarks.isEmpty {
+            contentUnavailableConfiguration = BookContentUnavailable.configuration(
+                title: "暂无书签",
+                detail: "轻点右上角 + 保存当前位置，书签会留在本书里。",
+                symbol: "bookmark",
+                actionTitle: "保存当前位置",
+                action: { [weak self] in self?.addBookmark() }
+            )
+        } else {
+            contentUnavailableConfiguration = nil
+        }
+    }
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        let isContents = tabs.selectedSegmentIndex == 0
-        guard isContents ? !contents.isEmpty : !bookmarks.isEmpty else { return }
-        let link = isContents ? contents[indexPath.row].0 : nil
-        let bookmark = isContents ? nil : bookmarks[indexPath.row]
-        Task {
-            let target: Locator?
-            if let link { target = await publication.locate(link) }
-            else { target = try? bookmark?.location() }
-            guard let target else { showFailure(title: "无法定位原文", message: "目标位置无效，请选择其他目录或书签。", retry: nil); return }
-            dismiss(animated: true) { [navigate] in navigate(target) }
+        if isContentsTab {
+            guard contents.indices.contains(indexPath.row) else { return }
+            let link = contents[indexPath.row].0
+            Task {
+                let target = await publication.locate(link)
+                open(target, failure: "目标位置无效，请选择其他目录。")
+            }
+        } else {
+            guard bookmarks.indices.contains(indexPath.row) else { return }
+            let bookmark = bookmarks[indexPath.row]
+            Task { open(try? bookmark.location(), failure: "目标位置无效，请选择其他书签。") }
         }
+    }
+    private func open(_ target: Locator?, failure: String) {
+        guard let target else {
+            showFailure(title: "无法定位原文", message: failure, retry: nil)
+            return
+        }
+        dismiss(animated: true) { [navigate] in navigate(target) }
     }
     @objc private func addBookmark() {
         navigationItem.rightBarButtonItem?.isEnabled = false
@@ -1803,10 +2391,11 @@ private final class BookNavigationController: UITableViewController {
         } catch { showFailure(title: "书签保存失败", message: "尚未保存，重启后不会保留。可重试或取消本次添加。", retry: { [weak self] in self?.save(bookmark) }) }
     }
     override func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool {
-        tabs.selectedSegmentIndex == 1 && !bookmarks.isEmpty
+        !isContentsTab && !bookmarks.isEmpty
     }
     override func tableView(_ tableView: UITableView, titleForDeleteConfirmationButtonForRowAt indexPath: IndexPath) -> String? { "移除" }
     override func tableView(_ tableView: UITableView, commit editingStyle: UITableViewCell.EditingStyle, forRowAt indexPath: IndexPath) {
+        guard !isContentsTab, bookmarks.indices.contains(indexPath.row) else { return }
         remove(bookmarks[indexPath.row].id)
     }
     private func remove(_ id: UUID) {
@@ -1820,15 +2409,15 @@ private final class BookNavigationController: UITableViewController {
     private func showFailure(title: String, message: String, retry: (() -> Void)?) {
         feedback = nil
         refresh()
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        if let retry { alert.addAction(UIAlertAction(title: "重试保存", style: .default) { _ in retry() }) }
-        alert.addAction(UIAlertAction(title: retry == nil ? "知道了" : "取消", style: .cancel))
+        let alert = BookAlertController(title: title, message: message, preferredStyle: .alert)
+        if let retry { alert.addAction(BookAlertAction(title: "重试保存", style: .default) { _ in retry() }) }
+        alert.addAction(BookAlertAction(title: retry == nil ? "知道了" : "取消", style: .cancel))
         present(alert, animated: true)
     }
 }
 
 @MainActor
-private final class ReadingSettingsController: UIViewController {
+private final class ReadingSettingsController: UITableViewController {
     private var settings: ReadingSettings
     private let apply: (ReadingSettings) -> Void
     private let mode = UISegmentedControl(items: ["分页", "滚动", "仿真"])
@@ -1836,64 +2425,78 @@ private final class ReadingSettingsController: UIViewController {
     private let size = UILabel()
     private let decrease = UIButton(type: .system)
     private let increase = UIButton(type: .system)
+    private lazy var sizeRow = makeSizeRow()
+    private var sectionTitles: [String] { ["阅读方式", "字号", "主题"] }
 
     init(settings: ReadingSettings, apply: @escaping (ReadingSettings) -> Void) {
         self.settings = settings
         self.apply = apply
-        super.init(nibName: nil, bundle: nil)
+        super.init(style: .insetGrouped)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "阅读设置"
-        view.backgroundColor = .systemBackground
+        BookDesign.formTable(tableView)
+        view.backgroundColor = BookDesign.paper
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: "取消", style: .plain, target: self, action: #selector(cancel))
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "完成", style: .done, target: self, action: #selector(done))
+        tableView.register(ReadingControlCell.self, forCellReuseIdentifier: "settings-row")
         mode.selectedSegmentIndex = settings.pageCurl == true ? 2 : settings.scroll ? 1 : 0
         theme.selectedSegmentIndex = settings.dark ? 1 : 0
-        decrease.setTitle("A−", for: .normal)
-        decrease.accessibilityLabel = "缩小字号"
+        for control in [mode, theme] {
+            control.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        }
         decrease.addTarget(self, action: #selector(smaller), for: .touchUpInside)
-        increase.setTitle("A+", for: .normal)
-        increase.accessibilityLabel = "增大字号"
         increase.addTarget(self, action: #selector(larger), for: .touchUpInside)
-        size.font = .preferredFont(forTextStyle: .body)
+        updateSize()
+    }
+
+    private func makeSizeRow() -> UIStackView {
+        size.font = BookType.body
         size.adjustsFontForContentSizeCategory = true
         size.textAlignment = .center
         size.accessibilityIdentifier = "font-size"
-        let font = UIStackView(arrangedSubviews: [decrease, size, increase])
-        for button in [decrease, increase] {
+        for (button, title, label) in [(decrease, "A−", "缩小字号"), (increase, "A+", "增大字号")] {
+            var configuration = UIButton.Configuration.plain()
+            configuration.title = title
+            button.configuration = configuration
+            button.accessibilityLabel = label
             button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         }
-        for control in [mode, theme, decrease, increase] { control.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true }
-        let stack = UIStackView(arrangedSubviews: [label("阅读方式"), mode, label("字号"), font, label("主题"), theme, label("仅用于本书")])
-        stack.axis = .vertical
-        stack.spacing = 20
-        let scroll = UIScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(scroll)
-        scroll.addSubview(stack)
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 24),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
-            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -24),
-            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -48)
-        ])
-        updateSize()
+        let stack = UIStackView(arrangedSubviews: [decrease, size, increase])
+        stack.axis = .horizontal
+        stack.alignment = .center
+        stack.spacing = 12
+        size.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return stack
     }
-    private func label(_ text: String) -> UILabel {
-        let label = UILabel()
-        label.text = text
-        label.font = .preferredFont(forTextStyle: .body)
-        label.adjustsFontForContentSizeCategory = true
-        label.numberOfLines = 0
-        return label
+
+    override func numberOfSections(in tableView: UITableView) -> Int { sectionTitles.count }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 1 }
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        sectionTitles[section]
+    }
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        section == sectionTitles.count - 1 ? "仅用于本书" : nil
+    }
+    override func tableView(_ tableView: UITableView, willDisplayHeaderView view: UIView, forSection section: Int) {
+        BookDesign.formHeaderFooter(view)
+    }
+    override func tableView(_ tableView: UITableView, willDisplayFooterView view: UIView, forSection section: Int) {
+        BookDesign.formHeaderFooter(view)
+    }
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "settings-row", for: indexPath)
+        guard let controlCell = cell as? ReadingControlCell else { return cell }
+        switch indexPath.section {
+        case 0: controlCell.host(mode)
+        case 1: controlCell.host(sizeRow)
+        default: controlCell.host(theme)
+        }
+        return controlCell
     }
     @objc private func smaller() { settings.fontSize -= 25; updateSize() }
     @objc private func larger() { settings.fontSize += 25; updateSize() }
@@ -1911,6 +2514,32 @@ private final class ReadingSettingsController: UIViewController {
     }
 }
 
+/// 设置表单里的系统控件行：控件由控制器持有，复用 cell 时移入当前 contentView。
+private final class ReadingControlCell: UITableViewCell {
+    private var hosted: UIView?
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        selectionStyle = .none
+        backgroundColor = BookDesign.surface
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func host(_ view: UIView) {
+        if hosted === view && view.superview === contentView { return }
+        hosted?.removeFromSuperview()
+        view.removeFromSuperview()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 10),
+            view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -10),
+            view.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor)
+        ])
+        hosted = view
+    }
+}
 
 // Application-owned adaptation of the original isolated reader probe.
 // Only settled live pages report progress; all neighbor navigation stays private.
@@ -2252,6 +2881,311 @@ private final class ReaderCurlController: UIViewController, UIPageViewController
                 guard active else { return }
                 await prepare()
             } catch { if active { failed() } }
+        }
+    }
+}
+
+/// 页角书签丝带：当前页有书签时显示的小标记。
+private final class BookmarkRibbonButton: UIButton {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        var configuration = UIButton.Configuration.plain()
+        configuration.image = BookDesign.symbol("bookmark.fill", size: 15, weight: .semibold)
+        configuration.baseForegroundColor = BookDesign.lampInk
+        configuration.contentInsets = .zero
+        self.configuration = configuration
+        backgroundColor = BookDesign.paper
+        layer.cornerRadius = 7
+        layer.cornerCurve = .continuous
+        layer.borderWidth = 1
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.08
+        layer.shadowRadius = 2
+        layer.shadowOffset = CGSize(width: 0, height: 1)
+        accessibilityIdentifier = "reader-bookmark-ribbon"
+        accessibilityLabel = "添加本页书签"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layer.borderColor = BookDesign.line.resolvedColor(with: traitCollection).cgColor
+    }
+}
+
+/// 高亮后出现的轻量 4 色调节条（非全屏、不遮挡正文中心）。
+@MainActor
+private final class HighlightColorBar: UIView {
+    private let selected: HighlightColor
+    private let swatchStack = UIStackView()
+    private var buttons: [HighlightColor: UIButton] = [:]
+    var onPick: ((HighlightColor) -> Void)?
+    var onClose: (() -> Void)?
+
+    init(selected: HighlightColor) {
+        self.selected = selected
+        super.init(frame: .zero)
+        backgroundColor = BookDesign.surface
+        layer.cornerRadius = 16
+        layer.cornerCurve = .continuous
+        layer.borderWidth = 1
+        layer.borderColor = BookDesign.line.resolvedColor(with: traitCollection).cgColor
+        BookElevation.floating(self)
+        accessibilityIdentifier = "highlight-color-bar"
+        accessibilityLabel = "高亮颜色"
+
+        swatchStack.axis = .horizontal
+        swatchStack.alignment = .center
+        swatchStack.spacing = 14
+        swatchStack.translatesAutoresizingMaskIntoConstraints = false
+        for color in HighlightColor.allCases {
+            let button = makeSwatch(color)
+            swatchStack.addArrangedSubview(button)
+        }
+        addSubview(swatchStack)
+
+        let close = UIButton(type: .system)
+        var closeConfiguration = UIButton.Configuration.plain()
+        closeConfiguration.image = BookDesign.symbol("xmark", size: 11, weight: .semibold)
+        closeConfiguration.baseForegroundColor = BookDesign.ink3
+        closeConfiguration.contentInsets = .zero
+        close.configuration = closeConfiguration
+        close.accessibilityIdentifier = "highlight-color-bar-close"
+        close.accessibilityLabel = "收起调色条"
+        close.translatesAutoresizingMaskIntoConstraints = false
+        close.addAction(UIAction { [weak self] _ in self?.onClose?() }, for: .touchUpInside)
+        addSubview(close)
+
+        NSLayoutConstraint.activate([
+            swatchStack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            swatchStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            swatchStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            swatchStack.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -12),
+            close.centerYAnchor.constraint(equalTo: centerYAnchor),
+            close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            close.widthAnchor.constraint(equalToConstant: 32),
+            close.heightAnchor.constraint(equalToConstant: 32)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    private func makeSwatch(_ color: HighlightColor) -> UIButton {
+        let button = UIButton(type: .system)
+        button.backgroundColor = color.tint
+        button.layer.cornerRadius = 14
+        button.layer.cornerCurve = .continuous
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 28),
+            button.heightAnchor.constraint(equalToConstant: 28)
+        ])
+        button.accessibilityIdentifier = "highlight-color-" + color.rawValue
+        button.accessibilityLabel = color.title + "高亮"
+        button.accessibilityTraits = color == selected ? [.button, .selected] : .button
+        button.layer.borderWidth = color == selected ? 2 : 0
+        button.layer.borderColor = BookDesign.ink.resolvedColor(with: traitCollection).cgColor
+        button.addAction(UIAction { [weak self] _ in
+            self?.onPick?(color)
+        }, for: .touchUpInside)
+        buttons[color] = button
+        return button
+    }
+
+    func update(selected color: HighlightColor) {
+        for (swatchColor, button) in buttons {
+            button.accessibilityTraits = swatchColor == color ? [.button, .selected] : .button
+            button.layer.borderWidth = swatchColor == color ? 2 : 0
+            button.layer.borderColor = BookDesign.ink.resolvedColor(with: traitCollection).cgColor
+        }
+    }
+
+    func place(in host: UIView) {
+        NSLayoutConstraint.activate([
+            centerXAnchor.constraint(equalTo: host.centerXAnchor),
+            bottomAnchor.constraint(equalTo: host.safeAreaLayoutGuide.bottomAnchor, constant: -92),
+            widthAnchor.constraint(lessThanOrEqualToConstant: 320)
+        ])
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layer.borderColor = BookDesign.line.resolvedColor(with: traitCollection).cgColor
+    }
+
+    func appear() {
+        guard !UIAccessibility.isReduceMotionEnabled else { alpha = 1; return }
+        alpha = 0
+        transform = CGAffineTransform(translationX: 0, y: 8)
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
+            self.alpha = 1
+            self.transform = .identity
+        }
+    }
+
+    func disappear(completion: (() -> Void)? = nil) {
+        guard !UIAccessibility.isReduceMotionEnabled else { alpha = 0; completion?(); return }
+        UIView.animate(withDuration: 0.15, animations: {
+            self.alpha = 0
+        }, completion: { _ in completion?() })
+    }
+}
+
+/// 纸白高亮调色盘：4 色纸墨色卡，用于新建高亮选色与已有高亮改色。
+@MainActor
+private final class HighlightColorPaletteController: UIViewController {
+    private let selected: HighlightColor?
+    private let onPick: (HighlightColor) -> Void
+    private let onDelete: (() -> Void)?
+    private let deleteTitle: String
+    private let dim = UIView()
+    private let card = UIView()
+
+    init(
+        selected: HighlightColor?,
+        onPick: @escaping (HighlightColor) -> Void,
+        onDelete: (() -> Void)? = nil,
+        deleteTitle: String = "删除高亮"
+    ) {
+        self.selected = selected
+        self.onPick = onPick
+        self.onDelete = onDelete
+        self.deleteTitle = deleteTitle
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .overFullScreen
+        modalTransitionStyle = .crossDissolve
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        view.accessibilityViewIsModal = true
+        view.accessibilityIdentifier = "highlight-color-palette"
+
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0.34)
+        dim.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(dim)
+        dim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(cancelTapped)))
+        NSLayoutConstraint.activate([
+            dim.topAnchor.constraint(equalTo: view.topAnchor),
+            dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            dim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            dim.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+
+        card.backgroundColor = BookDesign.paper
+        card.layer.cornerRadius = BookRadius.sheet
+        card.layer.cornerCurve = .continuous
+        BookElevation.floating(card)
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.accessibilityIdentifier = "highlight-color-card"
+        view.addSubview(card)
+
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.spacing = 14
+        stack.isLayoutMarginsRelativeArrangement = true
+        stack.layoutMargins = UIEdgeInsets(top: 20, left: 20, bottom: 16, right: 20)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(stack)
+
+        let title = BookDesign.label("高亮颜色", font: BookType.serif(17, weight: .semibold, style: .headline))
+        stack.addArrangedSubview(title)
+
+        let swatches = UIStackView()
+        swatches.axis = .horizontal
+        swatches.distribution = .fillEqually
+        swatches.spacing = 12
+        for color in HighlightColor.allCases {
+            swatches.addArrangedSubview(makeSwatch(color))
+        }
+        stack.addArrangedSubview(swatches)
+
+        if let onDelete {
+            let delete = makeTextButton(deleteTitle, colour: BookDesign.error)
+            delete.accessibilityIdentifier = "highlight-delete"
+            delete.addAction(UIAction { [weak self] _ in
+                guard let self else { return }
+                self.finish(then: onDelete)
+            }, for: .touchUpInside)
+            stack.addArrangedSubview(delete)
+        }
+        let cancel = makeTextButton("取消", colour: BookDesign.ink2)
+        cancel.addAction(UIAction { [weak self] _ in self?.dismissPalette() }, for: .touchUpInside)
+        stack.addArrangedSubview(cancel)
+
+        NSLayoutConstraint.activate([
+            card.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            card.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            card.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8),
+            stack.topAnchor.constraint(equalTo: card.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor)
+        ])
+    }
+
+    private func makeSwatch(_ color: HighlightColor) -> UIView {
+        let button = UIButton(type: .system)
+        button.backgroundColor = color.tint
+        button.layer.cornerRadius = 22
+        button.layer.cornerCurve = .continuous
+        button.layer.borderWidth = color == selected ? 3 : 1
+        button.layer.borderColor = (color == selected ? BookDesign.ink : BookDesign.line)
+            .resolvedColor(with: traitCollection).cgColor
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 44),
+            button.heightAnchor.constraint(equalToConstant: 44)
+        ])
+        button.accessibilityIdentifier = "highlight-color-" + color.rawValue
+        button.accessibilityLabel = color.title + "高亮"
+        button.accessibilityTraits = color == selected ? [.button, .selected] : .button
+        button.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.finish(then: { self.onPick(color) })
+        }, for: .touchUpInside)
+
+        let label = BookDesign.label(color.title, font: BookType.caption, colour: BookDesign.ink2)
+        label.textAlignment = .center
+        let column = UIStackView(arrangedSubviews: [button, label])
+        column.axis = .vertical
+        column.alignment = .center
+        column.spacing = 6
+        column.translatesAutoresizingMaskIntoConstraints = false
+        return column
+    }
+
+    private func makeTextButton(_ title: String, colour: UIColor) -> UIButton {
+        let button = UIButton(type: .system)
+        var configuration = UIButton.Configuration.plain()
+        configuration.title = title
+        configuration.baseForegroundColor = colour
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16)
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookType.sans(14, weight: .medium, style: .subheadline)
+            return outgoing
+        }
+        button.configuration = configuration
+        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        return button
+    }
+
+    @objc private func cancelTapped() { dismissPalette() }
+
+    private func dismissPalette() { finish(then: {}) }
+
+    private func finish(then action: @escaping () -> Void) {
+        let animate = !UIAccessibility.isReduceMotionEnabled
+        UIView.animate(withDuration: animate ? 0.16 : 0, animations: {
+            self.dim.alpha = 0
+            self.card.alpha = 0
+        }) { _ in
+            self.dismiss(animated: false) { action() }
         }
     }
 }

@@ -350,7 +350,7 @@ extension ReadingUITests {
         questionService(app, format: mode == "滚动" ? "Anthropic" : "OpenAI", model: "integration17", address: "http://127.0.0.1:18777/v1")
         issue17Import("semantic-fixture.epub", in: app)
         evidence("issue17-" + mode + "-import", app)
-        app.alerts.buttons["知道了"].tap()
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         try issue17Mode(app, mode: mode, fault: fault)
     }
 
@@ -372,7 +372,7 @@ extension ReadingUITests {
         let file = app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", name + ",")).firstMatch
         XCTAssertTrue(file.waitForExistence(timeout: 5))
         file.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.otherElements["book-dialog"].firstMatch.waitForExistence(timeout: 10))
     }
 
     private func issue17Mode(_ app: XCUIApplication, mode: String, fault: Bool) throws {
@@ -440,7 +440,7 @@ extension ReadingUITests {
         // is checked in the editor; the screenshot verifies its visible highlight.
         XCTAssertTrue(paragraph.exists); evidence("issue17-" + mode + "-note-return", app)
         app.buttons["书架"].tap(); app.tabBars.buttons["对话"].tap()
-        XCTAssertEqual(app.tables["question-history"].cells.count, 1)
+        XCTAssertEqual(app.collectionViews["question-history"].cells.count, 1)
         evidence("issue17-" + mode + "-history-summary", app)
         print("I17_MODE_FINISHED \(mode)")
     }
@@ -463,13 +463,13 @@ extension ReadingUITests {
 
     func testIssue17RebuildWithRecordsAndReading() {
         let app = issue12App()
-        issue17Import("search-other.epub", in: app); app.alerts.buttons["知道了"].tap()
+        issue17Import("search-other.epub", in: app); app.otherElements["book-dialog"].buttons["知道了"].tap()
         app.collectionViews["library"].cells[searchOtherID].tap(); waitForBody(app)
-        app.buttons["目录与书签"].tap(); app.buttons["添加书签"].tap()
+        app.buttons["reader-contents"].tap(); app.buttons["添加书签"].tap()
         XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5)); app.buttons["完成"].tap()
         app.buttons["书架"].tap()
         app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"].tap(); waitForBody(app)
-        app.buttons["目录与书签"].tap(); app.buttons["添加书签"].tap()
+        app.buttons["reader-contents"].tap(); app.buttons["添加书签"].tap()
         XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
         app.buttons["书内搜索"].tap()
         print("I17_BEFORE_REBUILD"); Thread.sleep(forTimeInterval: 3)
@@ -496,7 +496,7 @@ extension ReadingUITests {
         evidence("issue17-small-question-keyboard", app); app.buttons["关闭"].tap()
         app.buttons["书架"].tap(); app.tabBars.buttons["笔记"].tap()
         let row = noteRow("I17-仿真-note", in: app)
-        if !row.isHittable { app.tables["notes"].swipeUp() }
+        if !row.isHittable { app.collectionViews["notes"].swipeUp() }
         XCTAssertTrue(row.isHittable); evidence("issue17-small-notes", app)
         app.tabBars.buttons["对话"].tap(); issue12Row("I17-仿真", app: app).tap()
         let follow = app.buttons["question-follow-up"]; issue12Reach(follow, in: app); follow.tap()
@@ -522,7 +522,7 @@ extension ReadingUITests {
         app.buttons["返回原文"].tap(); waitForBody(app)
         evidence("issue17-curl-note-precise-quote-return", app)
         app.buttons["书架"].tap(); app.tabBars.buttons["对话"].tap()
-        XCTAssertEqual(app.tables["question-history"].cells.count, 1)
+        XCTAssertEqual(app.collectionViews["question-history"].cells.count, 1)
         evidence("issue17-curl-history-summary", app)
     }
 
@@ -532,14 +532,14 @@ extension ReadingUITests {
         XCTAssertEqual(app.textViews["note-body"].value as? String, "I17-write-boundary-draft")
         evidence("issue17-write-boundary-recovered-draft", app)
         replaceNoteBody("I17-仿真-note", in: app); app.buttons["保存笔记"].tap()
-        XCTAssertEqual(app.tables["notes"].cells.count, 1)
-        app.tabBars.buttons["对话"].tap(); XCTAssertEqual(app.tables["question-history"].cells.count, 1)
+        XCTAssertEqual(app.collectionViews["notes"].cells.count, 1)
+        app.tabBars.buttons["对话"].tap(); XCTAssertEqual(app.collectionViews["question-history"].cells.count, 1)
         evidence("issue17-write-boundary-same-record-retry", app)
     }
 
     func testIssue17LayoutHistoryCompletion() {
         let app = issue12App()
-        let history = app.tables["question-history"]
+        let history = app.collectionViews["question-history"]
         history.swipeDown(); history.swipeDown(); history.swipeDown()
         let row = issue12Row("I17-仿真", app: app)
         XCTAssertTrue(row.isHittable)
@@ -581,14 +581,14 @@ extension ReadingUITests {
 
         tab("tab-notes", label: "笔记", in: app).tap()
         XCTAssertTrue(
-            app.tables["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", "灯把书页照亮，也把问题留在纸上。"))
+            app.collectionViews["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", "灯把书页照亮，也把问题留在纸上。"))
                 .firstMatch.waitForExistence(timeout: 5)
         )
         attachDesignSurface("issue24-notes-375-light", app)
 
         tab("tab-conversations", label: "对话", in: app).tap()
         XCTAssertTrue(
-            app.tables["question-history"].cells.containing(
+            app.collectionViews["question-history"].cells.containing(
                 NSPredicate(format: "label CONTAINS %@", "这句话里的“灯”指什么？")
             ).firstMatch.waitForExistence(timeout: 5)
         )
@@ -623,21 +623,23 @@ extension ReadingUITests {
         let app = XCUIApplication()
         app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
         app.launch()
-        XCTAssertTrue(app.staticTexts["书灯"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["书架"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["一盏照书的灯"].exists)
-        XCTAssertTrue(app.staticTexts["继续阅读"].exists)
+        XCTAssertTrue(app.staticTexts["书架"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["continue-reading"].exists)
         XCTAssertTrue(app.buttons["library-import"].exists)
         XCTAssertTrue(app.buttons["tab-library"].exists)
         attachDesignSurface("issue25-shelf-375-light", app)
 
         app.buttons["continue-reading"].tap()
         XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 15))
+        // 等阅读器完成首次加载，避免“尚未保存”保护弹层拦截返回。
+        let readerSettings = app.buttons["reader-settings"]
+        XCTAssertTrue(readerSettings.waitForExistence(timeout: 15))
+        fullscreenWait { readerSettings.isEnabled }
         app.buttons["书架"].tap()
-        XCTAssertTrue(app.staticTexts["继续阅读"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["continue-reading"].waitForExistence(timeout: 10))
 
-        let search = app.textFields["library-search"]
-        XCTAssertTrue(search.exists)
+        let search = app.textFields["library-search"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.tap()
         search.typeText("不存在的书")
         XCTAssertTrue(app.staticTexts["没有找到这本书"].waitForExistence(timeout: 5))
@@ -659,7 +661,7 @@ extension ReadingUITests {
         XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 15))
     }
 
-    func testIssue26NotesFiltersVisualAndReturnToOriginal() throws {
+    func testIssue26NotesMergedListVisualSearchAndReturnToOriginal() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
@@ -667,75 +669,129 @@ extension ReadingUITests {
         XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
         tab("tab-notes", label: "笔记", in: app).tap()
 
-        XCTAssertTrue(app.staticTexts["notes-title"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["notes-description"].exists)
+        XCTAssertTrue(waitForPageTitle("笔记", in: app), "系统大标题应显示“笔记”；若为空先报 Lead，不要迁就测试")
         XCTAssertTrue(app.buttons["notes-export"].exists)
-        for identifier in [
-            "note-filter-all",
-            "note-filter-highlights",
-            "note-filter-notes",
-            "note-filter-bookmarks"
-        ] {
-            XCTAssertTrue(app.buttons[identifier].exists, identifier)
-        }
-        let table = app.tables["notes"]
-        XCTAssertEqual(table.cells.count, 3)
+        // 定稿：无 3 段筛选；单一合并列表（高亮+笔记），书签不出现。
+        XCTAssertFalse(app.segmentedControls["note-filter"].exists, "筛选控件应已删除")
+        let notesSearch = app.searchFields["notes-search"].firstMatch
+        XCTAssertTrue(notesSearch.waitForExistence(timeout: 5))
+        let list = app.collectionViews["notes"]
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(
+            notesSearch.frame.maxY,
+            list.frame.minY + 1,
+            "搜索框应在大标题下方、列表上方，而不是 iOS 26 默认的屏幕底部"
+        )
+        waitForNoteRows(2, in: app)
         XCTAssertTrue(
-            table.cells.containing(NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")).firstMatch.exists
+            list.cells.containing(NSPredicate(format: "label CONTAINS %@", "黛玉方进入房时")).firstMatch.exists,
+            "应列出高亮引文"
         )
         XCTAssertTrue(
-            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "今天")).firstMatch.exists
+            list.cells.containing(NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")).firstMatch.exists,
+            "应列出笔记引文/正文"
         )
-        attachDesignSurface("issue26-notes-normal-375-light", app)
-
-        app.buttons["note-filter-bookmarks"].tap()
-        XCTAssertEqual(table.cells.count, 1)
+        XCTAssertFalse(
+            list.cells.containing(NSPredicate(format: "label CONTAINS %@", "书签")).firstMatch.exists,
+            "书签不应出现在合并笔记列表"
+        )
         XCTAssertTrue(
-            table.cells.containing(NSPredicate(format: "label CONTAINS %@", "书签")).firstMatch.exists
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "第三回")).firstMatch.exists,
+            "行内应显示章节信息"
         )
-        attachDesignSurface("issue26-notes-bookmarks-375-light", app)
+        attachDesignSurface("issue26-notes-merged-375-light", app)
 
-        app.buttons["note-filter-notes"].tap()
-        XCTAssertEqual(table.cells.count, 1)
-        app.buttons["note-filter-all"].tap()
-        XCTAssertEqual(table.cells.count, 3)
-
-        let returnButton = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "return-")
+        // 点击行 → 跳回原文。
+        let annotationCell = list.cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "annotation-")
         ).firstMatch
-        XCTAssertTrue(returnButton.waitForExistence(timeout: 5))
-        returnButton.tap()
+        XCTAssertTrue(annotationCell.waitForExistence(timeout: 5))
+        annotationCell.tap()
         waitForBody(app)
         attachDesignSurface("issue26-notes-original-375-light", app)
         app.buttons["书架"].tap()
-        XCTAssertTrue(app.staticTexts["notes-title"].waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForPageTitle("笔记", in: app, timeout: 10))
 
-        let noteCell = app.tables["notes"].cells.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "note-")
-        ).firstMatch
-        XCTAssertTrue(noteCell.exists)
-        noteCell.tap()
-        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["保存草稿"].exists)
-        app.buttons["关闭"].tap()
-        XCTAssertTrue(app.staticTexts["notes-title"].waitForExistence(timeout: 5))
+        // 搜索 = 引文 + 正文 + 章节。
+        let search = waitForSearchField("notes-search", in: app)
+        search.tap()
+        search.typeText("灯把书页照亮")
+        waitForNoteRows(1, in: app)
+        attachDesignSurface("issue26-notes-search-375-light", app)
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6))
+        search.typeText("不存在的笔记")
+        XCTAssertTrue(
+            app.staticTexts["没有找到相关笔记"].waitForExistence(timeout: 5),
+            "搜索无结果应显示新文案"
+        )
+        if let dismiss = waitForSearchDismissButton(in: app) { dismiss.tap() }
+        XCTAssertTrue(waitForPageTitle("笔记", in: app))
 
         app.terminate()
         app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
         app.launch()
         XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
         tab("tab-notes", label: "笔记", in: app).tap()
-        XCTAssertTrue(app.staticTexts["notes-title"].waitForExistence(timeout: 5))
-        attachDesignSurface("issue26-notes-normal-375-dark", app)
+        XCTAssertTrue(waitForPageTitle("笔记", in: app))
+        attachDesignSurface("issue26-notes-merged-375-dark", app)
 
         app.terminate()
         app.launchArguments = ["--design-fixture=empty", "--design-theme=light"]
         app.launch()
         XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
         tab("tab-notes", label: "笔记", in: app).tap()
-        XCTAssertTrue(app.staticTexts["还没有阅读痕迹"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["notes-empty-action"].exists)
+        XCTAssertTrue(app.staticTexts["还没有笔记"].waitForExistence(timeout: 5))
+        let emptyAction = app.buttons["去书架读书"].exists
+            ? app.buttons["去书架读书"]
+            : app.buttons["notes-empty-action"]
+        XCTAssertTrue(emptyAction.exists, "空状态需保留主操作")
         attachDesignSurface("issue26-notes-empty-375-light", app)
+        emptyAction.tap()
+        XCTAssertTrue(
+            app.staticTexts["从一本书开始"].waitForExistence(timeout: 5),
+            "笔记空状态主操作应回到书架"
+        )
+    }
+
+    /// 定稿笔记合并列表：leading 编辑（仅笔记）、trailing 删除（确认）、书签不出现。
+    func testNotesMergedListSwipeEditAndDelete() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
+        tab("tab-notes", label: "笔记", in: app).tap()
+        let list = app.collectionViews["notes"]
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        waitForNoteRows(2, in: app)
+
+        // 带正文的笔记行 → leading swipe 编辑。
+        let noteRow = list.cells.containing(NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")).firstMatch
+        XCTAssertTrue(noteRow.waitForExistence(timeout: 5))
+        noteRow.swipeRight()
+        let editAction = app.buttons["编辑"].firstMatch
+        XCTAssertTrue(editAction.waitForExistence(timeout: 5), "笔记行应有 leading 编辑操作")
+        attachDesignSurface("notes-merged-swipe-edit-375-light", app)
+        editAction.tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5), "编辑应打开笔记编辑器")
+        attachDesignSurface("notes-merged-editor-375-light", app)
+        app.buttons["note-close"].tap()
+        XCTAssertTrue(waitForPageTitle("笔记", in: app))
+
+        // 高亮行 → trailing swipe 删除（纸白确认后消失）。
+        let highlightRow = list.cells.containing(NSPredicate(format: "label CONTAINS %@", "黛玉方进入房时")).firstMatch
+        XCTAssertTrue(highlightRow.waitForExistence(timeout: 5))
+        highlightRow.swipeLeft()
+        let deleteAction = app.buttons["删除"].firstMatch
+        XCTAssertTrue(deleteAction.waitForExistence(timeout: 5), "高亮行应有 trailing 删除操作")
+        attachDesignSurface("notes-merged-swipe-delete-375-light", app)
+        deleteAction.tap()
+        let dialog = app.otherElements["book-dialog"]
+        if dialog.waitForExistence(timeout: 2) {
+            dialog.buttons["删除"].tap()
+        }
+        waitForNoteRows(1, in: app)
+        attachDesignSurface("notes-merged-after-delete-375-light", app)
     }
 
     func testIssue27ConversationsSearchOpenAndStates() throws {
@@ -746,45 +802,57 @@ extension ReadingUITests {
         XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
         tab("tab-conversations", label: "对话", in: app).tap()
 
-        XCTAssertTrue(app.staticTexts["conversations-title"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["conversations-description"].exists)
-        let table = app.tables["question-history"]
-        XCTAssertEqual(table.cells.count, 2)
+        XCTAssertTrue(waitForPageTitle("对话", in: app), "系统大标题应显示“对话”；若为空先报 Lead，不要迁就测试")
+        XCTAssertTrue(app.collectionViews["question-history"].waitForExistence(timeout: 5))
+        let conversationsSearch = app.searchFields["conversation-search"].firstMatch
+        XCTAssertTrue(conversationsSearch.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(
+            conversationsSearch.frame.maxY,
+            app.collectionViews["question-history"].frame.minY + 1,
+            "搜索框应在大标题下方、列表上方，而不是 iOS 26 默认的屏幕底部"
+        )
+        waitForConversationRows(2, in: app)
         XCTAssertTrue(
-            table.cells.containing(
+            app.collectionViews["question-history"].cells.containing(
                 NSPredicate(format: "label CONTAINS %@", "这句话里的“灯”指什么？")
             ).firstMatch.exists
         )
         XCTAssertTrue(
-            table.cells.containing(NSPredicate(format: "label CONTAINS %@", "次提问")).firstMatch.exists
+            app.collectionViews["question-history"].cells
+                .containing(NSPredicate(format: "label CONTAINS %@", "次提问")).firstMatch.exists
         )
         attachDesignSurface("issue27-conversations-normal-375-light", app)
 
-        let search = app.textFields["conversation-search"]
+        let search = waitForSearchField("conversation-search", in: app)
         XCTAssertTrue(search.exists)
         search.tap()
-        search.typeText("第一次进贾府\n")
-        XCTAssertEqual(table.cells.count, 1)
+        search.typeText("第一次进贾府")
+        waitForConversationRows(1, in: app)
         XCTAssertTrue(
-            table.cells.containing(
+            app.collectionViews["question-history"].cells.containing(
                 NSPredicate(format: "label CONTAINS %@", "林黛玉第一次进贾府时看到了什么？")
             ).firstMatch.exists
         )
 
         search.tap()
         search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12))
-        XCTAssertEqual(table.cells.count, 2)
+        waitForConversationRows(2, in: app)
         search.typeText("不存在的对话")
         XCTAssertTrue(app.staticTexts["没有找到相关对话"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["conversations-search-empty-action"].exists)
+        let clearSearch = app.buttons["清除搜索"].exists
+            ? app.buttons["清除搜索"]
+            : app.buttons["conversations-search-empty-action"]
+        XCTAssertTrue(clearSearch.exists, "搜索空状态需保留清除搜索操作")
         attachDesignSurface("issue27-conversations-search-empty-375-light", app)
+        clearSearch.tap()
+        waitForConversationRows(2, in: app)
 
         app.terminate()
         app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
         app.launch()
         XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
         tab("tab-conversations", label: "对话", in: app).tap()
-        let first = app.tables["question-history"].cells.containing(
+        let first = app.collectionViews["question-history"].cells.containing(
             NSPredicate(format: "label CONTAINS %@", "这句话里的“灯”指什么？")
         ).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 5))
@@ -800,14 +868,14 @@ extension ReadingUITests {
         XCTAssertTrue(app.textViews["question-input"].isEnabled)
         XCTAssertTrue(app.buttons["question-close"].exists)
         app.buttons["question-close"].tap()
-        XCTAssertTrue(app.staticTexts["conversations-title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForPageTitle("对话", in: app))
 
         app.terminate()
         app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
         app.launch()
         XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
         tab("tab-conversations", label: "对话", in: app).tap()
-        XCTAssertTrue(app.staticTexts["conversations-title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForPageTitle("对话", in: app))
         attachDesignSurface("issue27-conversations-normal-375-dark", app)
 
         app.terminate()
@@ -816,8 +884,240 @@ extension ReadingUITests {
         XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
         tab("tab-conversations", label: "对话", in: app).tap()
         XCTAssertTrue(app.staticTexts["还没有对话"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["conversations-empty-action"].exists)
+        let emptyAction = app.buttons["去书架读书"].exists
+            ? app.buttons["去书架读书"]
+            : app.buttons["conversations-empty-action"]
+        XCTAssertTrue(emptyAction.exists, "空状态需保留主操作")
         attachDesignSurface("issue27-conversations-empty-375-light", app)
+        emptyAction.tap()
+        XCTAssertTrue(
+            app.staticTexts["从一本书开始"].waitForExistence(timeout: 5),
+            "对话空状态主操作应回到书架"
+        )
+    }
+
+    /// BUG 回归：搜索激活后点“关闭/取消”，顶部大标题必须在屏幕上**真实可见**。
+    /// 该 BUG 的 accessibility 节点一直存在且 hittable、frame 正常，只是被导航栏不透明背景层遮挡，
+    /// 所以必须用截图像素墨迹校验；另验证滚动后导航栏保持纸白不透明背景、内联标题可读。
+    func testSearchCancelKeepsLargeTitleOnNotesAndConversations() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+
+        // 对话页：两轮（BUG 与“大标题 ↔ 搜索”状态切换时序相关）
+        let conversationsTab = tab("tab-conversations", label: "对话", in: app)
+        XCTAssertTrue(conversationsTab.waitForExistence(timeout: 15))
+        conversationsTab.tap()
+        XCTAssertTrue(waitForVisibleNavigationTitle("对话", in: app), "前置：对话页初始大标题应真实可见")
+        for round in 1...2 {
+            try runSearchCancelCycle(
+                in: app,
+                searchIdentifier: "conversation-search",
+                title: "对话",
+                listIdentifier: "question-history",
+                attachmentPrefix: "bug-search-cancel-conversations-round\(round)",
+                round: round,
+                pageName: "对话页"
+            )
+        }
+
+        // 笔记页：同路径两轮，确认不回归
+        tab("tab-notes", label: "笔记", in: app).tap()
+        XCTAssertTrue(waitForVisibleNavigationTitle("笔记", in: app), "前置：笔记页初始大标题应真实可见")
+        for round in 1...2 {
+            try runSearchCancelCycle(
+                in: app,
+                searchIdentifier: "notes-search",
+                title: "笔记",
+                listIdentifier: "notes",
+                attachmentPrefix: "bug-search-cancel-notes-round\(round)",
+                round: round,
+                pageName: "笔记页"
+            )
+        }
+
+        // 辅助功能大字号下内容可滚动：验证滚动后导航栏仍为纸白不透明背景、内联标题可读。
+        app.terminate()
+        app.launchArguments = [
+            "--design-fixture=normal",
+            "--design-theme=light",
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryAccessibilityXXXL"
+        ]
+        app.launch()
+        try checkScrolledNavigationBar(
+            in: app,
+            tabIdentifier: "tab-conversations",
+            tabLabel: "对话",
+            searchIdentifier: "conversation-search",
+            title: "对话",
+            listIdentifier: "question-history",
+            attachmentPrefix: "bug-scrolled-background-conversations"
+        )
+        try checkScrolledNavigationBar(
+            in: app,
+            tabIdentifier: "tab-notes",
+            tabLabel: "笔记",
+            searchIdentifier: "notes-search",
+            title: "笔记",
+            listIdentifier: "notes",
+            attachmentPrefix: "bug-scrolled-background-notes"
+        )
+    }
+
+    /// 大字号下内容可滚动：取消搜索后上滚，检查内联标题可读 + 导航栏纸白不透明背景。
+    private func checkScrolledNavigationBar(
+        in app: XCUIApplication,
+        tabIdentifier: String,
+        tabLabel: String,
+        searchIdentifier: String,
+        title: String,
+        listIdentifier: String,
+        attachmentPrefix: String
+    ) throws {
+        let tabButton = tab(tabIdentifier, label: tabLabel, in: app)
+        XCTAssertTrue(tabButton.waitForExistence(timeout: 15))
+        tabButton.tap()
+        XCTAssertTrue(waitForVisibleNavigationTitle(title, in: app), "XXXL：\(title)页初始大标题应可见")
+        let search = waitForSearchField(searchIdentifier, in: app)
+        XCTAssertTrue(search.waitForExistence(timeout: 5), "XXXL：\(title)页搜索框应存在")
+        search.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "XXXL：搜索激活后应出现键盘")
+        let dismiss = try XCTUnwrap(waitForSearchDismissButton(in: app), "XXXL：应出现取消/关闭按钮")
+        dismiss.tap()
+        Thread.sleep(forTimeInterval: 0.6)
+        XCTAssertTrue(
+            waitForVisibleNavigationTitle(title, in: app, inkThreshold: 0.008),
+            "XXXL：取消搜索后大标题“\(title)”应真实可见"
+        )
+        let list = app.collectionViews[listIdentifier]
+        let probe = list.cells.firstMatch
+        let before = probe.frame.minY
+        list.swipeUp()
+        Thread.sleep(forTimeInterval: 0.6)
+        let after = probe.frame.minY
+        attachDesignSurface("\(attachmentPrefix)-scrolled-375-light", app)
+        XCTAssertLessThan(after, before - 10, "XXXL：\(title)页内容应可滚动，才能验证滚动后导航栏背景")
+        XCTAssertTrue(
+            waitForVisibleNavigationTitle(title, in: app, inkThreshold: 0.008),
+            "XXXL：滚动后导航栏内联标题应可读"
+        )
+        XCTAssertTrue(
+            navigationBarBackgroundIsPaperBlank(in: app),
+            "XXXL：滚动后导航栏必须保持纸白不透明背景（列表内容不得穿过）"
+        )
+    }
+
+    /// 全局 iOS 26 导航栏外观回归（DesignSystem.install 改动）：设置类页面滚动到顶时导航栏应为纸白背景、无内容穿透。
+    func testSettingsNavigationBarsKeepPaperBackgroundAtTop() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+
+        // 我的 → AI 服务
+        let profileTab = tab("tab-profile", label: "我的", in: app)
+        XCTAssertTrue(profileTab.waitForExistence(timeout: 15))
+        profileTab.tap()
+        settingsRow("profile-ai-service", in: app).tap()
+        XCTAssertTrue(app.navigationBars["AI 服务"].waitForExistence(timeout: 5))
+        assertNavigationBarPaperBackground(in: app, name: "nav-appearance-ai-settings")
+        app.navigationBars.buttons.firstMatch.tap()
+
+        // 阅读页 → 阅读设置
+        tab("tab-library", label: "书架", in: app).tap()
+        XCTAssertTrue(app.buttons["continue-reading"].waitForExistence(timeout: 10))
+        app.buttons["continue-reading"].tap()
+        waitForBody(app)
+        let settingsButton = app.buttons["reader-settings"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 15))
+        let enabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isEnabled == true"),
+            object: settingsButton
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 15), .completed)
+        settingsButton.tap()
+        XCTAssertTrue(app.navigationBars["阅读设置"].waitForExistence(timeout: 5))
+        assertNavigationBarPaperBackground(in: app, name: "nav-appearance-reading-settings")
+        app.buttons["取消"].tap()
+    }
+
+    private func assertNavigationBarPaperBackground(in app: XCUIApplication, name: String) {
+        attachDesignSurface(name + "-375-light", app)
+        XCTAssertTrue(
+            navigationBarBackgroundIsPaperBlank(in: app),
+            "导航栏顶部应为纸白背景（全局 iOS26 外观回归）：\(name)"
+        )
+    }
+
+    private func runSearchCancelCycle(
+        in app: XCUIApplication,
+        searchIdentifier: String,
+        title: String,
+        listIdentifier: String,
+        attachmentPrefix: String,
+        round: Int,
+        pageName: String
+    ) throws {
+        let search = waitForSearchField(searchIdentifier, in: app)
+        XCTAssertTrue(search.waitForExistence(timeout: 5), "\(pageName) 第\(round)轮：搜索框应存在")
+        search.tap()
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForExistence(timeout: 5),
+            "\(pageName) 第\(round)轮：搜索激活后应出现键盘"
+        )
+        let dismiss = try XCTUnwrap(
+            waitForSearchDismissButton(in: app),
+            "\(pageName) 第\(round)轮：搜索激活后应出现取消/关闭按钮"
+        )
+        dismiss.tap()
+        Thread.sleep(forTimeInterval: 0.6)
+        attachDesignSurface("\(attachmentPrefix)-375-light", app)
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "\(attachmentPrefix)-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        let titleVisibleAfterCancel = waitForVisibleNavigationTitle(title, in: app)
+        XCTAssertTrue(
+            titleVisibleAfterCancel,
+            "\(pageName) 第\(round)轮：取消搜索后顶部大标题“\(title)”必须在屏幕上真实可见（存在≠绘制）"
+        )
+        if !titleVisibleAfterCancel {
+            // 零成本判别：轻微滚动后回到正好顶部，再测大标题墨迹，区分“背景遮挡”与“alpha/滚动状态未恢复”。
+            let diagnosticList = app.collectionViews[listIdentifier]
+            diagnosticList.swipeUp()
+            Thread.sleep(forTimeInterval: 0.4)
+            diagnosticList.swipeDown()
+            Thread.sleep(forTimeInterval: 0.3)
+            diagnosticList.swipeDown()
+            Thread.sleep(forTimeInterval: 0.5)
+            let visibleAfterTopReturn = waitForVisibleNavigationTitle(title, in: app, timeout: 3)
+            print("QA_TOP_RETURN_DIAGNOSTIC page=\(pageName) round=\(round) titleVisibleAfterTopReturn=\(visibleAfterTopReturn)")
+            attachDesignSurface("\(attachmentPrefix)-top-return-375-light", app)
+            let diagnosticHierarchy = XCTAttachment(string: app.debugDescription)
+            diagnosticHierarchy.name = "\(attachmentPrefix)-top-return-hierarchy"
+            diagnosticHierarchy.lifetime = .keepAlways
+            add(diagnosticHierarchy)
+        }
+
+        // 取消搜索后向上滚动：导航栏必须仍是纸白不透明背景（内容不得穿过），内联标题可读。
+        let list = app.collectionViews[listIdentifier]
+        XCTAssertTrue(list.exists, "\(pageName)：列表应存在")
+        list.swipeUp()
+        Thread.sleep(forTimeInterval: 0.6)
+        attachDesignSurface("\(attachmentPrefix)-scrolled-375-light", app)
+        XCTAssertTrue(
+            waitForVisibleNavigationTitle(title, in: app),
+            "\(pageName) 第\(round)轮：列表滚动后导航栏内联标题应可读"
+        )
+        XCTAssertTrue(
+            navigationBarBackgroundIsPaperBlank(in: app),
+            "\(pageName) 第\(round)轮：滚动后导航栏背景应为纸白不透明，列表内容不得从标题区穿过"
+        )
+        // 回到顶部，保证下一轮从大标题态开始
+        list.swipeDown()
+        list.swipeDown()
+        Thread.sleep(forTimeInterval: 0.5)
     }
 
     func testIssue28ProfileBrandSettingsAndAbout() throws {
@@ -828,53 +1128,58 @@ extension ReadingUITests {
         XCTAssertTrue(tab("tab-profile", label: "我的", in: app).waitForExistence(timeout: 15))
         tab("tab-profile", label: "我的", in: app).tap()
 
-        let title = app.staticTexts["profile-title"]
+        let title = profileTitle(in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         XCTAssertEqual(title.label, "我的")
         XCTAssertLessThanOrEqual(title.frame.minX, 25)
-        let icon = app.images["profile-brand-icon"]
-        XCTAssertTrue(icon.exists)
-        XCTAssertEqual(icon.frame.width, 70, accuracy: 0.5)
+        let icon = anyProfileElement("profile-brand-icon", in: app)
+        XCTAssertTrue(icon.waitForExistence(timeout: 5), "profile-brand-icon 应存在")
+        XCTAssertEqual(icon.frame.width, 56, accuracy: 0.5)
         XCTAssertEqual(icon.frame.midX, app.frame.midX, accuracy: 0.5)
         XCTAssertTrue(app.staticTexts["profile-wordmark"].exists)
         XCTAssertEqual(
             app.staticTexts["profile-motto"].label,
-            "一盏照书的灯"
+            "一盏照书的灯，AI 照亮你读不懂的地方"
         )
 
-        let service = app.buttons["profile-ai-service"]
-        XCTAssertTrue(service.exists)
+        let service = settingsRow("profile-ai-service", in: app)
+        XCTAssertTrue(service.waitForExistence(timeout: 5))
         XCTAssertEqual(service.value as? String, "DeepSeek · deepseek-flash")
-        XCTAssertGreaterThanOrEqual(service.frame.height, 66)
-        let appearance = app.buttons["profile-appearance"]
+        XCTAssertGreaterThanOrEqual(service.frame.height, 44, "系统列表设置行高度语义")
+        let appearance = settingsRow("profile-appearance", in: app)
         XCTAssertTrue(appearance.exists)
-        XCTAssertGreaterThanOrEqual(appearance.frame.height, 66)
-        let about = app.buttons["profile-about"]
+        XCTAssertGreaterThanOrEqual(appearance.frame.height, 44, "系统列表设置行高度语义")
+        let about = settingsRow("profile-about", in: app)
         XCTAssertTrue(about.exists)
-        XCTAssertGreaterThanOrEqual(about.frame.height, 66)
+        XCTAssertGreaterThanOrEqual(about.frame.height, 44, "系统列表设置行高度语义")
         XCTAssertFalse(app.staticTexts["profile-storage-disclosure"].exists)
         attachDesignSurface("issue28-profile-normal-375-light", app)
 
         appearance.tap()
-        let systemAppearance = app.sheets.buttons.matching(
+        let systemAppearance = app.buttons.matching(
             NSPredicate(format: "label ENDSWITH %@", "跟随系统")
         ).firstMatch
         XCTAssertTrue(systemAppearance.waitForExistence(timeout: 3))
         XCTAssertTrue(
-            app.sheets.buttons.matching(NSPredicate(format: "label == %@", "浅色")).firstMatch.exists
+            app.buttons.matching(NSPredicate(format: "label == %@", "浅色")).firstMatch.exists
         )
         XCTAssertTrue(
-            app.sheets.buttons.matching(NSPredicate(format: "label == %@", "深色")).firstMatch.exists
+            app.buttons.matching(NSPredicate(format: "label == %@", "深色")).firstMatch.exists
         )
-        app.sheets.buttons.matching(NSPredicate(format: "label == %@", "深色")).firstMatch.tap()
-        XCTAssertEqual(appearance.value as? String, "深色")
+        XCTAssertEqual(
+            app.buttons.matching(NSPredicate(format: "label == %@", "浅色")).count,
+            1,
+            "外观弹层不应重复出现"
+        )
+        app.buttons.matching(NSPredicate(format: "label == %@", "深色")).firstMatch.tap()
+        waitForSettingsValue(appearance, "深色")
         appearance.tap()
-        let restoreSystem = app.sheets.buttons.matching(
+        let restoreSystem = app.buttons.matching(
             NSPredicate(format: "label ENDSWITH %@", "跟随系统")
         ).firstMatch
         XCTAssertTrue(restoreSystem.waitForExistence(timeout: 3))
         restoreSystem.tap()
-        XCTAssertEqual(appearance.value as? String, "跟随系统")
+        waitForSettingsValue(appearance, "跟随系统")
 
         service.tap()
         XCTAssertTrue(app.tables["ai-services"].waitForExistence(timeout: 5))
@@ -883,11 +1188,16 @@ extension ReadingUITests {
 
         about.tap()
         XCTAssertTrue(app.navigationBars["关于书灯"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["about-third-party"].exists)
+        XCTAssertTrue(settingsRow("about-third-party", in: app).exists)
         attachDesignSurface("issue28-about-375-light", app)
-        app.buttons["about-third-party"].tap()
+        settingsRow("about-third-party", in: app).tap()
         XCTAssertTrue(app.navigationBars["第三方许可"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.textViews.firstMatch.exists)
+        XCTAssertTrue(
+            app.textViews.firstMatch.exists ||
+            app.collectionViews.cells.firstMatch.exists ||
+            app.tables.cells.firstMatch.exists,
+            "第三方许可页应渲染可读内容（textView 或系统列表）"
+        )
 
         app.terminate()
         app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
@@ -914,7 +1224,7 @@ extension ReadingUITests {
 
         let toolbar = app.otherElements["reader-toolbar"]
         XCTAssertTrue(toolbar.exists)
-        XCTAssertEqual(toolbar.frame.height, 51, accuracy: 0.5)
+        XCTAssertEqual(toolbar.frame.height, 64, accuracy: 0.5)
         XCTAssertEqual(app.staticTexts["reader-title"].label, "红楼梦")
         XCTAssertTrue(app.staticTexts["reader-chapter"].label.contains("第三回"))
 
@@ -998,13 +1308,575 @@ extension ReadingUITests {
         }
     }
 
+    /// 显式打开指定书籍（避免“继续阅读”指向上一用例最后阅读的书）。
+    private func openFixtureBook(_ title: String, in app: XCUIApplication) {
+        let cell = app.collectionViews["library"].cells.containing(
+            NSPredicate(format: "label CONTAINS %@", title)
+        ).firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 20), "书架应显示 \(title)")
+        cell.tap()
+    }
+
+    /// 阅读页当前页书签丝带：加书签→丝带出现→翻页往返匹配→点丝带删除→面板同步。
+    func testReaderPageBookmarkRibbonTogglesCurrentPage() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        openFixtureBook("红楼梦", in: app)
+        waitForBody(app)
+        let contents = app.buttons["reader-contents"]
+        fullscreenWait { contents.exists && contents.isEnabled && contents.isHittable }
+        let ribbon = app.buttons["reader-bookmark-ribbon"]
+        // task-18 后：夹具书签落在首屏，打开即应显示丝带。
+        XCTAssertTrue(ribbon.waitForExistence(timeout: 5), "首屏已有夹具书签，丝带应可见")
+
+        contents.tap()
+        XCTAssertTrue(app.tables["book-navigation"].waitForExistence(timeout: 5))
+        app.segmentedControls.buttons["书签"].tap()
+        Thread.sleep(forTimeInterval: 0.4)
+        let bookmarkRows = app.tables["book-navigation"].cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "bookmark-")
+        )
+        XCTAssertTrue(bookmarkRows.firstMatch.exists)
+        XCTAssertTrue(
+            bookmarkRows.firstMatch.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", "进度")
+            ).firstMatch.exists ||
+                app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "进度")).firstMatch.exists,
+            "书签行应显示章节 + 进度百分比"
+        )
+        app.buttons["添加书签"].tap()
+        XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
+        app.buttons["完成"].tap()
+        XCTAssertTrue(contents.waitForExistence(timeout: 5))
+
+        // 当前页已有书签：丝带出现且可访问性状态正确。
+        XCTAssertTrue(ribbon.waitForExistence(timeout: 5), "当前页有书签时丝带应出现")
+        XCTAssertEqual(ribbon.value as? String, "此页已有书签")
+        attachDesignSurface("bookmark-ribbon-present-375-light", app)
+
+        // 翻到下一页再翻回：丝带按 locator 匹配当前页应重新出现。
+        let body = app.otherElements["reading-content"]
+        body.swipeLeft()
+        Thread.sleep(forTimeInterval: 0.8)
+        body.swipeRight()
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertTrue(ribbon.waitForExistence(timeout: 5), "翻页往返后当前页书签丝带应重新出现")
+
+        // 改字号触发重排：丝带仍应按可见原文锚点匹配当前页。
+        if !app.buttons["reader-settings"].isHittable {
+            body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            fullscreenWait { app.buttons["reader-settings"].isHittable }
+        }
+        settings(app, mode: "分页", dark: false, font: 120)
+        XCTAssertTrue(ribbon.waitForExistence(timeout: 5), "改字号重排后当前页书签丝带仍应出现")
+        attachDesignSurface("bookmark-ribbon-after-reflow-375-light", app)
+
+        // 点丝带删除当前页书签。首屏夹具书签与新加书签可能同页：点一次删除当前匹配，若仍有书签保留则再点一次。
+        ribbon.tap()
+        Thread.sleep(forTimeInterval: 1.0)
+        if ribbon.exists {
+            ribbon.tap()
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        let removed = NSPredicate { _, _ in !ribbon.exists }
+        expectation(for: removed, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        attachDesignSurface("bookmark-ribbon-removed-375-light", app)
+
+        // 面板同步：书签数量回到添加前。
+        fullscreenWait { contents.exists && contents.isEnabled && contents.isHittable }
+        contents.tap()
+        XCTAssertTrue(app.tables["book-navigation"].waitForExistence(timeout: 5))
+        app.segmentedControls.buttons["书签"].tap()
+        Thread.sleep(forTimeInterval: 0.4)
+        XCTAssertEqual(bookmarkRows.count, 0, "点丝带会删除当前页全部书签（含夹具首屏书签）")
+        app.buttons["完成"].tap()
+    }
+
+    /// 多颜色高亮：选文→调色盘 4 色各建一次、已有高亮改色、重启保持（旧数据默认黄由单测覆盖）。
+    func testReaderMultiColorHighlightsCreateRecolorAndPersist() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        openFixtureBook("红楼梦", in: app)
+        waitForBody(app)
+        let body = app.webViews.firstMatch
+        let bar = app.otherElements["highlight-color-bar"]
+        let palette = app.otherElements["highlight-color-palette"]
+        let positions: [(CGFloat, CGFloat)] = [(0.30, 0.28), (0.30, 0.40), (0.30, 0.52), (0.30, 0.64)]
+        let colors = ["yellow", "green", "blue", "rose"]
+        for (index, color) in colors.enumerated() {
+            body.coordinate(withNormalizedOffset: CGVector(dx: positions[index].0, dy: positions[index].1))
+                .press(forDuration: 1.3)
+            noteMenu("高亮", in: app)
+            // task-19：选中即按上次/默认色立即上色，并出现轻量调色条。
+            XCTAssertTrue(bar.waitForExistence(timeout: 5), "选高亮后应出现轻量调色条")
+            if index == 0 {
+                attachDesignSurface("highlight-color-bar-375-light", app)
+            }
+            let swatch = app.buttons["highlight-color-" + color]
+            XCTAssertTrue(swatch.waitForExistence(timeout: 3), color)
+            swatch.tap()
+            Thread.sleep(forTimeInterval: 0.5)
+            XCTAssertTrue(swatch.isSelected, "调色条应选中 \(color)")
+            app.buttons["highlight-color-bar-close"].tap()
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        attachDesignSurface("highlight-colors-4-375-light", app)
+
+        // 改色：点第一个高亮 → 改色盘应选中当前色（黄，旧数据默认）→ 改绿。
+        body.coordinate(withNormalizedOffset: CGVector(dx: positions[0].0, dy: positions[0].1)).tap()
+        if !palette.waitForExistence(timeout: 2) {
+            body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            body.coordinate(withNormalizedOffset: CGVector(dx: positions[0].0, dy: positions[0].1)).tap()
+        }
+        XCTAssertTrue(palette.waitForExistence(timeout: 5), "点已有高亮应打开改色盘")
+        XCTAssertTrue(app.buttons["highlight-color-yellow"].isSelected, "已有高亮当前色应被选中")
+        app.buttons["highlight-color-green"].tap()
+        Thread.sleep(forTimeInterval: 0.6)
+        attachDesignSurface("highlight-colors-recolored-375-light", app)
+
+        // 重启保持：再次打开同一页，点该高亮应显示绿色选中。
+        app.terminate()
+        app.launch()
+        openFixtureBook("红楼梦", in: app)
+        waitForBody(app)
+        body.coordinate(withNormalizedOffset: CGVector(dx: positions[0].0, dy: positions[0].1)).tap()
+        if !palette.waitForExistence(timeout: 2) {
+            body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            body.coordinate(withNormalizedOffset: CGVector(dx: positions[0].0, dy: positions[0].1)).tap()
+        }
+        XCTAssertTrue(palette.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["highlight-color-green"].isSelected, "改色应持久化（重启后绿色选中）")
+        app.buttons["highlight-color-green"].tap()
+    }
+
+    /// 首屏书签丝带（用户反馈：打开书看不到已有书签丝带）。夹具首屏即含同章书签，未滚动也应显示。
+    /// 该用例先以红验证 bug，task-18 修复后应转绿。
+    func testReaderFirstScreenShowsExistingBookmarkRibbon() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        openFixtureBook("红楼梦", in: app)
+        waitForBody(app)
+
+        // task-35：正常进入不出现“正在打开…”米色提示条；task-34：问问书灯按钮缩小到 36pt。
+        XCTAssertFalse(app.staticTexts["正在打开…"].exists, "正常进入不应出现加载提示条")
+        let ask = app.buttons["reader-ask-book"]
+        XCTAssertTrue(ask.exists)
+        XCTAssertLessThanOrEqual(ask.frame.height, 40, "问问书灯按钮应缩小到约 36pt")
+        XCTAssertTrue(ask.isHittable)
+        // 首屏不滚动：夹具书签落在同章第 1 段（与初始阅读位置同一页），丝带应直接可见。
+        attachDesignSurface("bookmark-ribbon-first-screen-375-light", app)
+        let ribbon = app.buttons["reader-bookmark-ribbon"]
+        XCTAssertTrue(ribbon.waitForExistence(timeout: 5), "首屏已有书签时应显示丝带（当前 bug）")
+        XCTAssertTrue(ribbon.isHittable, "首屏丝带应可点击")
+        XCTAssertEqual(ribbon.value as? String, "此页已有书签")
+
+        // 目录/书签面板点已有书签跳转 → 丝带仍在。
+        let contents = app.buttons["reader-contents"]
+        fullscreenWait { contents.exists && contents.isEnabled && contents.isHittable }
+        contents.tap()
+        XCTAssertTrue(app.tables["book-navigation"].waitForExistence(timeout: 5))
+        app.segmentedControls.buttons["书签"].tap()
+        Thread.sleep(forTimeInterval: 0.4)
+        let firstBookmark = app.tables["book-navigation"].cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "bookmark-")
+        ).firstMatch
+        XCTAssertTrue(firstBookmark.waitForExistence(timeout: 5), "面板应列出夹具书签")
+        firstBookmark.tap()
+        waitForBody(app)
+        XCTAssertTrue(ribbon.waitForExistence(timeout: 5), "跳到书签页后丝带应出现")
+        XCTAssertTrue(ribbon.isHittable, "书签页丝带应可点击")
+        attachDesignSurface("bookmark-ribbon-after-jump-375-light", app)
+    }
+
+    /// task-19/25：选中即上色 + 轻量调色条；点已有高亮 → 浮层仅改色 + 取消高亮（不再有写笔记转换）。
+    func testReaderHighlightImmediateColorBarOptionsAndDelete() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        openFixtureBook("红楼梦", in: app)
+        waitForBody(app)
+        let body = app.webViews.firstMatch
+        let bar = app.otherElements["highlight-color-bar"]
+        let palette = app.otherElements["highlight-color-palette"]
+
+        // 1) 选文→高亮：立即按上次/默认色上色，并出现轻量调色条（不是模态调色盘）。
+        body.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.78)).press(forDuration: 1.3)
+        noteMenu("高亮", in: app)
+        XCTAssertTrue(bar.waitForExistence(timeout: 5), "选中高亮后应立即出现轻量调色条")
+        let selectedSwatches = ["yellow", "green", "blue", "rose"].filter {
+            app.buttons["highlight-color-" + $0].isSelected
+        }
+        XCTAssertEqual(selectedSwatches.count, 1, "应有一个默认/上次色立即生效")
+        attachDesignSurface("highlight-color-bar-375-light", app)
+
+        // 调色条改色 → 雾蓝（不关闭调色条）。
+        app.buttons["highlight-color-blue"].tap()
+        Thread.sleep(forTimeInterval: 0.6)
+        XCTAssertTrue(app.buttons["highlight-color-blue"].isSelected)
+        attachDesignSurface("highlight-color-bar-recolored-375-light", app)
+        app.buttons["highlight-color-bar-close"].tap()
+
+        // 2) 点已有高亮（夹具绿色高亮，第 1 段）→ 浮层：当前色选中 + 取消高亮（无写笔记入口）。
+        let existing = body.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.30))
+        func openExistingHighlight() {
+            existing.tap()
+            if !palette.waitForExistence(timeout: 2) {
+                body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                existing.tap()
+            }
+            XCTAssertTrue(palette.waitForExistence(timeout: 5), "点已有高亮应打开浮层")
+        }
+        openExistingHighlight()
+        XCTAssertTrue(app.buttons["highlight-color-green"].isSelected, "浮层应选中已有高亮的当前色")
+        XCTAssertTrue(app.buttons["highlight-delete"].exists, "浮层应有取消高亮")
+        XCTAssertTrue(app.buttons["取消"].exists, "浮层应保留取消")
+        XCTAssertFalse(app.buttons["写笔记"].exists, "高亮浮层不再提供“写笔记”转换入口")
+        attachDesignSurface("highlight-float-no-write-note-375-light", app)
+
+        // 3) 浮层改色 → 胭脂：选色后调色盘应自动关闭。
+        openExistingHighlight()
+        XCTAssertTrue(app.buttons["highlight-color-rose"].waitForExistence(timeout: 5))
+        app.buttons["highlight-color-rose"].tap()
+        let paletteDismissed = NSPredicate { _, _ in !palette.exists }
+        expectation(for: paletteDismissed, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        // 再点高亮应显示胭脂已选中。
+        openExistingHighlight()
+        XCTAssertTrue(app.buttons["highlight-color-rose"].isSelected, "改色应已生效")
+
+        // 4) 取消高亮：免确认直接删除，decoration 消失。
+        app.buttons["highlight-delete"].tap()
+        XCTAssertFalse(app.staticTexts["取消高亮？"].waitForExistence(timeout: 1.5), "取消高亮不应再弹确认")
+        let removed = NSPredicate { _, _ in !palette.exists }
+        expectation(for: removed, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        // decoration 已消失：再点原高亮位置不应再打开浮层。
+        existing.tap()
+        XCTAssertFalse(palette.waitForExistence(timeout: 1.5), "取消高亮后 decoration 应消失")
+        // 列表同步由 note-wave 删除用例覆盖；此处聚焦“取消高亮后 decoration 消失”。
+        attachDesignSurface("reader-after-cancel-highlight-375-light", app)
+    }
+
+    /// 定稿阅读器：目录面板只有 目录/书签 两 tab，书签行显示章节 + 进度百分比。
+    /// task-33：编辑器删除入口（仅已保存笔记）：取消无副作用、确认后卡片滑出且列表同步；新建笔记无删除入口。
+    func testNoteEditorDeleteExistingNoteFlow() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
+        tab("tab-notes", label: "笔记", in: app).tap()
+        let list = app.collectionViews["notes"]
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        waitForNoteRows(2, in: app)
+        let bodyRow = list.cells.containing(
+            NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")
+        ).firstMatch
+        XCTAssertTrue(bodyRow.waitForExistence(timeout: 5))
+        bodyRow.swipeRight()
+        app.buttons["编辑"].firstMatch.tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        let deleteButton = app.buttons["note-delete"]
+        XCTAssertTrue(deleteButton.waitForExistence(timeout: 3), "已保存笔记编辑器应有删除笔记入口")
+        XCTAssertTrue(deleteButton.isHittable)
+        attachDesignSurface("note-editor-delete-entry-375-light", app)
+
+        // 取消：回到编辑器，不删除。
+        deleteButton.tap()
+        XCTAssertTrue(app.staticTexts["删除笔记？"].waitForExistence(timeout: 5))
+        attachDesignSurface("note-editor-delete-confirm-375-light", app)
+        app.buttons["取消"].tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 3), "取消后应仍在编辑器")
+
+        // 确认删除：卡片滑出、列表行消失。
+        app.buttons["note-delete"].tap()
+        XCTAssertTrue(app.staticTexts["删除笔记？"].waitForExistence(timeout: 5))
+        let dialogDelete = app.otherElements["book-dialog"].buttons["删除"]
+        if dialogDelete.waitForExistence(timeout: 2) {
+            dialogDelete.tap()
+        } else {
+            app.buttons["删除"].firstMatch.tap()
+        }
+        XCTAssertTrue(app.textViews["note-body"].waitForNonExistence(timeout: 5), "删除后卡片应滑出")
+        XCTAssertTrue(waitForPageTitle("笔记", in: app))
+        waitForNoteRows(1, in: app)
+        XCTAssertFalse(
+            list.cells.containing(NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")).firstMatch.exists,
+            "被删笔记行应从列表消失"
+        )
+        attachDesignSurface("notes-after-editor-delete-375-light", app)
+
+        // 新建笔记不得出现删除入口。
+        tab("tab-library", label: "书架", in: app).tap()
+        app.buttons["continue-reading"].tap()
+        waitForBody(app)
+        let body = app.webViews.firstMatch
+        body.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.85)).press(forDuration: 1.3)
+        noteMenu("笔记", in: app)
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["note-delete"].exists, "新建笔记不应显示删除入口")
+        attachDesignSurface("note-editor-new-no-delete-375-light", app)
+        app.buttons["note-close"].tap()
+    }
+
+    func testReaderContentsPanelHasContentsAndBookmarksWithProgress() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        openFixtureBook("红楼梦", in: app)
+        waitForBody(app)
+        let contents = app.buttons["reader-contents"]
+        fullscreenWait { contents.exists && contents.isEnabled && contents.isHittable }
+        contents.tap()
+        XCTAssertTrue(app.tables["book-navigation"].waitForExistence(timeout: 5))
+        let tabs = app.segmentedControls.firstMatch
+        XCTAssertTrue(tabs.exists)
+        XCTAssertEqual(tabs.buttons.count, 2, "定稿面板只保留 目录/书签 两个 tab")
+        XCTAssertTrue(tabs.buttons["目录"].exists)
+        XCTAssertTrue(tabs.buttons["书签"].exists)
+        XCTAssertFalse(tabs.buttons["笔记"].exists, "不应再有“笔记”tab")
+        attachDesignSurface("reader-contents-two-tabs-375-light", app)
+
+        tabs.buttons["书签"].tap()
+        Thread.sleep(forTimeInterval: 0.4)
+        let bookmarkRow = app.tables["book-navigation"].cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "bookmark-")
+        ).firstMatch
+        XCTAssertTrue(bookmarkRow.waitForExistence(timeout: 5), "书签 tab 应列出种子书签")
+        XCTAssertTrue(
+            bookmarkRow.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "进度")).firstMatch.exists ||
+                app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "进度")).firstMatch.exists,
+            "书签行应显示章节 + 进度百分比"
+        )
+        attachDesignSurface("reader-bookmarks-tab-progress-375-light", app)
+        app.buttons["完成"].tap()
+    }
+
+    /// task-32：点原文波浪线笔记直接进编辑弹层（无「查看笔记」中间层/下划线色 swatch）；可从编辑器删除。
+    func testReaderNoteWaveOpensEditorAndDeletesNote() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        openFixtureBook("红楼梦", in: app)
+        waitForBody(app)
+        let body = app.webViews.firstMatch
+        let wave = body.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.55))
+        func openWaveEditor() {
+            wave.tap()
+            if !app.textViews["note-body"].waitForExistence(timeout: 2) {
+                body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                wave.tap()
+            }
+            XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5), "点波浪线应直接打开编辑弹层")
+        }
+        openWaveEditor()
+        XCTAssertFalse(app.otherElements["note-detail-sheet"].exists, "不应再有「查看笔记」中间层")
+        XCTAssertEqual(
+            (app.textViews["note-body"].value as? String) ?? "",
+            "灯把书页照亮，也把问题留在纸上。",
+            "编辑器应带出该笔记正文"
+        )
+        XCTAssertFalse((app.staticTexts["note-quote"].label).isEmpty, "应展示引用原文")
+        // 笔记编辑弹层不提供下划线颜色 swatch（颜色只用于高亮浮层/调色盘）。
+        XCTAssertFalse(app.buttons["highlight-color-green"].exists, "笔记编辑不应有下划线颜色 swatch")
+        XCTAssertFalse(app.buttons["highlight-color-blue"].exists)
+        XCTAssertTrue(app.buttons["note-delete"].exists, "已保存笔记编辑器应有删除入口")
+        attachDesignSurface("reader-wave-opens-editor-375-light", app)
+
+        // 取消删除：返回编辑器。
+        app.buttons["note-delete"].tap()
+        XCTAssertTrue(app.staticTexts["删除笔记？"].waitForExistence(timeout: 5))
+        attachDesignSurface("reader-wave-delete-confirm-375-light", app)
+        app.buttons["取消"].tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 3))
+
+        // 确认删除：卡片滑出，笔记列表同步只剩高亮。
+        app.buttons["note-delete"].tap()
+        XCTAssertTrue(app.staticTexts["删除笔记？"].waitForExistence(timeout: 5))
+        if app.otherElements["book-dialog"].buttons["删除"].waitForExistence(timeout: 2) {
+            app.otherElements["book-dialog"].buttons["删除"].tap()
+        } else {
+            app.buttons["删除"].firstMatch.tap()
+        }
+        XCTAssertTrue(app.textViews["note-body"].waitForNonExistence(timeout: 5), "删除后卡片应滑出")
+        waitForBody(app)
+        attachDesignSurface("reader-after-wave-note-delete-375-light", app)
+        // decoration 消失：再点原位不应再打开编辑器。
+        wave.tap()
+        XCTAssertFalse(app.textViews["note-body"].waitForExistence(timeout: 1.5), "删除后波浪线笔记应消失")
+
+        if !app.buttons["书架"].waitForExistence(timeout: 1) {
+            body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(app.buttons["书架"].waitForExistence(timeout: 3), "应回到带工具栏的阅读页")
+        app.buttons["书架"].tap()
+        XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
+        tab("tab-notes", label: "笔记", in: app).tap()
+        waitForNoteRows(1, in: app)
+        attachDesignSurface("notes-after-wave-note-delete-375-light", app)
+    }
+    func testNoteEditorCustomCardGeometryKeyboardAndDisabledSave() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        openFixtureBook("红楼梦", in: app)
+        waitForBody(app)
+        let body = app.webViews.firstMatch
+        let screenHeight = app.frame.height
+        // 关闭按钮距卡片顶约 34pt（dragArea 26 + header 居中）。
+        func cardTop(_ closeY: CGFloat) -> CGFloat { closeY - 34 }
+
+        // 1) 新建：选文 → 笔记 → 底部卡片滑入，初始约 54% 屏高。
+        body.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.80)).press(forDuration: 1.3)
+        noteMenu("笔记", in: app)
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5), "应打开笔记卡片")
+        let close = app.buttons["note-close"]
+        let save = app.buttons["note-save"]
+        let card = app.otherElements["note-editor-card"]
+        XCTAssertTrue(close.exists)
+        XCTAssertTrue(save.exists)
+        XCTAssertTrue(card.waitForExistence(timeout: 3), "note-editor-card 应通过 identifier 暴露给 UI 测试")
+        let initialCardHeight = card.frame.height
+        let initialCardMinY = card.frame.minY
+        XCTAssertEqual(initialCardHeight, screenHeight * 0.54, accuracy: 8, "初始卡片高度应约 54% 屏高")
+        print("QA_CARD initial height=\(initialCardHeight) minY=\(initialCardMinY)")
+        XCTAssertGreaterThan(cardTop(close.frame.minY), screenHeight * 0.38, "初始卡片应约 54% 屏高")
+        XCTAssertLessThan(cardTop(close.frame.minY), screenHeight * 0.56)
+        XCTAssertFalse((app.staticTexts["note-quote"].label).isEmpty, "应展示引用原文")
+        XCTAssertFalse(save.isEnabled, "空正文时保存按钮应禁用")
+        attachDesignSurface("note-card-initial-54pct-375-light", app)
+
+        // 2) 键盘弹出前后卡片高度不变（整卡上移）。
+        let closeBeforeY = close.frame.minY
+        let heightBefore = screenHeight - cardTop(closeBeforeY)
+        app.textViews["note-body"].tap()
+        app.textViews["note-body"].typeText("QA-自定义卡片笔记")
+        XCTAssertTrue(save.isEnabled, "有正文后保存按钮应启用")
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "键盘应出现")
+        Thread.sleep(forTimeInterval: 0.8)
+        // v3：键盘态卡片高度收缩到可用高度-24、顶部留白 ≥16（grabber/圆角可见），不再顶到屏幕顶。
+        let keyboardCardTop = cardTop(close.frame.minY)
+        let keyboardCardHeight = card.frame.height
+        let keyboardCardMinY = card.frame.minY
+        print("QA_CARD keyboard height=\(keyboardCardHeight) minY=\(keyboardCardMinY) (initial height=\(initialCardHeight) minY=\(initialCardMinY))")
+        XCTAssertLessThan(close.frame.minY, closeBeforeY - 100, "键盘弹出后整卡应上移")
+        XCTAssertLessThanOrEqual(keyboardCardHeight, initialCardHeight + 2, "键盘态卡片高度应 ≤ 初始 54% 高度")
+        XCTAssertGreaterThanOrEqual(keyboardCardMinY, 16, "键盘态卡片顶部应留白 ≥16（grabber/圆角可见）")
+        XCTAssertGreaterThanOrEqual(keyboardCardTop, 16, "键盘态卡片顶部应留白 ≥16（grabber/圆角可见）")
+        attachDesignSurface("note-card-keyboard-v3-375-light", app)
+        save.tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForNonExistence(timeout: 5), "保存后卡片应滑出")
+        waitForBody(app)
+
+        // 3) 保存后阅读页波浪线笔记：点开直接进编辑弹层且正文同步（无「查看笔记」中间层）。
+        body.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.80)).tap()
+        if !app.textViews["note-body"].waitForExistence(timeout: 2) {
+            body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            body.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.80)).tap()
+        }
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.otherElements["note-detail-sheet"].exists, "task-32 后不应再有「查看笔记」中间层")
+        XCTAssertTrue(
+            ((app.textViews["note-body"].value as? String) ?? "").contains("QA-自定义卡片笔记"),
+            "编辑器应带出刚保存的正文"
+        )
+        attachDesignSurface("note-editor-synced-375-light", app)
+        app.buttons["note-close"].tap()
+        waitForBody(app)
+
+        // 4) 列表 leading 编辑：卡片；拖 grabber 上拉到约 92% 松手吸附。
+        if !app.buttons["书架"].waitForExistence(timeout: 1) {
+            body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(app.buttons["书架"].waitForExistence(timeout: 3))
+        app.buttons["书架"].tap()
+        XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
+        tab("tab-notes", label: "笔记", in: app).tap()
+        waitForNoteRows(3, in: app)
+        let row = app.collectionViews["notes"].cells.containing(
+            NSPredicate(format: "label CONTAINS %@", "QA-自定义卡片笔记")
+        ).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.swipeRight()
+        app.buttons["编辑"].firstMatch.tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        let startTop = cardTop(app.buttons["note-close"].frame.minY)
+        XCTAssertGreaterThan(startTop, screenHeight * 0.38, "编辑入口同样为约 54% 卡片")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: startTop + 10))
+            .press(
+                forDuration: 0.1,
+                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.10))
+            )
+        Thread.sleep(forTimeInterval: 0.7)
+        let expandedTop = cardTop(app.buttons["note-close"].frame.minY)
+        XCTAssertLessThan(expandedTop, screenHeight * 0.20, "上拉后卡片应吸附到约 92% 屏高")
+        attachDesignSurface("note-card-expanded-92pct-375-light", app)
+        app.buttons["note-close"].tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForNonExistence(timeout: 5))
+
+        // 5) 关闭行为：无键盘时点 dim 关闭；输入未保存内容后 × 关闭并丢弃。
+        row.swipeRight()
+        app.buttons["编辑"].firstMatch.tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 0.6)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.18)).tap()
+        if app.textViews["note-body"].waitForExistence(timeout: 2) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.18)).tap()
+        }
+        XCTAssertTrue(app.textViews["note-body"].waitForNonExistence(timeout: 5), "点 dim 应关闭卡片")
+        row.swipeRight()
+        app.buttons["编辑"].firstMatch.tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        app.textViews["note-body"].tap()
+        app.textViews["note-body"].typeText("未保存内容")
+        Thread.sleep(forTimeInterval: 0.4)
+        app.buttons["note-close"].tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForNonExistence(timeout: 5), "点 × 应关闭卡片")
+        XCTAssertTrue(waitForPageTitle("笔记", in: app))
+        XCTAssertFalse(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "草稿")).firstMatch.exists,
+            "不应出现草稿文案/行"
+        )
+        row.swipeRight()
+        app.buttons["编辑"].firstMatch.tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        let reopened = (app.textViews["note-body"].value as? String) ?? ""
+        XCTAssertEqual(reopened, "QA-自定义卡片笔记", "关闭应丢弃未保存修改、回到已保存内容")
+        XCTAssertFalse(reopened.contains("未保存内容"))
+        replaceNoteBody("", in: app)
+        for _ in 0..<3 where !((app.textViews["note-body"].value as? String) ?? "").isEmpty {
+            replaceNoteBody("", in: app)
+        }
+        let disabled = NSPredicate { _, _ in
+            ((app.textViews["note-body"].value as? String) ?? "").isEmpty &&
+                !app.buttons["note-save"].isEnabled
+        }
+        expectation(for: disabled, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        attachDesignSurface("note-card-cleared-disabled-375-light", app)
+        app.buttons["note-close"].tap()
+    }
+
     func testIssue30QuestionSheetLayoutDraftAndIdentity() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
         app.launch()
         XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
         tab("tab-conversations", label: "对话", in: app).tap()
-        let history = app.tables["question-history"]
+        let history = app.collectionViews["question-history"]
         let initialConversations = history.cells.count
         let conversation = history.cells.firstMatch
         XCTAssertTrue(conversation.waitForExistence(timeout: 10))
@@ -1061,8 +1933,8 @@ extension ReadingUITests {
         app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
         app.launch()
         tab("tab-conversations", label: "对话", in: app).tap()
-        XCTAssertTrue(app.tables["question-history"].cells.firstMatch.waitForExistence(timeout: 10))
-        app.tables["question-history"].cells.firstMatch.tap()
+        XCTAssertTrue(app.collectionViews["question-history"].cells.firstMatch.waitForExistence(timeout: 10))
+        app.collectionViews["question-history"].cells.firstMatch.tap()
         XCTAssertTrue(sheet.waitForExistence(timeout: 10))
         attachDesignSurface("issue30-question-375-dark", app)
     }
@@ -1076,7 +1948,7 @@ extension ReadingUITests {
             app.launch()
             XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
             tab("tab-conversations", label: "对话", in: app).tap()
-            let conversation = app.tables["question-history"].cells.containing(
+            let conversation = app.collectionViews["question-history"].cells.containing(
                 NSPredicate(format: "label CONTAINS %@", "这句话里的“灯”指什么？")
             ).firstMatch
             XCTAssertTrue(conversation.waitForExistence(timeout: 5))
@@ -1114,6 +1986,51 @@ extension ReadingUITests {
         return identified.exists ? identified : app.tabBars.buttons[label].firstMatch
     }
 
+    /// 第二轮组件化后“我的”设置行可能从 UIControl 变成系统列表 cell；按标识符兼容查询。
+    private func settingsRow(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        for candidate in [
+            app.buttons[identifier],
+            app.cells[identifier],
+            app.otherElements[identifier],
+            app.staticTexts[identifier]
+        ] where candidate.exists {
+            return candidate
+        }
+        return app.buttons[identifier]
+    }
+
+    /// 品牌图标可能是 UIView 容器（Other）而非 Image，按标识符跨类型查询。
+    private func anyProfileElement(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        for candidate in [
+            app.images[identifier],
+            app.otherElements[identifier],
+            app.staticTexts[identifier],
+            app.cells[identifier]
+        ] where candidate.exists {
+            return candidate
+        }
+        return app.otherElements[identifier]
+    }
+
+    private func waitForSettingsValue(
+        _ element: XCUIElement,
+        _ expected: String,
+        timeout: TimeInterval = 5
+    ) {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while Date() < deadline {
+            if (element.value as? String) == expected { return }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        XCTAssertEqual(element.value as? String, expected)
+    }
+
+    private func profileTitle(in app: XCUIApplication, timeout: TimeInterval = 5) -> XCUIElement {
+        let staticTitle = app.staticTexts["profile-title"]
+        if staticTitle.waitForExistence(timeout: timeout) { return staticTitle }
+        return app.navigationBars.staticTexts["我的"].firstMatch
+    }
+
     /// The status bar is not part of the designed application surface.
     private func attachDesignSurface(_ name: String, _ app: XCUIApplication) {
         // The design's longest state transition is 240 ms. Capture only after
@@ -1132,6 +2049,185 @@ extension ReadingUITests {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
+
+    /// 系统大标题：优先查导航栏内 staticText；某些系统版本只在全局 staticText 暴露。
+    private func waitForPageTitle(
+        _ text: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        if app.navigationBars.staticTexts[text].waitForExistence(timeout: timeout) { return true }
+        return app.staticTexts[text].waitForExistence(timeout: 1)
+    }
+
+    private func waitForSearchField(
+        _ identifier: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval = 5
+    ) -> XCUIElement {
+        let search = app.searchFields[identifier]
+        if search.waitForExistence(timeout: timeout) { return search }
+        return app.textFields[identifier]
+    }
+
+    /// iOS 26 搜索激活后右上角的取消/关闭按钮：中文环境可能仍暴露为 “Close”。
+    private func waitForSearchDismissButton(
+        in app: XCUIApplication,
+        timeout: TimeInterval = 5
+    ) -> XCUIElement? {
+        let labels = ["取消", "Close", "Cancel"]
+        let navigationButton = app.navigationBars.buttons.matching(
+            NSPredicate(format: "label IN %@", labels)
+        ).firstMatch
+        if navigationButton.waitForExistence(timeout: timeout) { return navigationButton }
+        let anyButton = app.buttons.matching(NSPredicate(format: "label IN %@", labels)).firstMatch
+        return anyButton.exists ? anyButton : nil
+    }
+
+    /// 大标题/内联标题“可见”不能只看 accessibility 存在：BUG 状态下节点存在、hittable、frame 正常，
+    /// 但屏幕没有绘制（被不透明导航栏背景层遮挡）。这里对候选标题做像素墨迹校验：
+    /// 任一候选 staticText 可点且 frame 区域有真实字形像素才算可见（同时覆盖大标题态与滚动后的内联标题态）。
+    private func waitForVisibleNavigationTitle(
+        _ text: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval = 5,
+        inkThreshold: Double = 0.02
+    ) -> Bool {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        var diagnostics = ""
+        while Date() < deadline {
+            let titles = app.navigationBars.staticTexts
+                .matching(NSPredicate(format: "label == %@", text))
+                .allElementsBoundByIndex
+            for title in titles where title.exists && title.isHittable {
+                let ink = titleInkRatio(of: title, in: app)
+                diagnostics = "frame=\(title.frame) inkRatio=\(ink)"
+                if ink > inkThreshold { return true }
+            }
+            if diagnostics.isEmpty { diagnostics = "未找到可点的“\(text)”标题节点" }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        print("QA_NAV_TITLE_NOT_VISIBLE text=\(text) \(diagnostics)")
+        return false
+    }
+
+    /// 滚动后导航栏背景必须是纸白不透明：取标题右侧/按钮左侧的顶部窄带，纸白背景应几乎全为浅色像素；
+    /// 若背景透明，滚动内容（文字/分隔线/封面）会穿过该区域产生深色像素。
+    private func navigationBarBackgroundIsPaperBlank(in app: XCUIApplication) -> Bool {
+        guard app.navigationBars.firstMatch.exists else { return false }
+        let bar = app.navigationBars.firstMatch.frame
+        let rect = CGRect(
+            x: max(8, bar.midX - 90),
+            y: bar.minY + 2,
+            width: min(180, bar.width - 32),
+            height: 6
+        )
+        return screenshotLightRatio(in: rect, in: app) > 0.99
+    }
+
+    private func screenshotLightRatio(in rect: CGRect, in app: XCUIApplication) -> Double {
+        let image = XCUIScreen.main.screenshot().image
+        guard let cgImage = image.cgImage, app.frame.width > 0 else { return 0 }
+        let scale = CGFloat(cgImage.width) / app.frame.width
+        let scaled = CGRect(
+            x: rect.minX * scale,
+            y: rect.minY * scale,
+            width: rect.width * scale,
+            height: rect.height * scale
+        ).integral
+        guard scaled.width >= 2, scaled.height >= 2,
+              let cropped = cgImage.cropping(to: scaled) else { return 0 }
+        let width = cropped.width
+        let height = cropped.height
+        guard width > 0, height > 0 else { return 0 }
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return 0 }
+        context.draw(cropped, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var light = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) {
+            let red = Double(pixels[index]) / 255
+            let green = Double(pixels[index + 1]) / 255
+            let blue = Double(pixels[index + 2]) / 255
+            let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+            if luminance > 0.85 { light += 1 }
+        }
+        return Double(light) / Double(width * height)
+    }
+
+    /// 浅色主题下统计标题区域深色像素占比（墨色标题 vs 纸白底）。
+    private func titleInkRatio(of element: XCUIElement, in app: XCUIApplication) -> Double {
+        let frame = element.frame
+        guard frame.width >= 4, frame.height >= 4 else { return 0 }
+        let image = XCUIScreen.main.screenshot().image
+        guard let cgImage = image.cgImage, app.frame.width > 0 else { return 0 }
+        let scale = CGFloat(cgImage.width) / app.frame.width
+        let rect = CGRect(
+            x: frame.minX * scale,
+            y: frame.minY * scale,
+            width: frame.width * scale,
+            height: frame.height * scale
+        ).integral
+        guard rect.width >= 4, rect.height >= 4,
+              let cropped = cgImage.cropping(to: rect) else { return 0 }
+        let width = cropped.width
+        let height = cropped.height
+        guard width > 0, height > 0 else { return 0 }
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return 0 }
+        context.draw(cropped, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var dark = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) {
+            let red = Double(pixels[index]) / 255
+            let green = Double(pixels[index + 1]) / 255
+            let blue = Double(pixels[index + 2]) / 255
+            let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+            if luminance < 0.5 { dark += 1 }
+        }
+        return Double(dark) / Double(width * height)
+    }
+
+    private func noteRowQuery(in app: XCUIApplication) -> XCUIElementQuery {
+        app.collectionViews["notes"].cells.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@ OR identifier BEGINSWITH %@",
+                "annotation-"
+            )
+        )
+    }
+
+    private func waitForNoteRows(_ count: Int, in app: XCUIApplication, timeout: TimeInterval = 5) {
+        let query = noteRowQuery(in: app)
+        expectation(for: NSPredicate { _, _ in query.count == count }, evaluatedWith: app)
+        waitForExpectations(timeout: timeout)
+    }
+
+    private func conversationRowQuery(in app: XCUIApplication) -> XCUIElementQuery {
+        app.collectionViews["question-history"].cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "question-")
+        )
+    }
+
+    private func waitForConversationRows(_ count: Int, in app: XCUIApplication, timeout: TimeInterval = 5) {
+        let query = conversationRowQuery(in: app)
+        expectation(for: NSPredicate { _, _ in query.count == count }, evaluatedWith: app)
+        waitForExpectations(timeout: timeout)
+    }
 }
 
 final class ReadingUITests: XCTestCase {
@@ -1142,12 +2238,12 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.staticTexts["红楼梦"].waitForExistence(timeout: 15))
         tab("tab-conversations", label: "对话", in: app).tap()
-        let history = app.tables["question-history"]
+        let history = app.collectionViews["question-history"]
         XCTAssertTrue(history.cells.firstMatch.waitForExistence(timeout: 10))
         let before = history.cells.count
         tab("tab-library", label: "书架", in: app).tap()
         app.buttons["continue-reading"].tap(); waitForBody(app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         XCTAssertFalse(app.buttons["已读范围"].exists)
         app.buttons["完成"].tap()
         app.buttons["reader-ask-book"].tap()
@@ -1181,7 +2277,7 @@ final class ReadingUITests: XCTestCase {
         questionSaved(app)
     }
     private func issue12Row(_ name: String, app: XCUIApplication) -> XCUIElement {
-        app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
+        app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
     }
     func testIssue12LocalFirstWithRealPreparationFault() {
         let app = issue12App()
@@ -1193,9 +2289,9 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(paragraph.waitForExistence(timeout: 5)); paragraph.press(forDuration: 1.3); noteMenu("提问", in: app)
         app.textViews["question-input"].tap(); app.textViews["question-input"].typeText("初版规则要求多久后执行停机，等待是为了什么？")
         app.buttons["question-send"].tap()
-        XCTAssertTrue(app.alerts["资料尚未准备完整"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["资料尚未准备完整"].firstMatch.waitForExistence(timeout: 5))
         evidence("issue12-explicit-local-choice", app)
-        app.alerts.buttons["仅用选文解释"].tap(); questionSaved(app)
+        app.otherElements["book-dialog"].buttons["仅用选文解释"].tap(); questionSaved(app)
         XCTAssertFalse(app.staticTexts["question-scope"].exists)
         evidence("issue12-local-first-saved", app)
         app.buttons["关闭"].tap(); app.buttons["书架"].tap()
@@ -1221,17 +2317,17 @@ final class ReadingUITests: XCTestCase {
         app.collectionViews["library"].cells[bookID].tap(); waitForBody(app); app.buttons["reader-ask-book"].tap()
         issue12Send("UI12第二书：阅读需要保留什么？", app: app)
         app.buttons["关闭"].tap(); app.buttons["书架"].tap(); app.tabBars.buttons["对话"].tap()
-        XCTAssertEqual(app.tables["question-history"].cells.count, 3)
+        XCTAssertEqual(app.collectionViews["question-history"].cells.count, 3)
         XCTAssertTrue(app.staticTexts["semantic-fixture"].exists); XCTAssertTrue(app.staticTexts["original-fixture"].exists)
         evidence("issue12-two-book-grouped-history", app)
         let row = issue12Row("UI12第二书", app: app); row.swipeLeft(); app.buttons["改名"].tap()
         let field = app.textFields["conversation-name"]; field.tap()
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (field.value as? String ?? "").count)); field.typeText("UI12改名已保存")
-        app.alerts.buttons["保存"].tap(); XCTAssertTrue(issue12Row("UI12改名已保存", app: app).exists)
-        let remove = issue12Row("书中的余辉", app: app); remove.swipeLeft(); app.buttons["删除"].tap(); app.alerts.buttons["取消"].tap()
+        app.otherElements["book-dialog"].buttons["保存"].tap(); XCTAssertTrue(issue12Row("UI12改名已保存", app: app).exists)
+        let remove = issue12Row("书中的余辉", app: app); remove.swipeLeft(); app.buttons["删除"].tap(); app.otherElements["book-dialog"].buttons["取消"].tap()
         XCTAssertTrue(issue12Row("书中的余辉", app: app).exists)
-        issue12Row("书中的余辉", app: app).swipeLeft(); app.buttons["删除"].tap(); app.alerts.buttons["删除"].tap()
-        XCTAssertEqual(app.tables["question-history"].cells.count, 2)
+        issue12Row("书中的余辉", app: app).swipeLeft(); app.buttons["删除"].tap(); app.otherElements["book-dialog"].buttons["删除"].tap()
+        XCTAssertEqual(app.collectionViews["question-history"].cells.count, 2)
         // Persist a follow-up draft, then let the external harness restart explicitly.
         issue12Row("初版规则要求多久", app: app).tap()
         let draft = app.buttons["question-follow-up"]; issue12Reach(draft, in: app); draft.tap()
@@ -1240,7 +2336,7 @@ final class ReadingUITests: XCTestCase {
     }
     func testIssue12OfflineRestartSnapshotsAndDraft() {
         let app = issue12App(); app.tabBars.buttons["对话"].tap()
-        XCTAssertEqual(app.tables["question-history"].cells.count, 2)
+        XCTAssertEqual(app.collectionViews["question-history"].cells.count, 2)
         XCTAssertTrue(issue12Row("UI12改名已保存", app: app).exists); XCTAssertFalse(issue12Row("书中的余辉", app: app).exists)
         issue12Row("初版规则要求多久", app: app).tap()
         let input = app.textViews["question-input"]; issue12Reach(input, in: app)
@@ -1281,7 +2377,7 @@ final class ReadingUITests: XCTestCase {
         app.buttons["书架"].tap()
         if !app.tabBars.firstMatch.waitForExistence(timeout: 3) { app.buttons["书架"].tap() }
         app.tabBars.buttons["对话"].tap()
-        app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "BG14-\(format)-\(delay)")).firstMatch.tap()
+        app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "BG14-\(format)-\(delay)")).firstMatch.tap()
         XCTAssertEqual(app.staticTexts["question-status"].label, "回答已保存")
         XCTAssertEqual(app.staticTexts["question-answer"].label, "BG14-\(format)-\(delay)")
         evidence("issue14-background-saved-\(format)-\(delay)", app)
@@ -1296,7 +2392,7 @@ final class ReadingUITests: XCTestCase {
         for format in ["OpenAI", "Anthropic"] {
             for delay in [20, 60] {
                 let name = "BG14-\(format)-\(delay)"
-                let row = app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", name))
+                let row = app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", name))
                 XCTAssertEqual(row.count, 1); row.firstMatch.tap()
                 if delay == 20 {
                     XCTAssertEqual(app.staticTexts["question-status"].label, "回答已保存")
@@ -1488,7 +2584,7 @@ final class ReadingUITests: XCTestCase {
             print("CURL_PICKER file=\(file.frame) search=\(app.searchFields.firstMatch.frame)")
         }
         file.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.otherElements["book-dialog"].firstMatch.waitForExistence(timeout: 10))
     }
     private func evidence(_ name: String, _ app: XCUIApplication) {
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
@@ -1587,16 +2683,16 @@ final class ReadingUITests: XCTestCase {
         let failedBook = "book-3cd5359e8b5487cda28207d47bc644042de37da1a5606087df0c2369a33674c4"
         app.launch()
         choose("curl-failure.epub", in: app)
-        app.alerts.buttons["知道了"].tap()
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         app.collectionViews["library"].cells[failedBook].tap()
         waitForBody(app)
         settings(app, mode: "仿真", dark: false, font: 100, wait: false)
         // The original scripted fixture refuses scrollBy: go accepts the request
         // but no changed location arrives. A timeout must not become readiness.
-        XCTAssertTrue(app.alerts["翻页准备失败"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.otherElements["翻页准备失败"].firstMatch.waitForExistence(timeout: 15))
         XCTAssertFalse(app.staticTexts["阅读位置已保存"].exists)
         evidence("curl-preparation-failed", app)
-        app.alerts.buttons["使用分页"].tap()
+        app.otherElements["book-dialog"].buttons["使用分页"].tap()
         waitForBody(app)
         app.swipeLeft() // Real native scroll gesture still works in this fixture.
         waitForBody(app)
@@ -1709,7 +2805,7 @@ final class ReadingUITests: XCTestCase {
             XCTAssertGreaterThan(web.width, content.width * 0.9)
             XCTAssertGreaterThan(web.height, content.height * 0.6)
             XCTAssertTrue(app.buttons["阅读设置"].isHittable)
-            XCTAssertTrue(app.buttons["目录与书签"].isHittable)
+            XCTAssertTrue(app.buttons["reader-contents"].isHittable)
             evidence("curl-rotation-\(orientation.rawValue)", app)
             if orientation == .landscapeLeft {
                 print("CAPTURE_CURL_LANDSCAPE_NOW")
@@ -1784,7 +2880,7 @@ final class ReadingUITests: XCTestCase {
         contents("第2章", in: app)
         waitForBody(app)
         XCTAssertTrue(visibleMarkers(app).contains("C2-P01"))
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.buttons["添加书签"].tap()
         XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
         app.buttons["完成"].tap()
@@ -1802,7 +2898,7 @@ final class ReadingUITests: XCTestCase {
 
         settings(app, mode: "仿真", dark: true, font: 150)
         evidence("curl-reflow-dark", app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["书签"].tap()
         app.tables.cells.firstMatch.tap()
         waitForBody(app)
@@ -1818,8 +2914,8 @@ final class ReadingUITests: XCTestCase {
         waitForBody(app)
         evidence("curl-portrait-rebuilt", app)
         contents("失效锚点", in: app)
-        XCTAssertTrue(app.alerts["无法定位原文"].waitForExistence(timeout: 12))
-        app.alerts.buttons["知道了"].tap()
+        XCTAssertTrue(app.otherElements["无法定位原文"].firstMatch.waitForExistence(timeout: 12))
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         contents("第3章", in: app)
         waitForBody(app)
         XCTAssertTrue(visibleMarkers(app).contains("C3-P01"))
@@ -1837,7 +2933,7 @@ final class ReadingUITests: XCTestCase {
         waitForBody(app)
         settings(app, mode: "分页", dark: false, font: 100)
         clearBookmarks(app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.tables.cells.staticTexts["第2章"].tap()
         waitForText(app)
         XCTAssertTrue(visibleMarkers(app).contains("C2-P01"))
@@ -1845,14 +2941,14 @@ final class ReadingUITests: XCTestCase {
         waitForText(app)
         let marker = try XCTUnwrap(visibleMarkers(app).first)
         evidence("bookmark-before-" + marker, app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.buttons["添加书签"].tap()
         XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
         app.buttons["添加书签"].tap()
         XCTAssertEqual(app.tables.cells.count, 1)
         evidence("bookmark-saved-list", app)
         app.buttons["完成"].tap()
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["目录"].tap()
         app.tables.cells.staticTexts["第3章"].tap()
         waitForText(app)
@@ -1861,13 +2957,13 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["书签"].tap()
         app.tables.cells.firstMatch.tap()
         waitForText(app)
         XCTAssertTrue(visibleMarkers(app).contains(marker))
         evidence("bookmark-return-" + marker, app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["书签"].tap()
         app.tables.cells.firstMatch.swipeLeft()
         app.buttons["移除"].tap()
@@ -1877,19 +2973,19 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["书签"].tap()
         XCTAssertTrue(app.staticTexts["暂无书签"].exists)
     }
     private func contents(_ name: String, in app: XCUIApplication) {
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["目录"].tap()
         let row = app.tables.cells.staticTexts[name]
         for _ in 0..<4 where !row.isHittable { app.tables.firstMatch.swipeUp() }
         row.tap()
     }
     private func clearBookmarks(_ app: XCUIApplication) {
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["书签"].tap()
         while app.tables.cells.matching(NSPredicate(format: "identifier BEGINSWITH 'bookmark-'")).count > 0 {
             app.tables.cells.firstMatch.swipeLeft()
@@ -1903,7 +2999,7 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         if !app.collectionViews["library"].cells[navigationBookID].exists {
             choose("navigation-fixture.epub", in: app)
-            app.alerts.buttons["知道了"].tap()
+            app.otherElements["book-dialog"].buttons["知道了"].tap()
         }
         app.collectionViews["library"].cells[navigationBookID].tap()
         waitForBody(app)
@@ -1915,7 +3011,7 @@ final class ReadingUITests: XCTestCase {
         app.swipeUp() // Capture the top visible anchor on the chapter's final screen.
         waitForBody(app)
         evidence("chapter2-end-before-bookmark", app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.buttons["添加书签"].tap()
         XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
         app.buttons["完成"].tap()
@@ -1924,7 +3020,7 @@ final class ReadingUITests: XCTestCase {
         XCTAssertTrue(visibleMarkers(app).contains("C3-P30"))
         evidence("chapter3-end", app)
         settings(app, mode: "分页", dark: true, font: 200)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["书签"].tap()
         app.tables.cells.firstMatch.tap()
         waitForBody(app)
@@ -1938,9 +3034,9 @@ final class ReadingUITests: XCTestCase {
         waitForBody(app)
         evidence("before-invalid-jump-chapter3", app)
         contents("失效锚点", in: app)
-        XCTAssertTrue(app.alerts["无法定位原文"].waitForExistence(timeout: 12))
+        XCTAssertTrue(app.otherElements["无法定位原文"].firstMatch.waitForExistence(timeout: 12))
         evidence("invalid-anchor-rejected", app)
-        app.alerts.buttons["知道了"].tap()
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         XCTAssertFalse(app.staticTexts["阅读位置已保存"].exists)
         app.terminate()
         app.launch()
@@ -1955,9 +3051,9 @@ final class ReadingUITests: XCTestCase {
         waitForBody(app)
         evidence("valid-target-after-failure", app)
         contents("失效章节", in: app)
-        XCTAssertTrue(app.alerts["无法定位原文"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["无法定位原文"].firstMatch.waitForExistence(timeout: 5))
         evidence("invalid-resource-rejected", app)
-        app.alerts.buttons["知道了"].tap()
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         app.buttons["完成"].tap()
         settings(app, mode: "分页", dark: false, font: 100)
     }
@@ -1968,13 +3064,13 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         app.collectionViews["library"].cells[bookID].tap()
         XCTAssertTrue(app.buttons["重试保存"].waitForExistence(timeout: 15))
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.buttons["添加书签"].tap()
-        XCTAssertTrue(app.alerts["书签保存失败"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["书签保存失败"].firstMatch.waitForExistence(timeout: 5))
         evidence("bookmark-save-failed", app)
         XCTAssertFalse(app.staticTexts["书签已保存"].exists)
         for _ in 0..<30 {
-            app.alerts.buttons["重试保存"].tap()
+            app.otherElements["book-dialog"].buttons["重试保存"].tap()
             if app.staticTexts["书签已保存"].waitForExistence(timeout: 1) { break }
         }
         XCTAssertTrue(app.staticTexts["书签已保存"].exists)
@@ -1988,7 +3084,7 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["书签"].tap()
         XCTAssertEqual(app.tables.cells.count, count)
         evidence("bookmark-retry-after-restart", app)
@@ -2000,17 +3096,17 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         app.collectionViews["library"].cells[bookID].tap()
         XCTAssertTrue(app.buttons["重试保存"].waitForExistence(timeout: 15))
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["书签"].tap()
         let row = app.tables.cells.matching(NSPredicate(format: "identifier BEGINSWITH 'bookmark-'")).firstMatch
         XCTAssertTrue(row.exists)
         let removedID = row.identifier
         row.swipeLeft()
         app.buttons["移除"].tap()
-        XCTAssertTrue(app.alerts["书签移除失败"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["书签移除失败"].firstMatch.waitForExistence(timeout: 5))
         evidence("bookmark-removal-failed", app)
         for _ in 0..<30 {
-            app.alerts.buttons["重试保存"].tap()
+            app.otherElements["book-dialog"].buttons["重试保存"].tap()
             if app.staticTexts["书签已移除"].waitForExistence(timeout: 1) { break }
         }
         XCTAssertFalse(app.tables.cells[removedID].exists)
@@ -2021,7 +3117,7 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["书签"].tap()
         XCTAssertFalse(app.tables.cells[removedID].exists)
     }
@@ -2036,7 +3132,7 @@ final class ReadingUITests: XCTestCase {
         contents("第2章", in: app)
         waitForBody(app)
         evidence("navigation-small-large-reader", app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         evidence("navigation-small-large-contents", app)
         app.buttons["添加书签"].tap()
         XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
@@ -2044,7 +3140,7 @@ final class ReadingUITests: XCTestCase {
         app.tables.cells.firstMatch.tap()
         waitForBody(app)
         app.buttons["隐藏工具栏"].tap()
-        XCTAssertFalse(app.buttons["目录与书签"].exists)
+        XCTAssertFalse(app.buttons["reader-contents"].exists)
         app.buttons["显示工具栏"].tap()
         settings(app, mode: "分页", dark: false, font: 100)
     }
@@ -2054,7 +3150,7 @@ final class ReadingUITests: XCTestCase {
         app.launch()
         if !app.collectionViews["library"].cells[bookID].exists {
             choose("original-fixture.epub", in: app)
-            app.alerts.buttons["知道了"].tap()
+            app.otherElements["book-dialog"].buttons["知道了"].tap()
         }
         app.collectionViews["library"].cells[bookID].tap()
         waitForBody(app)
@@ -2119,7 +3215,7 @@ final class ReadingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         choose("plain-long.epub", in: app)
-        app.alerts.buttons["知道了"].tap()
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         let plainID = "book-0b0d797950600fe3afc64cfb074b97bf923a88277a1957628aee785ee4d20b18"
         app.collectionViews["library"].cells[plainID].tap()
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 20))
@@ -2254,11 +3350,11 @@ final class ReadingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         choose("original-fixture.epub", in: app)
-        app.alerts.buttons["知道了"].tap()
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         let count = app.collectionViews["library"].cells.count
         choose("original-fixture.epub", in: app)
-        XCTAssertTrue(app.alerts["书籍已在书架"].exists)
-        app.alerts.buttons["知道了"].tap()
+        XCTAssertTrue(app.otherElements["书籍已在书架"].firstMatch.exists)
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         XCTAssertEqual(app.collectionViews["library"].cells.count, count)
         app.collectionViews["library"].cells[bookID].tap()
         XCTAssertTrue(app.staticTexts["阅读位置已保存"].waitForExistence(timeout: 15))
@@ -2287,9 +3383,9 @@ final class ReadingUITests: XCTestCase {
         let count = app.collectionViews["library"].cells.count
         for name in ["corrupted.epub", "fixed-layout.epub", "missing-chapter.epub", "unsupported"] {
             choose(name, in: app)
-            XCTAssertTrue(app.alerts["导入失败"].exists)
+            XCTAssertTrue(app.otherElements["导入失败"].firstMatch.exists)
             evidence("rejected-" + name, app)
-            app.alerts.buttons["知道了"].tap()
+            app.otherElements["book-dialog"].buttons["知道了"].tap()
             XCTAssertEqual(app.collectionViews["library"].cells.count, count)
         }
     }
@@ -2330,7 +3426,7 @@ extension ReadingUITests {
         noteMenu(action, in: app)
     }
     private func noteRow(_ text: String, in app: XCUIApplication) -> XCUIElement {
-        app.tables["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+        app.collectionViews["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
     }
     private func replaceNoteBody(_ text: String, in app: XCUIApplication) {
         let body = app.textViews["note-body"]
@@ -2378,15 +3474,15 @@ extension ReadingUITests {
         XCUIDevice.shared.press(.home)
         app.terminate(); app.launch()
         app.tabBars.buttons["笔记"].tap()
-        let draft = app.tables["notes"].cells[id]
+        let draft = app.collectionViews["notes"].cells[id]
         XCTAssertTrue(draft.waitForExistence(timeout: 5))
         draft.tap()
         XCTAssertEqual(app.textViews["note-body"].value as? String, "D6-end-recover")
         evidence("note-draft-recovered-after-restart", app)
         replaceNoteBody("N6-end-v2", in: app)
         app.buttons["保存笔记"].tap()
-        XCTAssertTrue(app.tables["notes"].cells[id].waitForExistence(timeout: 5))
-        app.tables["notes"].cells[id].tap()
+        XCTAssertTrue(app.collectionViews["notes"].cells[id].waitForExistence(timeout: 5))
+        app.collectionViews["notes"].cells[id].tap()
         app.buttons["返回原文"].tap()
         waitForBody(app)
         evidence("note-return-chapter-end", app)
@@ -2407,14 +3503,14 @@ extension ReadingUITests {
         }
         app.buttons["书架"].tap()
         app.tabBars.buttons["笔记"].tap()
-        app.tables["notes"].cells[id].tap()
+        app.collectionViews["notes"].cells[id].tap()
         app.buttons["返回原文"].tap()
         waitForBody(app)
         evidence("note-return-after-reflow", app)
         app.terminate(); app.launch()
         app.tabBars.buttons["笔记"].tap()
-        XCTAssertTrue(app.tables["notes"].cells[id].waitForExistence(timeout: 5))
-        app.tables["notes"].cells[id].tap()
+        XCTAssertTrue(app.collectionViews["notes"].cells[id].waitForExistence(timeout: 5))
+        app.collectionViews["notes"].cells[id].tap()
         XCTAssertEqual(app.textViews["note-body"].value as? String, "N6-end-v2")
         evidence("note-final-restart-same-id-and-body", app)
         app.buttons["关闭"].tap()
@@ -2459,7 +3555,7 @@ extension ReadingUITests {
         evidence("repeat-new-draft-restored", app)
         replaceNoteBody("N6-R1-v1", in: app)
         app.buttons["保存笔记"].tap()
-        app.tables["notes"].cells[id].tap()
+        app.collectionViews["notes"].cells[id].tap()
         replaceNoteBody("D6-R1-v2-survives-rehighlight", in: app)
         app.buttons["保存草稿"].tap()
         app.buttons["返回原文"].tap()
@@ -2468,8 +3564,8 @@ extension ReadingUITests {
         print("N6_REPEAT_RETURN \(app.webViews.firstMatch.debugDescription)")
         app.buttons["书架"].tap()
         app.tabBars.buttons["笔记"].tap()
-        XCTAssertTrue(app.tables["notes"].cells[id].exists)
-        app.tables["notes"].cells[id].tap()
+        XCTAssertTrue(app.collectionViews["notes"].cells[id].exists)
+        app.collectionViews["notes"].cells[id].tap()
         XCTAssertEqual(app.textViews["note-body"].value as? String, "D6-R1-v2-survives-rehighlight")
         evidence("repeat-draft-retained-after-return", app)
         app.buttons["关闭"].tap()
@@ -2490,12 +3586,12 @@ extension ReadingUITests {
         print("N6_INJECT_HIGHLIGHT_FAULT")
         Thread.sleep(forTimeInterval: 3)
         selectForNote(app, action: "高亮")
-        XCTAssertTrue(app.alerts["高亮保存失败"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["高亮保存失败"].firstMatch.waitForExistence(timeout: 5))
         evidence("note-real-highlight-write-failure", app)
         print("N6_RESTORE_HIGHLIGHT_FAULT")
         Thread.sleep(forTimeInterval: 3)
-        app.alerts.buttons["重试保存高亮"].tap()
-        XCTAssertFalse(app.alerts["高亮保存失败"].exists)
+        app.otherElements["book-dialog"].buttons["重试保存高亮"].tap()
+        XCTAssertFalse(app.otherElements["高亮保存失败"].firstMatch.exists)
         evidence("note-highlight-retry-succeeded", app)
     }
 
@@ -2525,10 +3621,10 @@ extension ReadingUITests {
         print("N6_RESTORE_EDIT_FAULT")
         Thread.sleep(forTimeInterval: 3)
         app.buttons["保存笔记"].tap()
-        XCTAssertTrue(app.tables["notes"].cells[id].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.collectionViews["notes"].cells[id].waitForExistence(timeout: 5))
         app.terminate(); app.launch()
         app.tabBars.buttons["笔记"].tap()
-        app.tables["notes"].cells[id].tap()
+        app.collectionViews["notes"].cells[id].tap()
         XCTAssertEqual(app.textViews["note-body"].value as? String, "N6-fault-v2")
         evidence("note-real-write-retry-restart-same-id", app)
         app.buttons["关闭"].tap()
@@ -2574,14 +3670,14 @@ extension ReadingUITests {
         }
         app.buttons["书架"].tap()
         app.tabBars.buttons["笔记"].tap()
-        app.tables["notes"].cells[id].tap(); app.buttons["返回原文"].tap()
+        app.collectionViews["notes"].cells[id].tap(); app.buttons["返回原文"].tap()
         waitForBody(app)
         evidence("note-exact-P30-after-cross-chapter-curl", app)
         settings(app, mode: "滚动", dark: true, font: 200)
         evidence("note-exact-P30-scroll-200-dark", app)
         app.terminate(); app.launch()
         app.tabBars.buttons["笔记"].tap()
-        app.tables["notes"].cells[id].tap(); app.buttons["返回原文"].tap()
+        app.collectionViews["notes"].cells[id].tap(); app.buttons["返回原文"].tap()
         waitForBody(app)
         evidence("note-exact-P30-restart", app)
     }
@@ -2640,7 +3736,7 @@ extension ReadingUITests {
 
 extension ReadingUITests {
     private func searchBook(_ app: XCUIApplication, query: String, count: Int) {
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         XCTAssertTrue(app.buttons["书内搜索"].waitForExistence(timeout: 5))
         app.buttons["书内搜索"].tap()
         searchQuery(app, query: query, count: count)
@@ -2651,7 +3747,7 @@ extension ReadingUITests {
         let app = XCUIApplication()
         app.launch()
         app.collectionViews["library"].cells[searchBookID].tap()
-        if app.alerts["翻页准备失败"].waitForExistence(timeout: 1) { app.alerts.buttons["使用分页"].tap() }
+        if app.otherElements["翻页准备失败"].firstMatch.waitForExistence(timeout: 1) { app.otherElements["book-dialog"].buttons["使用分页"].tap() }
         waitForBody(app)
         settings(app, mode: "仿真", dark: true, font: 150)
         searchBook(app, query: "CAFE", count: 1)
@@ -2719,7 +3815,7 @@ extension ReadingUITests {
         contents("搜索第2章", in: app)
         waitForBody(app)
         searchMarkerVisible(app, "S2-CROSS")
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.buttons["添加书签"].tap()
         XCTAssertTrue(app.staticTexts["书签已保存"].waitForExistence(timeout: 5))
         let saved = app.tables["book-navigation"].cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "bookmark-")).allElementsBoundByIndex.last!
@@ -2727,7 +3823,7 @@ extension ReadingUITests {
         app.buttons["完成"].tap()
         contents("搜索第1章", in: app)
         waitForBody(app)
-        app.buttons["目录与书签"].tap()
+        app.buttons["reader-contents"].tap()
         app.segmentedControls.buttons["书签"].tap()
         app.tables["book-navigation"].cells[id].tap()
         waitForBody(app)
@@ -2747,8 +3843,8 @@ extension ReadingUITests {
         searchBook(app, query: "后续可见", count: 1)
         app.tables["book-search-results"].cells.firstMatch.tap()
         waitForBody(app)
-        XCTAssertFalse(app.alerts["无法定位原文"].exists)
-        XCTAssertFalse(app.alerts["翻页准备失败"].exists)
+        XCTAssertFalse(app.otherElements["无法定位原文"].firstMatch.exists)
+        XCTAssertFalse(app.otherElements["翻页准备失败"].firstMatch.exists)
         evidence("search-visible-after-nested-hidden-same-page-native-refresh", app)
     }
     private func searchQuery(_ app: XCUIApplication, query: String, count: Int) {
@@ -2781,7 +3877,7 @@ extension ReadingUITests {
         app.launch()
         for name in ["search-fixture.epub", "search-other.epub"] {
             choose(name, in: app)
-            app.alerts.buttons["知道了"].tap()
+            app.otherElements["book-dialog"].buttons["知道了"].tap()
         }
         app.collectionViews["library"].cells[searchBookID].tap()
         waitForBody(app)
@@ -2846,7 +3942,7 @@ extension ReadingUITests {
         let app = XCUIApplication()
         app.launch()
         choose("search-long.epub", in: app)
-        app.alerts.buttons["知道了"].tap()
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         let row = app.collectionViews["library"].cells[searchLongID]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         XCTAssertTrue((row.value as? String ?? "").contains("正在准备"))
@@ -2891,19 +3987,19 @@ extension ReadingUITests {
         app.secureTextFields["ai-key"].tap(); app.secureTextFields["ai-key"].typeText("not-a-real-credential")
         if app.sheets["保存密码？"].waitForExistence(timeout: 1) { app.sheets["保存密码？"].buttons["以后"].tap() }
         app.navigationBars.buttons["保存"].tap()
-        XCTAssertTrue(app.alerts["AI 服务发送说明"].waitForExistence(timeout: 5))
-        app.alerts["AI 服务发送说明"].buttons["同意并保存"].tap()
-        XCTAssertTrue(app.alerts["已保存"].waitForExistence(timeout: 5))
-        app.alerts["已保存"].buttons["完成"].tap()
+        XCTAssertTrue(app.otherElements["AI 服务发送说明"].firstMatch.waitForExistence(timeout: 5))
+        app.otherElements["AI 服务发送说明"].firstMatch.buttons["同意并保存"].tap()
+        XCTAssertTrue(app.otherElements["已保存"].firstMatch.waitForExistence(timeout: 5))
+        app.otherElements["已保存"].firstMatch.buttons["完成"].tap()
         app.navigationBars.buttons["切换"].tap()
         app.sheets["切换服务"].buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch.tap()
-        XCTAssertTrue(app.alerts["已切换服务"].waitForExistence(timeout: 5))
-        app.alerts["已切换服务"].buttons["完成"].tap()
+        XCTAssertTrue(app.otherElements["已切换服务"].firstMatch.waitForExistence(timeout: 5))
+        app.otherElements["已切换服务"].firstMatch.buttons["完成"].tap()
         app.tabBars.buttons["书架"].tap()
     }
     private func questionSelection(_ app: XCUIApplication) {
         app.collectionViews["library"].cells[searchBookID].tap()
-        if app.alerts["翻页准备失败"].waitForExistence(timeout: 3) { app.alerts.buttons["使用分页"].tap() }
+        if app.otherElements["翻页准备失败"].firstMatch.waitForExistence(timeout: 3) { app.otherElements["book-dialog"].buttons["使用分页"].tap() }
         waitForBody(app)
         settings(app, mode: "滚动", dark: false, font: 100)
         searchBook(app, query: "S1-SECOND", count: 1)
@@ -2931,7 +4027,7 @@ extension ReadingUITests {
         let book = app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
         if !book.exists {
             choose("A-semantic.epub", in: app)
-            app.alerts.buttons["知道了"].tap()
+            app.otherElements["book-dialog"].buttons["知道了"].tap()
         }
         let ready = NSPredicate { _, _ in (book.value as? String ?? "").contains("书内资料可用") }
         expectation(for: ready, evaluatedWith: app); waitForExpectations(timeout: 60)
@@ -2986,7 +4082,7 @@ extension ReadingUITests {
         input.tap(); input.typeText("I9 recoverable draft")
         app.buttons["关闭"].tap(); app.buttons["书架"].tap()
         app.terminate(); app.launch(); app.tabBars.buttons["对话"].tap()
-        let history = app.tables["question-history"]
+        let history = app.collectionViews["question-history"]
         XCTAssertTrue(history.cells.containing(NSPredicate(format: "label CONTAINS 'I9 Anthropic'")).firstMatch.exists)
         history.cells.containing(NSPredicate(format: "label CONTAINS 'I9 recoverable draft'")).firstMatch.tap()
         XCTAssertEqual(app.textViews["question-input"].value as? String, "I9 recoverable draft")
@@ -3004,7 +4100,7 @@ extension ReadingUITests {
         app.buttons["关闭"].tap(); XCTAssertTrue(app.webViews.firstMatch.exists)
         Thread.sleep(forTimeInterval: 9)
         app.buttons["书架"].tap(); app.tabBars.buttons["对话"].tap()
-        app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'I9 close-panel'")).firstMatch.tap()
+        app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'I9 close-panel'")).firstMatch.tap()
         questionSaved(app); evidence("issue9-closed-panel-kept-generating", app); app.buttons["关闭"].tap()
         app.tabBars.buttons["书架"].tap(); questionSelection(app)
         sendSelectedQuestion(app, text: "Why sentence? I9 cancel")
@@ -3045,7 +4141,7 @@ extension ReadingUITests {
         app.buttons["重试保存"].tap(); questionSaved(app)
         evidence("issue9-same-operation-save-retry", app)
         app.terminate(); app.launch(); app.tabBars.buttons["对话"].tap()
-        let rows = app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", questionText))
+        let rows = app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", questionText))
         XCTAssertEqual(rows.count, 1); rows.firstMatch.tap(); questionSaved(app)
         XCTAssertTrue(app.staticTexts["question-answer"].label.contains("依据原文"))
         evidence("issue9-write-retry-restart-one-record", app)
@@ -3078,7 +4174,7 @@ extension ReadingUITests {
         app.launchArguments = ["--isolated-reading-test"]
         app.launch()
         issue17Import("semantic-fixture.epub", in: app)
-        app.alerts.buttons["知道了"].tap()
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         let book = app.collectionViews["library"].cells["book-df8c4a78180b9f65911e9fbba7cf4fb9c6f932c0e98456ef15e165157d9b1a67"]
         XCTAssertTrue(book.waitForExistence(timeout: 10))
         expectation(for: NSPredicate { _, _ in
@@ -3096,8 +4192,8 @@ extension ReadingUITests {
         waitForExpectations(timeout: 15)
         questionService(app, format: "OpenAI", model: "prep-wait", address: "http://127.0.0.1:18769/v1")
         book.tap()
-        if app.alerts["翻页准备失败"].waitForExistence(timeout: 3) {
-            app.alerts.buttons["使用分页"].tap()
+        if app.otherElements["翻页准备失败"].firstMatch.waitForExistence(timeout: 3) {
+            app.otherElements["book-dialog"].buttons["使用分页"].tap()
         }
         waitForBody(app)
         searchBook(app, query: "初版规则规定", count: 1)
@@ -3113,9 +4209,9 @@ extension ReadingUITests {
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("资料尚未准备完整时，应该等待还是只用选文解释？")
         app.buttons["question-send"].tap()
-        XCTAssertTrue(app.alerts["资料尚未准备完整"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["资料尚未准备完整"].firstMatch.waitForExistence(timeout: 5))
         evidence("issue18-current-preparation-wait-or-local-choice", app)
-        app.alerts.buttons["等待资料准备"].tap()
+        app.otherElements["book-dialog"].buttons["等待资料准备"].tap()
         XCTAssertEqual(app.staticTexts["question-status"].label, "问题草稿")
         app.buttons["question-send"].tap()
         let local = app.buttons["仅用选文解释"].firstMatch
@@ -3143,11 +4239,11 @@ extension ReadingUITests {
         app.webViews.staticTexts["S1-SECOND"].firstMatch.press(forDuration: 1.3); noteMenu("提问", in: app)
         app.textViews["question-input"].tap(); app.textViews["question-input"].typeText("I9 explicit-local sentence")
         app.buttons["question-send"].tap()
-        XCTAssertTrue(app.alerts["资料尚未准备完整"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["资料尚未准备完整"].firstMatch.waitForExistence(timeout: 5))
         evidence("issue9-preparation-wait-or-local-choice", app)
-        app.alerts.buttons["等待资料准备"].tap()
+        app.otherElements["book-dialog"].buttons["等待资料准备"].tap()
         XCTAssertEqual(app.staticTexts["question-status"].label, "问题草稿")
-        app.buttons["question-send"].tap(); app.alerts.buttons["仅用选文解释"].tap()
+        app.buttons["question-send"].tap(); app.otherElements["book-dialog"].buttons["仅用选文解释"].tap()
         questionSaved(app)
         XCTAssertFalse(app.staticTexts["question-scope"].exists)
         evidence("issue9-explicit-local-saved-scope", app)
@@ -3192,7 +4288,7 @@ extension ReadingUITests {
         evidence("issue9-small-large-text-keyboard-draft", app)
         app.buttons["关闭"].tap(); app.buttons["书架"].tap(); app.terminate(); app.launch()
         app.tabBars.buttons["对话"].tap()
-        app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'I9 small draft'")).firstMatch.tap()
+        app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'I9 small draft'")).firstMatch.tap()
         XCTAssertEqual(app.textViews["question-input"].value as? String, "I9 small draft")
         app.buttons["question-send"].tap(); questionSaved(app)
         app.scrollViews["question-scroll"].swipeUp(); XCTAssertTrue(app.buttons["question-reference-0"].isHittable)
@@ -3221,7 +4317,7 @@ extension ReadingUITests {
         app.tabBars.buttons["对话"].tap()
         // Fixed UUID links this evidence run to the externally terminated HTTP request.
         let targetID = "A0D247F7-0C99-4EB7-A9F7-AFBA0C4BE2A8"
-        let row = app.tables["question-history"].cells["question-\(targetID)"]
+        let row = app.collectionViews["question-history"].cells["question-\(targetID)"]
         XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
         XCTAssertTrue(app.staticTexts["question-status"].label.contains("上次生成已中断"))
         XCTAssertFalse(app.staticTexts["question-answer"].exists)
@@ -3231,14 +4327,14 @@ extension ReadingUITests {
         expectation(for: saved, evaluatedWith: app); waitForExpectations(timeout: 65)
         XCTAssertEqual(app.staticTexts["question-answer"].label, "BG14-OpenAI-20")
         evidence("issue14-http-inflight-active-retry-saved", app)
-        app.buttons["关闭"].tap(); XCTAssertTrue(app.tables["question-history"].cells["question-\(targetID)"].exists)
+        app.buttons["关闭"].tap(); XCTAssertTrue(app.collectionViews["question-history"].cells["question-\(targetID)"].exists)
     }
     func testIssue14SavedFaultRecordOfflineRestart() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["--isolated-reading-test"]
         XCTAssertEqual(app.state, .runningForeground)
         app.tabBars.buttons["对话"].tap()
-        let rows = app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'BG14-write-failure-final'"))
+        let rows = app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'BG14-write-failure-final'"))
         XCTAssertEqual(rows.count, 1); rows.firstMatch.tap()
         XCTAssertEqual(app.staticTexts["question-status"].label, "回答已保存")
         XCTAssertEqual(app.staticTexts["question-answer"].label, "BG14-OpenAI-20")
@@ -3270,7 +4366,7 @@ extension ReadingUITests {
         Thread.sleep(forTimeInterval: 24)
         XCTAssertNotEqual(app.state, .notRunning); app.activate()
         app.buttons["书架"].tap(); app.tabBars.buttons["对话"].tap()
-        let rows = app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'BG14-reading-continues-final'"))
+        let rows = app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'BG14-reading-continues-final'"))
         XCTAssertEqual(rows.count, 1); rows.firstMatch.tap()
         let saved = NSPredicate { _, _ in app.staticTexts["question-status"].label == "回答已保存" }
         expectation(for: saved, evaluatedWith: app); waitForExpectations(timeout: 30)
@@ -3290,7 +4386,7 @@ extension ReadingUITests {
         app.buttons["书架"].tap()
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 5))
         app.tabBars.buttons["对话"].tap()
-        app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'BG14-write-failure-final'")).firstMatch.tap()
+        app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'BG14-write-failure-final'")).firstMatch.tap()
         XCTAssertTrue(app.staticTexts["question-status"].label.contains("保存失败"))
         XCTAssertEqual(app.staticTexts["question-answer"].label, "BG14-OpenAI-20")
         evidence("issue14-real-background-save-failure", app)
@@ -3313,7 +4409,7 @@ extension ReadingUITests {
         let app = XCUIApplication(); app.launchArguments = ["--isolated-reading-test"]
         XCTAssertEqual(app.state, .runningForeground)
         app.tabBars.buttons["对话"].tap()
-        let rows = app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'BG14-terminate-retry'"))
+        let rows = app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS 'BG14-terminate-retry'"))
         XCTAssertEqual(rows.count, 1); rows.firstMatch.tap()
         XCTAssertTrue(app.staticTexts["question-status"].label.contains("上次生成已中断"))
         XCTAssertFalse(app.staticTexts["question-answer"].exists)
@@ -3334,13 +4430,13 @@ extension ReadingUITests {
         XCTAssertTrue(book.waitForExistence(timeout: 10)); book.press(forDuration: 1.3)
         let action = delete ? "连同记录彻底删除" : "移除原书，保留记录"
         XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5)); app.buttons[action].tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["book-dialog"].firstMatch.waitForExistence(timeout: 5))
     }
     func testIssue16RemoveOriginalKeepRecords() {
         let app = issue12App()
         removalMenu(app, delete: false)
         evidence("issue16-default-removal-disclosure", app)
-        app.alerts.buttons["移除原书，保留记录"].tap()
+        app.otherElements["book-dialog"].buttons["移除原书，保留记录"].tap()
         expectation(for: NSPredicate { _, _ in !app.collectionViews["library"].cells[self.removalA].exists }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
         XCTAssertTrue(app.collectionViews["library"].cells[removalB].exists)
@@ -3353,24 +4449,24 @@ extension ReadingUITests {
         let app = issue12App()
         XCTAssertFalse(app.collectionViews["library"].cells[removalA].exists)
         app.tabBars.buttons["笔记"].tap()
-        let note = app.tables["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", "A retained draft")).firstMatch
+        let note = app.collectionViews["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", "A retained draft")).firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 5)); note.tap()
         XCTAssertEqual(app.textViews["note-body"].value as? String, "A retained draft")
         XCTAssertTrue((app.textViews["note-quote"].value as? String ?? "").contains("盐桥"))
         evidence("issue16-offline-retained-note-draft-quote", app)
         app.buttons["返回原文"].tap()
-        XCTAssertTrue(app.alerts["无法返回原文"].waitForExistence(timeout: 5))
-        evidence("issue16-note-original-unavailable", app); app.alerts.buttons["知道了"].tap()
+        XCTAssertTrue(app.otherElements["无法返回原文"].firstMatch.waitForExistence(timeout: 5))
+        evidence("issue16-note-original-unavailable", app); app.otherElements["book-dialog"].buttons["知道了"].tap()
         app.tabBars.buttons["对话"].tap()
-        let row = app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal 91596")).firstMatch
+        let row = app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal 91596")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
         XCTAssertTrue(app.staticTexts["question-answer"].label.contains("Saved answer"))
         XCTAssertFalse(app.buttons["question-follow-up"].isEnabled)
         let reference = app.buttons["question-reference-0"]; issue12Reach(reference, in: app); reference.tap()
         app.buttons["跳转原文"].tap()
-        XCTAssertTrue(app.alerts["原文不可用"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["原文不可用"].firstMatch.waitForExistence(timeout: 5))
         evidence("issue16-offline-answer-citation-unavailable", app)
-        app.alerts.buttons["知道了"].tap(); app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["关闭"].tap()
+        app.otherElements["book-dialog"].buttons["知道了"].tap(); app.navigationBars.buttons.element(boundBy: 0).tap(); app.buttons["关闭"].tap()
         app.tabBars.buttons["书架"].tap()
     }
     func testIssue16PickerRestoreAndCancelDeletion() {
@@ -3390,24 +4486,24 @@ extension ReadingUITests {
         XCTAssertTrue(folder.waitForExistence(timeout: 5)); folder.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
         let file = app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "semantic-other.epub,")).firstMatch
         XCTAssertTrue(file.waitForExistence(timeout: 5)); file.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 10)); evidence("issue16-identical-file-restored", app)
-        app.alerts.buttons["知道了"].tap()
+        XCTAssertTrue(app.otherElements["book-dialog"].firstMatch.waitForExistence(timeout: 10)); evidence("issue16-identical-file-restored", app)
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         XCTAssertTrue(app.collectionViews["library"].cells[removalA].exists)
         removalMenu(app, delete: true)
-        evidence("issue16-destructive-explicit-confirmation", app); app.alerts.buttons["取消"].tap()
+        evidence("issue16-destructive-explicit-confirmation", app); app.otherElements["book-dialog"].buttons["取消"].tap()
         XCTAssertTrue(app.collectionViews["library"].cells[removalA].exists)
     }
     func testIssue16ConfirmDeletion() {
         let app = issue12App()
-        removalMenu(app, delete: true); app.alerts.buttons["确认彻底删除"].tap()
+        removalMenu(app, delete: true); app.otherElements["book-dialog"].buttons["确认彻底删除"].tap()
         expectation(for: NSPredicate { _, _ in !app.collectionViews["library"].cells[self.removalA].exists }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
         XCTAssertTrue(app.collectionViews["library"].cells[removalB].exists)
         app.tabBars.buttons["笔记"].tap()
-        XCTAssertFalse(app.tables["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", "A retained draft")).firstMatch.exists)
+        XCTAssertFalse(app.collectionViews["notes"].cells.containing(NSPredicate(format: "label CONTAINS %@", "A retained draft")).firstMatch.exists)
         app.tabBars.buttons["对话"].tap()
-        XCTAssertFalse(app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal 91596")).firstMatch.exists)
-        XCTAssertTrue(app.tables["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal ad522")).firstMatch.exists)
+        XCTAssertFalse(app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal 91596")).firstMatch.exists)
+        XCTAssertTrue(app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal ad522")).firstMatch.exists)
         evidence("issue16-target-deleted-other-book-retained", app)
     }
 }

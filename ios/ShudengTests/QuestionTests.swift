@@ -136,10 +136,17 @@ final class QuestionPresentationTests: XCTestCase {
         let follow = try XCTUnwrap(library.questions.followUp(complete.id))
         XCTAssertEqual(library.questions.conversation(complete.id)?.submittedCount, 1)
         let history = QuestionHistoryController(library: library)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 375, height: 667))
+        window.rootViewController = history
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
         history.loadViewIfNeeded()
-        let row = history.tableView(history.tableView, cellForRowAt: IndexPath(row: 0, section: 0))
-        XCTAssertTrue(row.accessibilityLabel?.contains("1 次提问") == true)
-        XCTAssertFalse(row.accessibilityLabel?.contains("2 次提问") == true)
+        window.layoutIfNeeded()
+        history.collectionView.layoutIfNeeded()
+        // 系统列表每组首项是分组头 cell，记录 cell 从第 2 项开始。
+        let row = history.collectionView.cellForItem(at: IndexPath(item: 1, section: 0))
+        XCTAssertTrue(row?.accessibilityLabel?.contains("1 次提问") == true)
+        XCTAssertFalse(row?.accessibilityLabel?.contains("2 次提问") == true)
         let answer = QuestionController(library: library, id: complete.id)
         answer.loadViewIfNeeded()
         let status = try XCTUnwrap(descendants(answer.view).first { $0.accessibilityIdentifier == "question-status" } as? UILabel)

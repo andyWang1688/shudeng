@@ -1,99 +1,20 @@
 import UIKit
 import ReadiumShared
 
-private enum NotesFilter: String, CaseIterable {
-    case all = "全部"
-    case highlights = "高亮"
-    case notes = "笔记"
-    case bookmarks = "书签"
+/// 合并后的笔记记录：高亮（正文为空）与笔记（有正文）统一展示；书签不再进入本页。
+private struct NoteRecord {
+    let note: BookNote
 
-    var accessibilityIdentifier: String {
-        switch self {
-        case .all: return "note-filter-all"
-        case .highlights: return "note-filter-highlights"
-        case .notes: return "note-filter-notes"
-        case .bookmarks: return "note-filter-bookmarks"
-        }
-    }
+    var id: UUID { note.id }
+    var quote: String { note.quote }
+    var body: String { note.body }
+    var chapter: String { (try? note.location().title) ?? "阅读位置" }
+    var hasBody: Bool { !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var accessibilityIdentifier: String { "annotation-\(note.id.uuidString)" }
 
-    func includes(_ record: NoteRecord) -> Bool {
-        switch self {
-        case .all:
-            return true
-        case .highlights:
-            guard case let .note(note, _) = record else { return false }
-            return note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .notes:
-            guard case let .note(note, _) = record else { return false }
-            return !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .bookmarks:
-            guard case .bookmark = record else { return false }
-            return true
-        }
-    }
+    func location() throws -> Locator { try note.location() }
 }
 
-private enum NoteRecord {
-    case note(BookNote, draft: Bool)
-    case bookmark(Bookmark)
-
-    var id: UUID {
-        switch self {
-        case let .note(note, _): return note.id
-        case let .bookmark(bookmark): return bookmark.id
-        }
-    }
-
-    var quote: String {
-        switch self {
-        case let .note(note, _): return note.quote
-        case let .bookmark(bookmark): return bookmark.excerpt
-        }
-    }
-
-    var body: String {
-        switch self {
-        case let .note(note, _): return note.body
-        case .bookmark: return ""
-        }
-    }
-
-    var isDraft: Bool {
-        guard case let .note(_, draft) = self else { return false }
-        return draft
-    }
-
-    var kind: String {
-        switch self {
-        case let .note(note, draft):
-            if draft { return "笔记 · 草稿" }
-            return note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "高亮" : "笔记"
-        case .bookmark:
-            return "书签"
-        }
-    }
-
-    var chapter: String {
-        switch self {
-        case let .note(note, _): return (try? note.location().title) ?? "阅读位置"
-        case let .bookmark(bookmark): return bookmark.title
-        }
-    }
-
-    var accessibilityIdentifier: String {
-        switch self {
-        case let .note(note, _): return "note-\(note.id.uuidString)"
-        case let .bookmark(bookmark): return "bookmark-\(bookmark.id.uuidString)"
-        }
-    }
-
-    func location() throws -> Locator {
-        switch self {
-        case let .note(note, _): return try note.location()
-        case let .bookmark(bookmark): return try bookmark.location()
-        }
-    }
-}
 
 /// Independent presentation preferences for each grouped list, scoped to its library.
 @MainActor
@@ -122,38 +43,30 @@ final class BookGroupListState {
         searching || snapshot?.expanded[bookID] == true
     }
 
-    func toggle(_ bookID: String) {
+    func setExpanded(_ expanded: Bool, for bookID: String) {
         if snapshot == nil { snapshot = Snapshot() }
-        let expanded = isExpanded(bookID)
-        snapshot?.expanded[bookID] = !expanded
+        guard snapshot?.expanded[bookID] != expanded else { return }
+        snapshot?.expanded[bookID] = expanded
         save()
     }
 
-    func reload(_ table: UITableView) {
-        let offset = table.contentOffset.y
-        table.reloadData()
-        if restoredScroll {
-            table.layoutIfNeeded()
-            setOffset(offset, in: table)
-        }
-    }
-
-    func restoreScroll(in table: UITableView) {
-        guard !restoredScroll, table.bounds.height > 0 else { return }
+    func restoreScroll(in scrollView: UIScrollView) {
+        guard !restoredScroll, scrollView.bounds.height > 0 else { return }
         restoredScroll = true
-        setOffset(CGFloat(snapshot?.offsetY ?? 0), in: table)
+        scrollView.layoutIfNeeded()
+        setOffset(CGFloat(snapshot?.offsetY ?? 0), in: scrollView)
     }
 
-    func rememberScroll(in table: UITableView) {
+    func rememberScroll(in scrollView: UIScrollView) {
         guard restoredScroll, snapshot != nil else { return }
-        snapshot?.offsetY = Double(table.contentOffset.y)
+        snapshot?.offsetY = Double(scrollView.contentOffset.y)
         save()
     }
 
-    private func setOffset(_ y: CGFloat, in table: UITableView) {
-        let minimum = -table.adjustedContentInset.top
-        let maximum = max(minimum, table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom)
-        table.setContentOffset(CGPoint(x: 0, y: min(maximum, max(minimum, y))), animated: false)
+    private func setOffset(_ y: CGFloat, in scrollView: UIScrollView) {
+        let minimum = -scrollView.adjustedContentInset.top
+        let maximum = max(minimum, scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom)
+        scrollView.setContentOffset(CGPoint(x: 0, y: min(maximum, max(minimum, y))), animated: false)
     }
 
     private func save() {
@@ -163,20 +76,40 @@ final class BookGroupListState {
 }
 
 @MainActor
-final class NotesController: UITableViewController {
+final class NotesController: UIViewController, UICollectionViewDelegate, UISearchControllerDelegate, UISearchResultsUpdating {
+    private enum SectionID: Hashable { case book(String) }
+    private enum ItemID: Hashable {
+        case header(String)
+        case record(UUID)
+    }
+
     private let library: LibraryStore
     private let covers = BookCoverStore()
-    private let pageHeader = NotesPageHeader()
+    private let thumbnails = BookThumbnailStore()
     private let groupState: BookGroupListState
-    private var filter: NotesFilter = .all
+    private let searchController = UISearchController(searchResultsController: nil)
+    private var offsetBeforeSearch: CGPoint?
     private var query = ""
     private var sections: [(book: Book, records: [NoteRecord])] = []
+    private var appliedSectionIDs: [SectionID] = []
     private var libraryObserver: NSObjectProtocol?
+    private(set) var collectionView: UICollectionView!
+    private lazy var dataSource = makeDataSource()
+    private lazy var headerRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, ItemID> {
+        [weak self] cell, _, item in
+        guard let self, case let .header(bookID) = item else { return }
+        self.configure(header: cell, bookID: bookID)
+    }
+    private lazy var recordRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, ItemID> {
+        [weak self] cell, indexPath, item in
+        guard let self, case let .record(recordID) = item else { return }
+        self.configure(record: cell, indexPath: indexPath, recordID: recordID)
+    }
 
     init(library: LibraryStore) {
         self.library = library
         groupState = BookGroupListState(root: library.root, page: "notes")
-        super.init(style: .plain)
+        super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -191,31 +124,37 @@ final class NotesController: UITableViewController {
         view.backgroundColor = BookDesign.paper
         view.accessibilityIdentifier = "notes-surface"
 
-        tableView.backgroundColor = BookDesign.paper
-        tableView.separatorStyle = .none
-        tableView.rowHeight = UITableView.automaticDimension
-        tableView.estimatedRowHeight = 190
-        tableView.estimatedSectionHeaderHeight = 53
-        tableView.keyboardDismissMode = .onDrag
-        tableView.sectionHeaderTopPadding = 0
-        tableView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 24, right: 0)
-        tableView.accessibilityIdentifier = "notes"
-        tableView.register(NoteRecordCell.self, forCellReuseIdentifier: "note-record")
+        navigationItem.largeTitleDisplayMode = .always
+        BookDesign.applyListPageNavigationAppearance(to: navigationItem)
+        let export = UIBarButtonItem(
+            image: BookDesign.symbol("square.and.arrow.up", size: 17, weight: .medium),
+            style: .plain,
+            target: self,
+            action: #selector(exportNotes)
+        )
+        export.accessibilityLabel = "导出笔记"
+        export.accessibilityIdentifier = "notes-export"
+        export.tintColor = BookDesign.ink2
+        navigationItem.rightBarButtonItem = export
 
-        pageHeader.onExport = { [weak self] in self?.exportNotes() }
-        pageHeader.onFilter = { [weak self] selected in
-            guard let self else { return }
-            filter = selected
-            refresh()
+        searchController.searchResultsUpdater = self
+        searchController.delegate = self
+        searchController.obscuresBackgroundDuringPresentation = false
+        searchController.searchBar.placeholder = "搜索笔记"
+        searchController.searchBar.searchTextField.accessibilityIdentifier = "notes-search"
+        searchController.searchBar.searchTextField.font = BookType.body
+        searchController.searchBar.tintColor = BookDesign.lamp
+        navigationItem.searchController = searchController
+        navigationItem.hidesSearchBarWhenScrolling = false
+        if #available(iOS 16.0, *) {
+            // iOS 26 默认把搜索栏放到底部 integrated 位置；固定为 stacked，保持搜索在标题下方。
+            navigationItem.preferredSearchBarPlacement = .stacked
         }
-        pageHeader.setFilter(filter)
-        pageHeader.onSearch = { [weak self] text in
-            guard let self else { return }
-            rememberScroll()
-            query = text
-            refresh()
-        }
-        tableView.tableHeaderView = pageHeader
+        definesPresentationContext = true
+
+        configureCollectionView()
+        installCollectionView()
+        registerForDynamicTypeChanges()
 
         libraryObserver = NotificationCenter.default.addObserver(
             forName: LibraryStore.changed,
@@ -229,14 +168,14 @@ final class NotesController: UITableViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        navigationController?.setNavigationBarHidden(true, animated: false)
+        navigationController?.setNavigationBarHidden(false, animated: false)
+        navigationController?.navigationBar.prefersLargeTitles = true
         refresh()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        layoutPageHeader()
-        groupState.restoreScroll(in: tableView)
+        groupState.restoreScroll(in: collectionView)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -244,11 +183,11 @@ final class NotesController: UITableViewController {
         rememberScroll()
     }
 
-    override func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate { rememberScroll() }
     }
 
-    override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         rememberScroll()
     }
 
@@ -257,23 +196,168 @@ final class NotesController: UITableViewController {
     }
 
     private func rememberScroll() {
-        if !searching, filter == .all { groupState.rememberScroll(in: tableView) }
+        if !searching { groupState.rememberScroll(in: collectionView) }
     }
 
-    private func layoutPageHeader() {
-        let width = max(view.bounds.width, 320)
-        let size = pageHeader.systemLayoutSizeFitting(
-            CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
-            withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel
-        )
-        let frame = CGRect(origin: .zero, size: CGSize(width: width, height: ceil(size.height)))
-        guard pageHeader.frame != frame else { return }
-        pageHeader.frame = frame
-        tableView.tableHeaderView = pageHeader
+    private func configureCollectionView() {
+        var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
+        configuration.headerMode = .firstItemInSection
+        configuration.headerTopPadding = 12
+        configuration.showsSeparators = true
+        configuration.backgroundColor = BookDesign.paper
+        configuration.separatorConfiguration.color = BookDesign.line
+        configuration.trailingSwipeActionsConfigurationProvider = { [weak self] indexPath in
+            self?.trailingSwipeActions(at: indexPath)
+        }
+        configuration.leadingSwipeActionsConfigurationProvider = { [weak self] indexPath in
+            self?.leadingSwipeActions(at: indexPath)
+        }
+        let layout = UICollectionViewCompositionalLayout.list(using: configuration)
+
+        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        collectionView.backgroundColor = BookDesign.paper
+        collectionView.keyboardDismissMode = .onDrag
+        collectionView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 24, right: 0)
+        collectionView.accessibilityIdentifier = "notes"
+        collectionView.delegate = self
+        self.collectionView = collectionView
+        // UIKit 禁止在 cell provider 内首次创建 CellRegistration；在设置 dataSource 前先求值。
+        _ = headerRegistration
+        _ = recordRegistration
+        collectionView.dataSource = dataSource
     }
 
-    private func refresh() {
+    private func installCollectionView() {
+        collectionView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(collectionView)
+        NSLayoutConstraint.activate([
+            collectionView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+    }
+
+    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionID, ItemID> {
+        let dataSource = UICollectionViewDiffableDataSource<SectionID, ItemID>(collectionView: collectionView) {
+            [weak self] collectionView, indexPath, item in
+            guard let self else { return nil }
+            switch item {
+            case .header:
+                return collectionView.dequeueConfiguredReusableCell(
+                    using: self.headerRegistration,
+                    for: indexPath,
+                    item: item
+                )
+            case .record:
+                return collectionView.dequeueConfiguredReusableCell(
+                    using: self.recordRegistration,
+                    for: indexPath,
+                    item: item
+                )
+            }
+        }
+        return dataSource
+    }
+
+    private func registerForDynamicTypeChanges() {
+        if #available(iOS 17.0, *) {
+            registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) {
+                (self: NotesController, _: UITraitCollection) in
+                self.reconfigureListFonts()
+            }
+        }
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard #unavailable(iOS 17.0) else { return }
+        if previousTraitCollection?.preferredContentSizeCategory != traitCollection.preferredContentSizeCategory {
+            reconfigureListFonts()
+        }
+    }
+
+    /// 字号变化后重配可见 cell：BookType 字体是一次性 UIFontMetrics 缩放的，不随 Dynamic Type 自动更新。
+    private func reconfigureListFonts() {
+        for cell in collectionView.visibleCells {
+            guard let listCell = cell as? UICollectionViewListCell,
+                  let indexPath = collectionView.indexPath(for: cell),
+                  let item = dataSource.itemIdentifier(for: indexPath) else { continue }
+            switch item {
+            case let .header(bookID):
+                configure(header: listCell, bookID: bookID)
+            case let .record(recordID):
+                configure(record: listCell, indexPath: indexPath, recordID: recordID)
+            }
+        }
+    }
+
+    // MARK: - UISearchControllerDelegate（iOS 26 取消搜索后大标题不绘制的恢复）
+
+    func willPresentSearchController(_ searchController: UISearchController) {
+        offsetBeforeSearch = collectionView.contentOffset
+    }
+
+    func didDismissSearchController(_ searchController: UISearchController) {
+        guard let before = offsetBeforeSearch else { return }
+        offsetBeforeSearch = nil
+        collectionView.setContentOffset(before, animated: false)
+        guard #available(iOS 26.0, *) else { return }
+        let top = -collectionView.adjustedContentInset.top
+        guard abs(before.y - top) < 1 else { return }
+        // iOS 26（stacked 搜索 + 系统大标题）：取消搜索后导航栏高度已恢复大标题布局，
+        // 但大标题的 scroll-edge 进度可能停在搜索态（label 存在、屏幕却不绘制）。
+        // 同 runloop 内改 offset 会被合并、不产生真实 scroll 事件；推迟到后续 runloop
+        // 做两段 offset 变化（+1pt → 回位），复刻一次真实滚动让导航栏重算大标题进度。
+        // 位移仅 1pt，不可见，也不改变用户原有的滚动位置。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+            self.collectionView.setContentOffset(CGPoint(x: before.x, y: top + 1), animated: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self else { return }
+                self.collectionView.setContentOffset(before, animated: false)
+                self.navigationController?.navigationBar.setNeedsLayout()
+                self.navigationController?.navigationBar.layoutIfNeeded()
+            }
+        }
+    }
+
+    func updateSearchResults(for searchController: UISearchController) {
+        let text = searchController.searchBar.text ?? ""
+        guard text != query else { return }
+        rememberScroll()
+        query = text
+        refresh()
+    }
+
+    /// 供单元测试与程序化展开／收起：与分组头轻点走同一路径。
+    func toggleGroup(bookID: String) {
+        guard !searching else { return }
+        let sectionID = SectionID.book(bookID)
+        let header = ItemID.header(bookID)
+        var snapshot = dataSource.snapshot(for: sectionID)
+        guard snapshot.contains(header) else { return }
+        let wasExpanded = snapshot.isExpanded(header)
+        if wasExpanded {
+            snapshot.collapse([header])
+        } else {
+            snapshot.expand([header])
+        }
+        groupState.setExpanded(!wasExpanded, for: bookID)
+        dataSource.apply(snapshot, to: sectionID, animatingDifferences: !UIAccessibility.isReduceMotionEnabled) {
+            [weak self] in
+            self?.updateHeaderAccessibility(bookID: bookID)
+            self?.rememberScroll()
+        }
+    }
+
+    private func updateHeaderAccessibility(bookID: String) {
+        guard let indexPath = dataSource.indexPath(for: ItemID.header(bookID)),
+              let cell = collectionView.cellForItem(at: indexPath) as? UICollectionViewListCell else { return }
+        cell.accessibilityValue = groupState.isExpanded(bookID, searching: searching) ? "已展开" : "已收起"
+    }
+
+    private func refresh(animated: Bool = false) {
         let all = library.books.filter { $0.removal == nil }.compactMap { book -> (book: Book, records: [NoteRecord])? in
             let records = records(for: book)
             return records.isEmpty ? nil : (book, records)
@@ -282,61 +366,99 @@ final class NotesController: UITableViewController {
         groupState.initialize(latestBookID: latest?.book.id)
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         sections = all.compactMap { section in
-            let records = section.records.filter { record in
-                filter.includes(record) && (needle.isEmpty || [section.book.title, record.quote, record.body, record.chapter]
-                    .joined(separator: "\n").localizedCaseInsensitiveContains(needle))
+            var records = section.records
+            if !needle.isEmpty {
+                records = records.filter { record in
+                    [section.book.title, record.quote, record.body, record.chapter]
+                        .joined(separator: "\n").localizedCaseInsensitiveContains(needle)
+                }
             }
-            return records.isEmpty ? nil : (section.book, records)
+            guard !records.isEmpty else { return nil }
+            records.sort { lhs, rhs in
+                let left = documentOrder(lhs)
+                let right = documentOrder(rhs)
+                if left.0 != right.0 { return left.0 < right.0 }
+                if left.1 != right.1 { return left.1 < right.1 }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            return (section.book, records)
         }
-        groupState.reload(tableView)
+        applySnapshots(animated: animated)
         updateEmptyState()
+    }
+
+    /// 组内按阅读位置排序：优先总进度/进度，其次 Readium position，最后按 id 稳定排序。
+    private func documentOrder(_ record: NoteRecord) -> (Double, Int) {
+        guard let locator = try? record.location() else { return (1, 0) }
+        let progression = locator.locations.totalProgression ?? locator.locations.progression ?? 0
+        return (progression, locator.locations.position ?? 0)
+    }
+
+    private func applySnapshots(animated: Bool) {
+        let sectionIDs = sections.map { SectionID.book($0.book.id) }
+        if sectionIDs != appliedSectionIDs {
+            var snapshot = NSDiffableDataSourceSnapshot<SectionID, ItemID>()
+            snapshot.appendSections(sectionIDs)
+            dataSource.apply(snapshot, animatingDifferences: animated)
+            appliedSectionIDs = sectionIDs
+        }
+        for (index, section) in sections.enumerated() {
+            let header = ItemID.header(section.book.id)
+            var snapshot = NSDiffableDataSourceSectionSnapshot<ItemID>()
+            snapshot.append([header])
+            snapshot.append(section.records.map { ItemID.record($0.id) }, to: header)
+            if groupState.isExpanded(section.book.id, searching: searching) {
+                snapshot.expand([header])
+            }
+            dataSource.apply(snapshot, to: sectionIDs[index], animatingDifferences: animated)
+        }
     }
 
     private func latestTimestamp(in section: (book: Book, records: [NoteRecord])) -> Date {
         section.records.compactMap { record in
-            library.recordTimestamp(
-                kind: { if case .bookmark = record { return .bookmark }; return .note }(),
-                bookID: section.book.id,
-                recordID: record.id
-            )
+            library.recordTimestamp(kind: .note, bookID: section.book.id, recordID: record.id)
         }.max() ?? .distantPast
     }
 
     private func records(for book: Book) -> [NoteRecord] {
-        let drafts = book.noteDrafts ?? []
-        let draftIDs = Set(drafts.map(\.id))
-        let notes = drafts.map { NoteRecord.note($0, draft: true) }
-            + (book.notes ?? []).filter { !draftIDs.contains($0.id) }.map { NoteRecord.note($0, draft: false) }
-        let bookmarks = (book.bookmarks ?? []).map(NoteRecord.bookmark)
-        return notes + bookmarks
+        (book.notes ?? []).map { NoteRecord(note: $0) }
     }
 
     private func updateEmptyState() {
         guard sections.isEmpty else {
-            tableView.backgroundView = nil
+            collectionView.backgroundView = nil
+            if #available(iOS 17.0, *) { contentUnavailableConfiguration = nil }
             return
         }
-        let filtered = filter != .all || searching
-        let empty = NotesEmptyView(
-            title: searching ? "没有找到相关阅读痕迹" : (filtered ? "没有这类阅读痕迹" : "还没有阅读痕迹"),
-            detail: searching ? "换一个关键词，或查看全部阅读痕迹。" : (filtered
-                ? "换一个筛选，看看其他高亮、笔记和书签。"
-                : "阅读时选中原文，即可高亮或写下自己的想法。"),
-            actionTitle: filtered ? "查看全部" : "去书架读书"
-        )
-        empty.onAction = { [weak self] in
-            guard let self else { return }
-            if filtered {
-                filter = .all
-                query = ""
-                pageHeader.clearSearch()
-                pageHeader.setFilter(.all)
-                refresh()
-            } else {
-                rootTabs?.select(RootDestination.library.rawValue)
-            }
+        let title = searching ? "没有找到相关笔记" : "还没有笔记"
+        let detail = searching
+            ? "换一个关键词，或清除搜索后再看。"
+            : "阅读时选中原文，画下高亮或写下想法，之后会出现在这里。"
+        let actionTitle = searching ? "清除搜索" : "去书架读书"
+        let action: () -> Void = { [weak self] in self?.emptyAction() }
+        if #available(iOS 17.0, *) {
+            contentUnavailableConfiguration = BookContentUnavailable.configuration(
+                title: title,
+                detail: detail,
+                symbol: "square.and.pencil",
+                actionTitle: actionTitle,
+                action: action
+            )
+        } else {
+            let empty = NotesEmptyView(title: title, detail: detail, actionTitle: actionTitle)
+            empty.onAction = action
+            collectionView.backgroundView = empty
         }
-        tableView.backgroundView = empty
+    }
+
+    private func emptyAction() {
+        if searching {
+            query = ""
+            searchController.searchBar.text = ""
+            refresh(animated: !UIAccessibility.isReduceMotionEnabled)
+        } else {
+            rootTabs?.select(RootDestination.library.rawValue)
+        }
     }
 
     private var rootTabs: RootTabController? {
@@ -348,87 +470,143 @@ final class NotesController: UITableViewController {
         return nil
     }
 
-    override func numberOfSections(in tableView: UITableView) -> Int {
-        sections.count
-    }
-
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        groupState.isExpanded(sections[section].book.id, searching: searching) ? sections[section].records.count : 0
-    }
-
-    override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
-        let header = BookGroupHeader()
-        header.configure(
-            bookID: sections[section].book.id,
-            bookTitle: sections[section].book.title,
-            book: sections[section].book,
-            covers: covers,
-            library: library,
-            identifierPrefix: "notes-book",
-            countText: "\(sections[section].records.count) 条记录",
-            expanded: groupState.isExpanded(sections[section].book.id, searching: searching),
-            searching: searching
+    private func configure(header cell: UICollectionViewListCell, bookID: String) {
+        guard let section = sections.first(where: { $0.book.id == bookID }) else { return }
+        let countText = "\(section.records.count) 条笔记"
+        cell.contentConfiguration = BookDesign.listGroupHeaderContent(
+            title: section.book.title,
+            countText: countText,
+            image: thumbnails.placeholder(for: section.book.title)
         )
-        let bookID = sections[section].book.id
-        header.onToggle = { [weak self] in
-            guard let self, !searching else { return }
-            groupState.toggle(bookID)
-            refresh()
-            rememberScroll()
+        let expanded = groupState.isExpanded(bookID, searching: searching)
+        cell.accessories = [.outlineDisclosure(
+            options: UICellAccessory.OutlineDisclosureOptions(style: .header),
+            actionHandler: { [weak self] in self?.toggleGroup(bookID: bookID) }
+        )]
+        cell.accessibilityIdentifier = "notes-book-\(bookID)"
+        cell.accessibilityLabel = "\(section.book.title)，\(countText)"
+        cell.accessibilityValue = expanded ? "已展开" : "已收起"
+        cell.accessibilityTraits = [.header, .button]
+        cell.accessibilityHint = searching ? "搜索期间自动展开匹配笔记" : "轻点展开或收起本书的笔记"
+        loadCover(of: section.book, into: cell)
+    }
+
+    private func loadCover(of book: Book, into cell: UICollectionViewListCell) {
+        let bookID = book.id
+        Task { [weak self, weak cell] in
+            guard let self, let cell else { return }
+            let image = await self.thumbnails.image(for: book, covers: self.covers, library: self.library)
+            guard cell.accessibilityIdentifier == "notes-book-\(bookID)",
+                  var content = cell.contentConfiguration as? UIListContentConfiguration else { return }
+            content.image = image
+            cell.contentConfiguration = content
         }
-        return header
     }
 
-    override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        UITableView.automaticDimension
-    }
-
-    override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
-        section == sections.indices.last ? 18 : 0
-    }
-
-    override func tableView(_ tableView: UITableView, viewForFooterInSection section: Int) -> UIView? {
-        UIView()
-    }
-
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "note-record", for: indexPath) as! NoteRecordCell
-        let record = sections[indexPath.section].records[indexPath.row]
+    private func configure(record cell: UICollectionViewListCell, indexPath: IndexPath, recordID: UUID) {
+        guard sections.indices.contains(indexPath.section),
+              let record = sections[indexPath.section].records.first(where: { $0.id == recordID }) else { return }
         let book = sections[indexPath.section].book
-        let timestamp: Date?
-        switch record {
-        case let .note(note, _):
-            timestamp = library.recordTimestamp(kind: .note, bookID: book.id, recordID: note.id)
-        case let .bookmark(bookmark):
-            timestamp = library.recordTimestamp(kind: .bookmark, bookID: book.id, recordID: bookmark.id)
+        let timestamp = library.recordTimestamp(kind: .note, bookID: book.id, recordID: record.id)
+        let chapter = record.chapter.isEmpty ? "阅读位置" : record.chapter
+        let dateText = timestamp.map(BookDateFormat.recordTime) ?? "时间未记录"
+        cell.contentConfiguration = NotesRowContentConfiguration(
+            quote: record.quote,
+            body: record.body.trimmingCharacters(in: .whitespacesAndNewlines),
+            chapter: chapter,
+            dateText: dateText,
+            tint: record.hasBody ? BookDesign.lamp : record.note.highlightColor.tint
+        )
+        cell.isAccessibilityElement = true
+        cell.accessibilityIdentifier = record.accessibilityIdentifier
+        cell.accessibilityLabel = [chapter, record.quote, record.body, dateText]
+            .filter { !$0.isEmpty }
+            .joined(separator: "，")
+        cell.accessibilityTraits = .button
+        cell.accessibilityHint = "轻点回到原文；左滑编辑，右滑删除"
+    }
+
+    private func record(at indexPath: IndexPath) -> (book: Book, record: NoteRecord)? {
+        guard sections.indices.contains(indexPath.section) else { return nil }
+        let section = sections[indexPath.section]
+        guard let item = dataSource.itemIdentifier(for: indexPath), case let .record(recordID) = item,
+              let record = section.records.first(where: { $0.id == recordID }) else { return nil }
+        return (section.book, record)
+    }
+
+    private func trailingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let target = record(at: indexPath) else { return nil }
+        let delete = UIContextualAction(style: .destructive, title: "删除") { [weak self] _, _, done in
+            done(false)
+            self?.confirmDelete(book: target.book, record: target.record)
         }
-        cell.configure(record, timestamp: timestamp)
-        cell.onReturn = { [weak self] in
+        let configuration = UISwipeActionsConfiguration(actions: [delete])
+        configuration.performsFirstActionWithFullSwipe = false
+        return configuration
+    }
+
+    private func leadingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let target = record(at: indexPath), target.record.hasBody else { return nil }
+        let edit = UIContextualAction(style: .normal, title: "编辑") { [weak self] _, _, done in
+            done(false)
+            self?.presentEditor(book: target.book, record: target.record)
+        }
+        let configuration = UISwipeActionsConfiguration(actions: [edit])
+        configuration.performsFirstActionWithFullSwipe = false
+        return configuration
+    }
+
+    /// 供单元测试验证滑动操作；与列表 layout provider 同一实现。
+    func trailingSwipeActions(for annotationID: UUID) -> UISwipeActionsConfiguration? {
+        guard let indexPath = dataSource.indexPath(for: ItemID.record(annotationID)) else { return nil }
+        return trailingSwipeActions(at: indexPath)
+    }
+
+    /// 供单元测试验证滑动操作；仅带正文的笔记返回 leading 编辑。
+    func leadingSwipeActions(for annotationID: UUID) -> UISwipeActionsConfiguration? {
+        guard let indexPath = dataSource.indexPath(for: ItemID.record(annotationID)) else { return nil }
+        return leadingSwipeActions(at: indexPath)
+    }
+
+    private func confirmDelete(book: Book, record: NoteRecord) {
+        let alert = BookAlertController(
+            title: "删除笔记？",
+            message: "删除后无法恢复；原文中的高亮与笔记也会移除。",
+            preferredStyle: .alert
+        )
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.addAction(BookAlertAction(title: "删除", style: .destructive) { [weak self] _ in
             guard let self else { return }
-            open(sections[indexPath.section].book, record: record)
-        }
-        return cell
+            do {
+                try self.library.removeNote(record.id, bookID: book.id)
+                self.refresh(animated: !UIAccessibility.isReduceMotionEnabled)
+            } catch {
+                self.showFailure("删除失败，笔记仍保留；请重试。")
+            }
+        })
+        present(alert, animated: true)
     }
 
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true)
-        let book = sections[indexPath.section].book
-        let record = sections[indexPath.section].records[indexPath.row]
-        switch record {
-        case let .note(note, _):
-            let editor = NoteEditorController(
-                library: library,
-                bookID: book.id,
-                note: note,
-                changed: { [weak self] in self?.refresh() },
-                returnToText: { [weak self] in self?.open(book, record: record) }
-            )
-            let sheet = UINavigationController(rootViewController: editor)
-            sheet.modalPresentationStyle = .fullScreen
-            present(sheet, animated: true)
-        case .bookmark:
-            open(book, record: record)
-        }
+    private func presentEditor(book: Book, record: NoteRecord) {
+        let editor = NoteEditorController(
+            library: library,
+            bookID: book.id,
+            note: record.note,
+            changed: { [weak self] in self?.refresh() }
+        )
+        present(editor, animated: false)
+    }
+
+    private func showFailure(_ message: String) {
+        let alert = BookAlertController(title: "操作未保存", message: message, preferredStyle: .alert)
+        alert.addAction(BookAlertAction(title: "知道了", style: .default))
+        present(alert, animated: true)
+    }
+
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        collectionView.deselectItem(at: indexPath, animated: true)
+        guard let target = record(at: indexPath) else { return }
+        open(target.book, record: target.record)
     }
 
     private func open(_ book: Book, record: NoteRecord) {
@@ -446,33 +624,33 @@ final class NotesController: UITableViewController {
                 reader.modalPresentationStyle = .fullScreen
                 present(reader, animated: true)
             } catch {
-                let alert = UIAlertController(
+                let alert = BookAlertController(
                     title: "无法返回原文",
                     message: error.localizedDescription,
                     preferredStyle: .alert
                 )
-                alert.addAction(UIAlertAction(title: "知道了", style: .default))
+                alert.addAction(BookAlertAction(title: "知道了", style: .default))
                 present(alert, animated: true)
             }
         }
     }
 
-    private func exportNotes() {
+    @objc private func exportNotes() {
         let lines = sections.flatMap { section in
             section.records.map { record in
-                var values = ["《\(section.book.title)》", record.chapter, record.kind]
+                var values = ["《\(section.book.title)》", record.chapter]
                 if !record.quote.isEmpty { values.append("原文：\(record.quote)") }
                 if !record.body.isEmpty { values.append("想法：\(record.body)") }
                 return values.joined(separator: "\n")
             }
         }
         guard !lines.isEmpty else {
-            let alert = UIAlertController(
+            let alert = BookAlertController(
                 title: "还没有可导出的笔记",
                 message: "阅读时选中原文，写下高亮或笔记后再导出。",
                 preferredStyle: .alert
             )
-            alert.addAction(UIAlertAction(title: "知道了", style: .default))
+            alert.addAction(BookAlertAction(title: "知道了", style: .default))
             present(alert, animated: true)
             return
         }
@@ -483,389 +661,141 @@ final class NotesController: UITableViewController {
         do {
             try lines.joined(separator: "\n\n").appending("\n").write(to: file, atomically: true, encoding: .utf8)
             let share = UIActivityViewController(activityItems: [file], applicationActivities: nil)
-            share.popoverPresentationController?.sourceView = pageHeader.exportButton
-            share.popoverPresentationController?.sourceRect = pageHeader.exportButton.bounds
+            share.popoverPresentationController?.barButtonItem = navigationItem.rightBarButtonItem
             present(share, animated: true)
         } catch {
-            let alert = UIAlertController(
+            let alert = BookAlertController(
                 title: "无法导出",
                 message: "笔记仍保存在本机，请检查储存空间后重试。",
                 preferredStyle: .alert
             )
-            alert.addAction(UIAlertAction(title: "知道了", style: .default))
+            alert.addAction(BookAlertAction(title: "知道了", style: .default))
             present(alert, animated: true)
         }
     }
 }
 
-@MainActor
-private final class NotesPageHeader: UIView {
-    var onExport: (() -> Void)?
-    var onFilter: ((NotesFilter) -> Void)?
-    var onSearch: ((String) -> Void)?
-    private let searchField = UISearchTextField()
-    let exportButton = CircularTextlessButton(symbol: "square.and.arrow.up", label: "导出笔记")
-    private let filters = NotesFilterBar()
+/// 笔记行内容配置：颜色点 + 章节 + 右侧日期、引文、正文（缩进 + 2pt 左侧细线）。
+private struct NotesRowContentConfiguration: UIContentConfiguration, Hashable {
+    var quote: String = ""
+    var body: String = ""
+    var chapter: String = ""
+    var dateText: String = ""
+    var tint: UIColor = BookDesign.lamp
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        accessibilityIdentifier = "notes-header"
-        backgroundColor = BookDesign.paper
-
-        let title = BookDesign.label("笔记", size: 31, weight: .bold, style: .largeTitle)
-        title.accessibilityIdentifier = "notes-title"
-        let titleRow = UIStackView(arrangedSubviews: [title, UIView(), exportButton])
-        titleRow.axis = .horizontal
-        titleRow.alignment = .center
-        titleRow.spacing = 12
-
-        exportButton.accessibilityIdentifier = "notes-export"
-        exportButton.addAction(UIAction { [weak self] _ in self?.onExport?() }, for: .touchUpInside)
-
-        let description = BookDesign.label(
-            "留下读过的痕迹，也留下自己的想法。",
-            size: 12,
-            colour: BookDesign.secondary
-        )
-        description.accessibilityIdentifier = "notes-description"
-
-        filters.accessibilityIdentifier = "note-filter"
-        filters.onSelect = { [weak self] selected in self?.onFilter?(selected) }
-
-        searchField.placeholder = "搜索阅读痕迹"
-        searchField.font = BookDesign.font(15)
-        searchField.adjustsFontForContentSizeCategory = true
-        searchField.textColor = BookDesign.ink
-        searchField.backgroundColor = BookDesign.wash
-        searchField.returnKeyType = .search
-        searchField.accessibilityIdentifier = "notes-search"
-        searchField.addAction(UIAction { [weak self] _ in
-            self?.onSearch?(self?.searchField.text ?? "")
-        }, for: .editingChanged)
-
-        for child in [titleRow, description, filters, searchField] {
-            child.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(child)
-        }
-        NSLayoutConstraint.activate([
-            titleRow.topAnchor.constraint(equalTo: topAnchor, constant: 18),
-            titleRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            titleRow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            titleRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
-            description.topAnchor.constraint(equalTo: titleRow.bottomAnchor, constant: 7),
-            description.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            description.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            filters.topAnchor.constraint(equalTo: description.bottomAnchor, constant: 17),
-            filters.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            filters.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            filters.heightAnchor.constraint(equalToConstant: 44),
-            searchField.topAnchor.constraint(equalTo: filters.bottomAnchor, constant: 12),
-            searchField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            searchField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            searchField.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
-            searchField.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
+    func makeContentView() -> UIView & UIContentView {
+        NotesRowContentView(self)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    func setFilter(_ filter: NotesFilter) {
-        filters.setSelected(filter)
-    }
-
-    func clearSearch() {
-        searchField.text = ""
-    }
+    func updated(for state: UIConfigurationState) -> NotesRowContentConfiguration { self }
 }
 
-@MainActor
-private final class CircularTextlessButton: UIButton {
-    init(symbol: String, label: String) {
+private final class NotesRowContentView: UIView, UIContentView {
+    private let dot = UIView()
+    private let chapterLabel = UILabel()
+    private let dateLabel = UILabel()
+    private let quoteLabel = UILabel()
+    private let bodyLabel = UILabel()
+    private let rule = UIView()
+    private let bodyRow = UIStackView()
+    private var appliedConfiguration: NotesRowContentConfiguration?
+
+    var configuration: UIContentConfiguration {
+        get { appliedConfiguration ?? NotesRowContentConfiguration() }
+        set {
+            guard let value = newValue as? NotesRowContentConfiguration else { return }
+            apply(value)
+        }
+    }
+
+    init(_ configuration: NotesRowContentConfiguration) {
         super.init(frame: .zero)
-        backgroundColor = BookDesign.wash
-        tintColor = BookDesign.ink
-        layer.cornerRadius = 22
-        setImage(BookDesign.symbol(symbol, size: 19), for: .normal)
-        accessibilityLabel = label
-        widthAnchor.constraint(equalToConstant: 44).isActive = true
-        heightAnchor.constraint(equalToConstant: 44).isActive = true
+        build()
+        apply(configuration)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override var isHighlighted: Bool {
-        didSet {
-            alpha = isHighlighted ? 0.72 : 1
-            transform = isHighlighted ? CGAffineTransform(scaleX: 0.98, y: 0.98) : .identity
-        }
-    }
-}
+    private func build() {
+        directionalLayoutMargins = NSDirectionalEdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16)
 
-@MainActor
-private final class NotesFilterBar: UIView {
-    var onSelect: ((NotesFilter) -> Void)?
-    private let buttons = NotesFilter.allCases.map(NotesFilterButton.init)
-    private let line = UIView()
-    private(set) var selected: NotesFilter = .all
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        dot.layer.cornerRadius = 4
+        dot.setContentHuggingPriority(.required, for: .horizontal)
+        dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
+        dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        let row = UIStackView(arrangedSubviews: buttons)
-        row.axis = .horizontal
-        row.distribution = .fillEqually
-        line.backgroundColor = BookDesign.line
-        for child in [row, line] {
-            child.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(child)
-        }
-        NSLayoutConstraint.activate([
-            row.topAnchor.constraint(equalTo: topAnchor),
-            row.leadingAnchor.constraint(equalTo: leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor),
-            line.leadingAnchor.constraint(equalTo: leadingAnchor),
-            line.trailingAnchor.constraint(equalTo: trailingAnchor),
-            line.bottomAnchor.constraint(equalTo: bottomAnchor),
-            line.heightAnchor.constraint(equalToConstant: 1)
-        ])
-        for (index, button) in buttons.enumerated() {
-            button.tag = index
-            button.addAction(UIAction { [weak self] _ in self?.choose(index) }, for: .touchUpInside)
-        }
-        setSelected(.all)
-    }
+        chapterLabel.font = BookType.caption
+        chapterLabel.textColor = BookDesign.ink3
+        chapterLabel.numberOfLines = 1
+        chapterLabel.lineBreakMode = .byTruncatingTail
+        chapterLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+        dateLabel.font = BookType.caption
+        dateLabel.textColor = BookDesign.ink3
+        dateLabel.textAlignment = .right
+        dateLabel.setContentHuggingPriority(.required, for: .horizontal)
+        dateLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-    func setSelected(_ filter: NotesFilter) {
-        selected = filter
-        for button in buttons {
-            button.isSelected = button.filter == filter
-        }
-    }
+        quoteLabel.numberOfLines = 4
+        quoteLabel.lineBreakMode = .byTruncatingTail
 
-    private func choose(_ index: Int) {
-        guard buttons.indices.contains(index) else { return }
-        setSelected(buttons[index].filter)
-        onSelect?(buttons[index].filter)
-    }
-}
+        bodyLabel.font = BookType.sans(13, weight: .regular, style: .footnote)
+        bodyLabel.textColor = BookDesign.ink2
+        bodyLabel.numberOfLines = 3
+        bodyLabel.lineBreakMode = .byTruncatingTail
 
-@MainActor
-private final class NotesFilterButton: UIControl {
-    let filter: NotesFilter
-    private let label: UILabel
-    private let marker = UIView()
+        rule.backgroundColor = BookDesign.line
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        rule.widthAnchor.constraint(equalToConstant: 2).isActive = true
 
-    init(_ filter: NotesFilter) {
-        self.filter = filter
-        label = BookDesign.label(filter.rawValue, size: 14, weight: .medium, colour: BookDesign.secondary)
-        super.init(frame: .zero)
-        accessibilityIdentifier = filter.accessibilityIdentifier
-        accessibilityLabel = filter.rawValue
-        accessibilityTraits = .button
-        marker.backgroundColor = BookDesign.ink
-        marker.layer.cornerRadius = 1
-        label.textAlignment = .center
-        label.isAccessibilityElement = false
-        for child in [label, marker] {
-            child.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(child)
-        }
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -1),
-            marker.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 3),
-            marker.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -3),
-            marker.bottomAnchor.constraint(equalTo: bottomAnchor),
-            marker.heightAnchor.constraint(equalToConstant: 2)
-        ])
-    }
+        bodyRow.axis = .horizontal
+        bodyRow.spacing = 6
+        bodyRow.alignment = .fill
+        bodyRow.addArrangedSubview(rule)
+        bodyRow.addArrangedSubview(bodyLabel)
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    override var isSelected: Bool {
-        didSet {
-            label.textColor = isSelected ? BookDesign.ink : BookDesign.secondary
-            label.font = BookDesign.font(14, weight: isSelected ? .semibold : .medium)
-            marker.isHidden = !isSelected
-            accessibilityTraits = isSelected ? [.button, .selected] : .button
-        }
-    }
-
-    override var isHighlighted: Bool {
-        didSet { alpha = isHighlighted ? 0.72 : 1 }
-    }
-}
-
-@MainActor
-private final class NoteRecordCell: UITableViewCell {
-    var onReturn: (() -> Void)?
-    private let quoteLine = UIView()
-    private let quote = UILabel()
-    private let body = UILabel()
-    private let meta = UILabel()
-    private let returnButton = UIButton(type: .system)
-    private let bottomLine = UIView()
-    private let quoteRow = UIView()
-    private let contentStack = UIStackView()
-
-    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
-        super.init(style: style, reuseIdentifier: reuseIdentifier)
-        backgroundColor = BookDesign.paper
-        contentView.backgroundColor = BookDesign.paper
-        selectionStyle = .default
-
-        quoteLine.backgroundColor = BookDesign.accent
-        quote.numberOfLines = 3
-        quote.lineBreakMode = .byTruncatingTail
-        quote.adjustsFontForContentSizeCategory = true
-        body.numberOfLines = 3
-        body.lineBreakMode = .byTruncatingTail
-        body.font = BookDesign.font(14, style: .subheadline)
-        body.textColor = BookDesign.secondary
-        body.adjustsFontForContentSizeCategory = true
-        meta.font = BookDesign.font(11, style: .caption1)
-        meta.textColor = BookDesign.secondary
-        meta.numberOfLines = 2
-        meta.adjustsFontForContentSizeCategory = true
-
-        returnButton.tintColor = BookDesign.secondary
-        returnButton.setTitleColor(BookDesign.secondary, for: .normal)
-        returnButton.setImage(BookDesign.symbol("arrow.up.right", size: 14), for: .normal)
-        returnButton.semanticContentAttribute = .forceRightToLeft
-        returnButton.titleLabel?.font = BookDesign.font(11, weight: .medium, style: .caption1)
-        returnButton.titleLabel?.adjustsFontForContentSizeCategory = true
-        returnButton.setTitle("回到原文", for: .normal)
-        returnButton.accessibilityLabel = "回到原文"
-        returnButton.addAction(UIAction { [weak self] _ in self?.onReturn?() }, for: .touchUpInside)
-        returnButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-
-        let metaRow = UIStackView(arrangedSubviews: [meta, UIView(), returnButton])
+        let metaRow = UIStackView(arrangedSubviews: [dot, chapterLabel, UIView(), dateLabel])
         metaRow.axis = .horizontal
         metaRow.alignment = .center
         metaRow.spacing = 8
 
-        for child in [quoteLine, quote] {
-            child.translatesAutoresizingMaskIntoConstraints = false
-            quoteRow.addSubview(child)
-        }
+        let stack = UIStackView(arrangedSubviews: [metaRow, quoteLabel, bodyRow])
+        stack.axis = .vertical
+        stack.spacing = 6
+        stack.setCustomSpacing(8, after: metaRow)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
         NSLayoutConstraint.activate([
-            quoteLine.leadingAnchor.constraint(equalTo: quoteRow.leadingAnchor),
-            quoteLine.topAnchor.constraint(equalTo: quoteRow.topAnchor),
-            quoteLine.bottomAnchor.constraint(equalTo: quoteRow.bottomAnchor),
-            quoteLine.widthAnchor.constraint(equalToConstant: 2),
-            quote.leadingAnchor.constraint(equalTo: quoteRow.leadingAnchor, constant: 15),
-            quote.topAnchor.constraint(equalTo: quoteRow.topAnchor),
-            quote.trailingAnchor.constraint(equalTo: quoteRow.trailingAnchor),
-            quote.bottomAnchor.constraint(equalTo: quoteRow.bottomAnchor)
-        ])
-
-        contentStack.addArrangedSubview(quoteRow)
-        contentStack.addArrangedSubview(body)
-        contentStack.addArrangedSubview(metaRow)
-        contentStack.axis = .vertical
-        contentStack.spacing = 13
-        contentStack.setCustomSpacing(10, after: body)
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(contentStack)
-
-        bottomLine.backgroundColor = BookDesign.line
-        bottomLine.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(bottomLine)
-        NSLayoutConstraint.activate([
-            contentStack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 20),
-            contentStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
-            contentStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
-            contentStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -14),
-            bottomLine.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
-            bottomLine.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
-            bottomLine.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            bottomLine.heightAnchor.constraint(equalToConstant: 1)
+            stack.topAnchor.constraint(equalTo: layoutMarginsGuide.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: layoutMarginsGuide.bottomAnchor)
         ])
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        onReturn = nil
-        accessibilityIdentifier = nil
-        accessibilityLabel = nil
+    private func apply(_ configuration: NotesRowContentConfiguration) {
+        appliedConfiguration = configuration
+        chapterLabel.text = configuration.chapter
+        dateLabel.text = configuration.dateText
+        quoteLabel.attributedText = Self.quoteText(configuration.quote)
+        bodyLabel.text = configuration.body
+        bodyRow.isHidden = configuration.body.isEmpty
+        dot.backgroundColor = configuration.tint
     }
 
-    func configure(_ record: NoteRecord, timestamp: Date?) {
-        accessibilityIdentifier = record.accessibilityIdentifier
-        let chapter = record.chapter.isEmpty ? "阅读位置" : record.chapter
-        let time = timestamp.map(Self.time) ?? "时间未记录"
-        meta.text = chapter + " · " + record.kind + " · " + time
-        meta.accessibilityLabel = chapter + "，" + record.kind + "，" + time
-        returnButton.accessibilityIdentifier = "return-\(record.id.uuidString)"
-
-        switch record {
-        case let .note(note, _):
-            let font = BookDesign.readingFont(17)
-            quote.font = font
-            quote.textColor = BookDesign.ink
-            quote.attributedText = paragraph(
-                "“" + note.quote + "”",
-                font: font,
-                colour: BookDesign.ink,
-                lineHeightMultiple: 1.8
-            )
-            quoteLine.isHidden = false
-            let bodyText = note.body.trimmingCharacters(in: .whitespacesAndNewlines)
-            body.isHidden = bodyText.isEmpty
-            body.text = bodyText
-            returnButton.accessibilityLabel = "回到原文"
-        case let .bookmark(bookmark):
-            let font = BookDesign.font(17, weight: .semibold, style: .headline)
-            quote.font = font
-            quote.textColor = BookDesign.ink
-            quote.attributedText = paragraph(
-                bookmark.title,
-                font: font,
-                colour: BookDesign.ink,
-                lineHeightMultiple: 1.5
-            )
-            quoteLine.isHidden = true
-            body.isHidden = true
-            returnButton.accessibilityLabel = "回到原文"
-        }
-        setNeedsLayout()
-    }
-
-    private func paragraph(
-        _ text: String,
-        font: UIFont,
-        colour: UIColor,
-        lineHeightMultiple: CGFloat
-    ) -> NSAttributedString {
+    private static func quoteText(_ quote: String) -> NSAttributedString {
         let style = NSMutableParagraphStyle()
-        style.lineHeightMultiple = lineHeightMultiple
+        style.lineHeightMultiple = 1.45
         style.lineBreakMode = .byTruncatingTail
         return NSAttributedString(
-            string: text,
+            string: "“" + quote + "”",
             attributes: [
-                .font: font,
-                .foregroundColor: colour,
+                .font: BookType.serif(15, weight: .regular, style: .body),
+                .foregroundColor: BookDesign.ink,
                 .paragraphStyle: style
             ]
         )
-    }
-
-    private static func time(_ date: Date) -> String {
-        let calendar = Calendar.autoupdatingCurrent
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = .autoupdatingCurrent
-        formatter.dateFormat = calendar.isDateInToday(date) || calendar.isDateInYesterday(date)
-            ? "HH:mm"
-            : "M月d日 HH:mm"
-        let clock = formatter.string(from: date)
-        if calendar.isDateInToday(date) { return "今天 " + clock }
-        if calendar.isDateInYesterday(date) { return "昨天 " + clock }
-        return clock
     }
 }
 
@@ -931,10 +861,28 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
     private let changed: () -> Void
     private let returnToText: (() -> Void)?
     private let body = UITextView()
-    private let state = UILabel()
-    private var savedBody: String
-    private var hasSavedDraft: Bool
-    private var autosave: Timer?
+    private let placeholder = BookDesign.label("写点什么…", size: 15, colour: BookDesign.ink3)
+    private let saveButton = UIButton(type: .system)
+    private let deleteButton = UIButton(type: .system)
+    private let isEditingSavedNote: Bool
+    private let dim = UIView()
+    private let card = UIView()
+    private let dragArea = UIView()
+    private let grabber = UIView()
+    private let scroll = UIScrollView()
+
+    private var cardHeight: NSLayoutConstraint!
+    private var cardBottom: NSLayoutConstraint!
+    private var heightRatio: CGFloat = 0.54
+    private var dragStartHeight: CGFloat = 0
+    private var isDraggingCard = false
+    private var isDismissingCard = false
+    private var didAnimateIn = false
+    private var keyboardOverlap: CGFloat = 0
+
+    private static let initialRatio: CGFloat = 0.54
+    private static let minRatio: CGFloat = 0.44
+    private static let maxRatio: CGFloat = 0.92
 
     init(library: LibraryStore, bookID: String, note: BookNote, changed: @escaping () -> Void, returnToText: (() -> Void)? = nil) {
         self.library = library
@@ -942,156 +890,420 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
         self.changed = changed
         self.returnToText = returnToText
         bookRevision = library.revision(for: bookID)
-        let draft = library.books.first { $0.id == bookID }?.noteDrafts?.first { $0.id == note.id }
-        self.note = draft ?? note
-        savedBody = (draft ?? note).body
-        hasSavedDraft = draft != nil
+        self.note = note
+        isEditingSavedNote = (library.books.first { $0.id == bookID }?.notes ?? []).contains { $0.id == note.id }
         super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .overFullScreen
+        modalTransitionStyle = .crossDissolve
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        title = hasSavedDraft ? "恢复笔记草稿" : "笔记"
-        view.backgroundColor = BookDesign.paper
-        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "关闭", style: .plain, target: self, action: #selector(closeEditor))
-        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "保存笔记", style: .done, target: self, action: #selector(save))
-        let quoteTitle = UILabel()
-        quoteTitle.text = "引用原文"
-        quoteTitle.font = .preferredFont(forTextStyle: .caption1)
-        quoteTitle.textColor = .secondaryLabel
-        quoteTitle.numberOfLines = 0
-        let quote = UITextView()
-        quote.isEditable = false
-        quote.text = note.quote
-        quote.font = BookDesign.readingFont(17)
-        quote.adjustsFontForContentSizeCategory = true
-        quote.backgroundColor = BookDesign.surface
-        quote.textColor = BookDesign.ink
-        quote.layer.cornerRadius = 12
-        quote.accessibilityIdentifier = "note-quote"
-        let bodyTitle = UILabel()
-        bodyTitle.text = "个人笔记"
-        bodyTitle.font = .preferredFont(forTextStyle: .headline)
-        bodyTitle.numberOfLines = 0
-        body.text = note.body
-        body.font = .preferredFont(forTextStyle: .body)
-        body.adjustsFontForContentSizeCategory = true
-        body.backgroundColor = BookDesign.surface
-        body.textColor = BookDesign.ink
-        body.layer.cornerRadius = 12
-        body.accessibilityIdentifier = "note-body"
-        body.delegate = self
-        state.font = .preferredFont(forTextStyle: .caption1)
-        state.adjustsFontForContentSizeCategory = true
-        state.numberOfLines = 0
-        state.setContentCompressionResistancePriority(.required, for: .vertical)
-        state.accessibilityIdentifier = "note-save-status"
-        state.text = hasSavedDraft ? "草稿已保存，可继续编辑" : "尚未修改"
-        let draft = UIButton(type: .system)
-        draft.setTitle("保存草稿", for: .normal)
-        draft.titleLabel?.font = .preferredFont(forTextStyle: .body)
-        draft.titleLabel?.adjustsFontForContentSizeCategory = true
-        draft.titleLabel?.numberOfLines = 0
-        draft.addTarget(self, action: #selector(saveDraft), for: .touchUpInside)
-        let original = UIButton(type: .system)
-        original.setTitle("返回原文", for: .normal)
-        original.titleLabel?.font = .preferredFont(forTextStyle: .body)
-        original.titleLabel?.adjustsFontForContentSizeCategory = true
-        original.titleLabel?.numberOfLines = 0
-        original.addTarget(self, action: #selector(goBackToText), for: .touchUpInside)
-        original.isHidden = returnToText == nil
-        let actions = UIStackView(arrangedSubviews: [draft, original])
-        actions.axis = traitCollection.preferredContentSizeCategory.isAccessibilityCategory ? .vertical : .horizontal
-        actions.distribution = .fillEqually
-        actions.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        let stack = UIStackView(arrangedSubviews: [quoteTitle, quote, bodyTitle, body, state, actions])
-        stack.axis = .vertical
-        stack.spacing = 8
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        let scroll = UIScrollView()
-        scroll.keyboardDismissMode = .interactive
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(scroll)
-        scroll.addSubview(stack)
-        let fill = stack.heightAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.heightAnchor, constant: -16)
-        fill.priority = .defaultLow
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 8),
-            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -16),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -8),
-            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -32),
-            quote.heightAnchor.constraint(equalToConstant: 120),
-            body.heightAnchor.constraint(greaterThanOrEqualToConstant: 160),
-            fill
-        ])
-        NotificationCenter.default.addObserver(self, selector: #selector(background), name: UIApplication.willResignActiveNotification, object: nil)
-    }
-
     deinit { NotificationCenter.default.removeObserver(self) }
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        view.accessibilityViewIsModal = true
+        navigationController?.setNavigationBarHidden(true, animated: false)
+
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        dim.alpha = 0
+        // 嵌入系统 sheet（阅读器编辑入口）时由系统负责背景遮罩，避免二次压暗。
+        dim.isHidden = navigationController != nil
+        dim.translatesAutoresizingMaskIntoConstraints = false
+        dim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(dismissTapped)))
+        view.addSubview(dim)
+
+        card.backgroundColor = BookDesign.paper
+        card.layer.cornerRadius = BookRadius.sheet
+        card.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        card.clipsToBounds = true
+        card.accessibilityIdentifier = "note-editor-card"
+        card.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(card)
+
+        grabber.backgroundColor = BookDesign.ink3.withAlphaComponent(0.35)
+        grabber.layer.cornerRadius = 2
+        grabber.translatesAutoresizingMaskIntoConstraints = false
+        dragArea.translatesAutoresizingMaskIntoConstraints = false
+        dragArea.addSubview(grabber)
+        dragArea.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(handleCardDrag(_:))))
+
+        let close = CircularIconButton(symbol: "xmark", label: "关闭", style: .ghost, identifier: "note-close")
+        close.addAction(UIAction { [weak self] _ in self?.closeTapped() }, for: .touchUpInside)
+
+        let titleLabel = BookDesign.label("笔记", font: BookType.serif(17, weight: .semibold, style: .headline), colour: BookDesign.ink)
+        titleLabel.numberOfLines = 1
+        titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        var saveConfiguration = UIButton.Configuration.filled()
+        saveConfiguration.title = "保存笔记"
+        saveConfiguration.cornerStyle = .capsule
+        saveConfiguration.contentInsets = NSDirectionalEdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14)
+        saveConfiguration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookType.sans(13, weight: .medium, style: .footnote)
+            return outgoing
+        }
+        saveButton.configuration = saveConfiguration
+        saveButton.accessibilityIdentifier = "note-save"
+        saveButton.accessibilityLabel = "保存笔记"
+        saveButton.addAction(UIAction { [weak self] _ in self?.save() }, for: .touchUpInside)
+        saveButton.setContentHuggingPriority(.required, for: .horizontal)
+        saveButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        var deleteConfiguration = UIButton.Configuration.plain()
+        deleteConfiguration.title = "删除笔记"
+        deleteConfiguration.baseForegroundColor = BookDesign.error
+        deleteConfiguration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8)
+        deleteConfiguration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookType.sans(13, weight: .medium, style: .footnote)
+            return outgoing
+        }
+        deleteButton.configuration = deleteConfiguration
+        deleteButton.accessibilityIdentifier = "note-delete"
+        deleteButton.accessibilityLabel = "删除笔记"
+        deleteButton.isHidden = !isEditingSavedNote
+        deleteButton.setContentHuggingPriority(.required, for: .horizontal)
+        deleteButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        deleteButton.addAction(UIAction { [weak self] _ in self?.confirmDelete() }, for: .touchUpInside)
+
+        let header = UIStackView(arrangedSubviews: [close, titleLabel, UIView(), deleteButton, saveButton])
+        header.axis = .horizontal
+        header.alignment = .center
+        header.spacing = 8
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        let quoteContainer = UIView()
+        quoteContainer.backgroundColor = BookDesign.paperDeep
+        quoteContainer.layer.cornerRadius = BookRadius.field
+        quoteContainer.translatesAutoresizingMaskIntoConstraints = false
+        let quoteLabel = BookDesign.label(note.quote, font: BookType.serif(14, weight: .regular, style: .body), colour: BookDesign.ink)
+        quoteLabel.numberOfLines = 2
+        quoteLabel.lineBreakMode = .byTruncatingTail
+        quoteLabel.accessibilityIdentifier = "note-quote"
+        quoteLabel.translatesAutoresizingMaskIntoConstraints = false
+        quoteContainer.addSubview(quoteLabel)
+
+        body.font = BookType.sans(15, weight: .regular, style: .body)
+        body.adjustsFontForContentSizeCategory = true
+        body.backgroundColor = BookDesign.paper
+        body.textColor = BookDesign.ink
+        body.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        body.textContainer.lineFragmentPadding = 0
+        body.isScrollEnabled = false
+        body.text = note.body
+        body.accessibilityIdentifier = "note-body"
+        body.accessibilityLabel = "个人笔记"
+        body.delegate = self
+        body.translatesAutoresizingMaskIntoConstraints = false
+
+        placeholder.isUserInteractionEnabled = false
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
+
+        let content = UIStackView(arrangedSubviews: [quoteContainer, body])
+        content.axis = .vertical
+        content.spacing = 10
+        content.translatesAutoresizingMaskIntoConstraints = false
+
+        scroll.keyboardDismissMode = .interactive
+        scroll.showsVerticalScrollIndicator = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+
+        card.addSubview(dragArea)
+        card.addSubview(header)
+        card.addSubview(scroll)
+        scroll.addSubview(content)
+        scroll.addSubview(placeholder)
+
+        let contentGuide = scroll.contentLayoutGuide
+        let frameGuide = scroll.frameLayoutGuide
+        NSLayoutConstraint.activate([
+            dim.topAnchor.constraint(equalTo: view.topAnchor),
+            dim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            dim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            card.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            card.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+
+            dragArea.topAnchor.constraint(equalTo: card.topAnchor),
+            dragArea.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            dragArea.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            dragArea.heightAnchor.constraint(equalToConstant: 26),
+            grabber.topAnchor.constraint(equalTo: dragArea.topAnchor, constant: 8),
+            grabber.centerXAnchor.constraint(equalTo: dragArea.centerXAnchor),
+            grabber.widthAnchor.constraint(equalToConstant: 33),
+            grabber.heightAnchor.constraint(equalToConstant: 4),
+
+            header.topAnchor.constraint(equalTo: dragArea.bottomAnchor, constant: 2),
+            header.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
+            header.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
+            header.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+
+            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
+            scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
+            scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
+            scroll.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8),
+
+            content.topAnchor.constraint(equalTo: contentGuide.topAnchor),
+            content.leadingAnchor.constraint(equalTo: contentGuide.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: contentGuide.trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: contentGuide.bottomAnchor),
+            content.widthAnchor.constraint(equalTo: frameGuide.widthAnchor),
+
+            quoteLabel.topAnchor.constraint(equalTo: quoteContainer.topAnchor, constant: 10),
+            quoteLabel.leadingAnchor.constraint(equalTo: quoteContainer.leadingAnchor, constant: 12),
+            quoteLabel.trailingAnchor.constraint(equalTo: quoteContainer.trailingAnchor, constant: -12),
+            quoteLabel.bottomAnchor.constraint(equalTo: quoteContainer.bottomAnchor, constant: -10),
+
+            body.heightAnchor.constraint(greaterThanOrEqualToConstant: 96),
+
+            placeholder.topAnchor.constraint(equalTo: body.topAnchor, constant: 8),
+            placeholder.leadingAnchor.constraint(equalTo: body.leadingAnchor, constant: 1)
+        ])
+
+        cardBottom = card.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        cardBottom.isActive = true
+        cardHeight = card.heightAnchor.constraint(
+            equalToConstant: max(220, UIScreen.main.bounds.height * Self.initialRatio)
+        )
+        cardHeight.isActive = true
+        card.heightAnchor.constraint(greaterThanOrEqualTo: view.heightAnchor, multiplier: Self.minRatio).isActive = true
+        card.heightAnchor.constraint(lessThanOrEqualTo: view.heightAnchor, multiplier: Self.maxRatio).isActive = true
+
+        updateSaveButton()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillChangeFrame(_:)),
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillHide(_:)),
+            name: UIResponder.keyboardWillHideNotification,
+            object: nil
+        )
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(true, animated: false)
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !didAnimateIn, navigationController == nil else { return }
+        didAnimateIn = true
+        view.layoutIfNeeded()
+        card.transform = CGAffineTransform(translationX: 0, y: cardHeight.constant + 40)
+        UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseOut]) {
+            self.card.transform = .identity
+            self.dim.alpha = 1
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard !isDraggingCard, keyboardOverlap == 0, view.bounds.height > 0 else { return }
+        let target = view.bounds.height * heightRatio
+        if abs(cardHeight.constant - target) > 0.5 {
+            cardHeight.constant = target
+        }
+    }
+
+    // MARK: - 键盘（整卡上移；必要时收窄高度避免顶到屏幕）
+
+    @objc private func keyboardWillChangeFrame(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let frameValue = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else { return }
+        let keyboardFrame = view.convert(frameValue.cgRectValue, from: nil)
+        keyboardOverlap = max(0, view.bounds.maxY - keyboardFrame.minY)
+        applyKeyboardLayout(userInfo: userInfo)
+    }
+
+    @objc private func keyboardWillHide(_ notification: Notification) {
+        keyboardOverlap = 0
+        applyKeyboardLayout(userInfo: notification.userInfo)
+    }
+
+    /// 键盘态目标高度：min(基础 54%, 键盘上方可用高度 - 24)，且不低于 280 或屏高 44%。
+    private func keyboardClampedHeight() -> CGFloat {
+        let bounds = view.bounds.height
+        let minimum = max(280, bounds * Self.minRatio)
+        let available = bounds - keyboardOverlap
+        return min(bounds * Self.initialRatio, max(minimum, available - 24))
+    }
+
+    /// 键盘可见：只上移卡片并把高度收窄到可用高度；键盘收起：恢复基础 54% 高度。
+    private func applyKeyboardLayout(userInfo: [AnyHashable: Any]?) {
+        let targetBottom: CGFloat
+        let targetHeight: CGFloat
+        if keyboardOverlap > 0 {
+            targetBottom = -max(0, keyboardOverlap - view.safeAreaInsets.bottom)
+            targetHeight = keyboardClampedHeight()
+        } else {
+            targetBottom = 0
+            targetHeight = view.bounds.height * Self.initialRatio
+            heightRatio = Self.initialRatio
+        }
+        let bottomChanged = abs(cardBottom.constant - targetBottom) > 0.5
+        let heightChanged = abs(cardHeight.constant - targetHeight) > 0.5
+        guard bottomChanged || heightChanged else { return }
+        cardBottom.constant = targetBottom
+        cardHeight.constant = targetHeight
+        #if DEBUG
+        NSLog(
+            "[NoteEditor] keyboardOverlap=%.1f bottom=%.1f cardHeight=%.1f view=%.1f",
+            keyboardOverlap, targetBottom, targetHeight, view.bounds.height
+        )
+        #endif
+        if isDismissingCard {
+            view.layoutIfNeeded()
+            return
+        }
+        let duration = (userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        let curveRaw = (userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int) ?? 7
+        let options = UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16)
+        UIView.animate(withDuration: duration, delay: 0, options: [options, .beginFromCurrentState]) {
+            self.view.layoutIfNeeded()
+        } completion: { _ in
+            #if DEBUG
+            NSLog(
+                "[NoteEditor] after keyboard change height(frame)=%.1f top=%.1f bottom=%.1f",
+                self.card.frame.height, self.card.frame.minY, self.cardBottom.constant
+            )
+            #endif
+        }
+    }
+
+    // MARK: - 拖动/关闭
+
+    @objc private func handleCardDrag(_ gesture: UIPanGestureRecognizer) {
+        let available = view.bounds.height
+        let minHeight = available * Self.minRatio
+        let maxHeight = available * Self.maxRatio
+        switch gesture.state {
+        case .began:
+            isDraggingCard = true
+            dragStartHeight = cardHeight.constant
+        case .changed:
+            let proposed = dragStartHeight - gesture.translation(in: view).y
+            cardHeight.constant = min(max(proposed, 0), maxHeight + 24)
+            view.layoutIfNeeded()
+        case .ended, .cancelled:
+            isDraggingCard = false
+            let moved = cardHeight.constant
+            let velocity = gesture.velocity(in: view).y
+            if moved < minHeight || velocity > 1200 {
+                dismissCard()
+                return
+            }
+            let collapsedHeight = keyboardOverlap > 0
+                ? keyboardClampedHeight()
+                : available * Self.initialRatio
+            let target = moved > available * 0.66 ? available * Self.maxRatio : collapsedHeight
+            if keyboardOverlap == 0 { heightRatio = target / available }
+            UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0) {
+                self.cardHeight.constant = target
+                self.view.layoutIfNeeded()
+            }
+        default:
+            break
+        }
+    }
+
+    @objc private func dismissTapped() {
+        dismissCard()
+    }
+
+    private func closeTapped() {
+        dismissCard(completion: returnToText)
+    }
+
+    private func dismissCard(completion: (() -> Void)? = nil) {
+        isDismissingCard = true
+        view.endEditing(true)
+        UIView.animate(withDuration: 0.24, delay: 0, options: [.curveEaseIn]) {
+            self.card.transform = CGAffineTransform(translationX: 0, y: self.cardHeight.constant + 40)
+            self.dim.alpha = 0
+        } completion: { _ in
+            self.dismiss(animated: false, completion: completion)
+        }
+    }
+
+    /// 仅编辑已保存的笔记时显示；纸白确认后删除记录并关闭弹层。
+    private func confirmDelete() {
+        let alert = BookAlertController(
+            title: "删除笔记？",
+            message: "删除后无法恢复；原文中的高亮与笔记也会移除。",
+            preferredStyle: .alert
+        )
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.addAction(BookAlertAction(title: "删除", style: .destructive) { [weak self] _ in
+            guard let self else { return }
+            do {
+                try self.library.removeNote(self.note.id, bookID: self.bookID)
+                self.changed()
+                self.dismissCard()
+            } catch {
+                let failure = BookAlertController(
+                    title: "删除失败",
+                    message: "笔记仍保留；请检查储存空间后重试。",
+                    preferredStyle: .alert
+                )
+                failure.addAction(BookAlertAction(title: "知道了", style: .default))
+                self.present(failure, animated: true)
+            }
+        })
+        present(alert, animated: true)
+    }
+
+    // MARK: - 编辑状态
+
+    private var trimmedBody: String {
+        body.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 空正文（trim）时保存按钮明显灰底/ink3 且不可点；有正文才恢复暖灯胶囊。
+    private func updateSaveButton() {
+        placeholder.isHidden = !body.text.isEmpty
+        let canSave = !trimmedBody.isEmpty
+        var configuration = saveButton.configuration ?? .filled()
+        configuration.baseBackgroundColor = canSave ? BookDesign.lamp : BookDesign.paperDeep
+        configuration.baseForegroundColor = canSave ? BookDesign.paper : BookDesign.ink3
+        configuration.background.backgroundColor = canSave ? BookDesign.lamp : BookDesign.paperDeep
+        saveButton.configuration = configuration
+        saveButton.isEnabled = canSave
+        saveButton.accessibilityHint = canSave ? nil : "写点什么再保存"
+    }
+
     func textViewDidChange(_ textView: UITextView) {
-        state.text = "尚未保存的修改"
-        autosave?.invalidate()
-        autosave = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.saveDraft() }
+        updateSaveButton()
+    }
+
+    private func save() {
+        guard !trimmedBody.isEmpty else {
+            updateSaveButton()
+            return
         }
-    }
-
-    @discardableResult private func persistDraft() -> Bool {
-        autosave?.invalidate()
-        note.body = body.text
-        do {
-            try library.checkRevision(bookRevision, for: bookID)
-            try library.saveNote(note, for: bookID, draft: true)
-            savedBody = note.body
-            hasSavedDraft = true
-            state.text = "草稿已保存，可继续编辑"
-            state.textColor = .secondaryLabel
-            changed()
-            return true
-        } catch {
-            state.text = "草稿保存失败，内容仍在此页；请重试保存草稿"
-            state.textColor = .systemRed
-            return false
-        }
-    }
-
-    @objc private func saveDraft() { persistDraft() }
-
-    @objc private func background() {
-        if body.text != savedBody { persistDraft() }
-    }
-
-    @objc private func save() {
-        autosave?.invalidate()
         note.body = body.text
         do {
             try library.checkRevision(bookRevision, for: bookID)
             try library.saveNote(note, for: bookID)
             changed()
-            dismiss(animated: true)
+            dismissCard()
         } catch {
-            state.text = "笔记保存失败，内容仍在此页；请重试保存笔记"
-            state.textColor = .systemRed
+            let alert = BookAlertController(
+                title: "笔记保存失败",
+                message: "内容仍在此页；请检查储存空间后重试保存。",
+                preferredStyle: .alert
+            )
+            alert.addAction(BookAlertAction(title: "知道了", style: .default))
+            present(alert, animated: true)
         }
-    }
-
-    @objc private func closeEditor() {
-        if body.text != savedBody && !persistDraft() { return }
-        autosave?.invalidate()
-        dismiss(animated: true)
-    }
-
-    @objc private func goBackToText() {
-        if body.text != savedBody && !persistDraft() { return }
-        autosave?.invalidate()
-        dismiss(animated: true, completion: returnToText)
     }
 }

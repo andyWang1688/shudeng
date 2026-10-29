@@ -8,12 +8,17 @@ final class AISettingsUITests: XCTestCase {
         app.launchArguments = ["--isolated-reading-test"]
         app.launch()
         XCTAssertTrue(app.buttons["tab-profile"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.alerts["AI 服务发送说明"].exists)
+        XCTAssertFalse(app.otherElements["AI 服务发送说明"].firstMatch.exists)
         return app
     }
     private func openSettings(_ app: XCUIApplication) {
         app.buttons["tab-profile"].tap()
-        app.buttons["AI 服务"].tap()
+        let row = app.cells["profile-ai-service"].firstMatch
+        if row.waitForExistence(timeout: 5) {
+            row.tap()
+        } else {
+            app.buttons["AI 服务"].tap()
+        }
         XCTAssertTrue(app.tables["ai-services"].waitForExistence(timeout: 5))
     }
     private func dismissPasswordPrompt(_ app: XCUIApplication) {
@@ -53,13 +58,13 @@ final class AISettingsUITests: XCTestCase {
     private func save(_ app: XCUIApplication, host: String) {
         app.navigationBars.buttons["保存"].tap()
         dismissPasswordPrompt(app)
-        let consent = app.alerts["AI 服务发送说明"]
+        let consent = app.otherElements["AI 服务发送说明"].firstMatch
         XCTAssertTrue(consent.waitForExistence(timeout: 5))
         let message = consent.staticTexts.allElementsBoundByIndex.map(\.label).joined()
         for text in ["问题", "相关原文", "必要对话", "费用", host] { XCTAssertTrue(message.contains(text)) }
         consent.buttons["同意并保存"].tap()
-        XCTAssertTrue(app.alerts["已保存"].waitForExistence(timeout: 5))
-        app.alerts.buttons["完成"].tap()
+        XCTAssertTrue(app.otherElements["已保存"].firstMatch.waitForExistence(timeout: 5))
+        app.otherElements["book-dialog"].buttons["完成"].tap()
     }
     private func configuration(_ name: String, _ app: XCUIApplication) -> XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
@@ -67,9 +72,9 @@ final class AISettingsUITests: XCTestCase {
     private func removeCurrentEditor(_ app: XCUIApplication) {
         app.tables["ai-service-editor"].swipeUp()
         app.cells["ai-delete"].tap()
-        app.alerts.buttons["删除"].tap()
-        XCTAssertTrue(app.alerts["已删除服务"].waitForExistence(timeout: 5))
-        app.alerts.buttons["完成"].tap()
+        app.otherElements["book-dialog"].buttons["删除"].tap()
+        XCTAssertTrue(app.otherElements["已删除服务"].firstMatch.waitForExistence(timeout: 5))
+        app.otherElements["book-dialog"].buttons["完成"].tap()
     }
     private func shot(_ name: String, _ app: XCUIApplication) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
@@ -98,12 +103,12 @@ final class AISettingsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["ai-key-label"].exists)
         shot("ai-preset-visible-labels-key-masked", app)
         app.navigationBars.buttons["保存"].tap(); dismissPasswordPrompt(app)
-        let consent = app.alerts["AI 服务发送说明"]
+        let consent = app.otherElements["AI 服务发送说明"].firstMatch
         XCTAssertTrue(consent.waitForExistence(timeout: 5))
         XCTAssertTrue(consent.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "api.deepseek.com")).firstMatch.exists)
         consent.buttons["取消"].tap()
         XCTAssertTrue(app.tables["ai-service-editor"].exists)
-        XCTAssertFalse(app.alerts["已保存"].exists)
+        XCTAssertFalse(app.otherElements["已保存"].firstMatch.exists)
         // Saving the preset requires only the key, and does not check the remote service.
         save(app, host: "api.deepseek.com")
         let saved = configuration("DeepSeek", app)
@@ -116,9 +121,9 @@ final class AISettingsUITests: XCTestCase {
         XCTAssertEqual(app.secureTextFields["ai-key"].value as? String, "留空保留已保存的密钥")
         // The sending scope is unchanged, so the existing consent is reused.
         app.navigationBars.buttons["保存"].tap()
-        XCTAssertTrue(app.alerts["已保存"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.alerts["AI 服务发送说明"].exists)
-        app.alerts.buttons["完成"].tap()
+        XCTAssertTrue(app.otherElements["已保存"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.otherElements["AI 服务发送说明"].firstMatch.exists)
+        app.otherElements["book-dialog"].buttons["完成"].tap()
         configuration("DeepSeek", app).tap()
         removeCurrentEditor(app)
     }
@@ -135,7 +140,7 @@ final class AISettingsUITests: XCTestCase {
             app.tables["ai-service-editor"].swipeUp(); app.cells["ai-check"].tap()
             let limited = "连接可达，但测试输出达到上限，未完成完整回答；尚未保存。"
             XCTAssertTrue(app.staticTexts[limited].waitForExistence(timeout: 10))
-            XCTAssertFalse(app.alerts["已保存"].exists)
+            XCTAssertFalse(app.otherElements["已保存"].firstMatch.exists)
             shot("ai-limited-probe-unsaved-" + format, app)
             save(app, host: "127.0.0.1")
             app.terminate(); app.launch(); openSettings(app)
@@ -148,12 +153,12 @@ final class AISettingsUITests: XCTestCase {
             app.navigationBars.buttons["取消"].tap()
             app.navigationBars.buttons["切换"].tap()
             app.sheets["切换服务"].buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch.tap()
-            let consent = app.alerts["AI 服务发送说明"]
+            let consent = app.otherElements["AI 服务发送说明"].firstMatch
             if consent.waitForExistence(timeout: 1) {
                 consent.buttons["同意并使用已保存服务"].tap()
             }
-            XCTAssertTrue(app.alerts["已切换服务"].waitForExistence(timeout: 5))
-            app.alerts.buttons["完成"].tap()
+            XCTAssertTrue(app.otherElements["已切换服务"].firstMatch.waitForExistence(timeout: 5))
+            app.otherElements["book-dialog"].buttons["完成"].tap()
             XCTAssertTrue(configuration(name + " · 使用中", app).exists)
             configuration(name, app).tap()
             removeCurrentEditor(app)
@@ -175,8 +180,8 @@ final class AISettingsUITests: XCTestCase {
         configuration(name, app).tap()
         advanced(app, name: name, address: "http://127.0.0.1:18767/gateway/v1")
         app.navigationBars.buttons["保存"].tap()
-        XCTAssertTrue(app.alerts["AI 服务发送说明"].waitForExistence(timeout: 5))
-        app.alerts.buttons["取消"].tap()
+        XCTAssertTrue(app.otherElements["AI 服务发送说明"].firstMatch.waitForExistence(timeout: 5))
+        app.otherElements["book-dialog"].buttons["取消"].tap()
         app.navigationBars.buttons["取消"].tap()
         app.terminate(); app.launch(); openSettings(app)
         configuration(name, app).tap()
@@ -188,7 +193,12 @@ final class AISettingsUITests: XCTestCase {
     func testPrivacyPolicyAndSendingDetailsAreReadable() {
         let app = launch()
         app.buttons["tab-profile"].tap()
-        app.buttons["profile-about"].tap()
+        let aboutRow = app.cells["profile-about"].firstMatch
+        if aboutRow.waitForExistence(timeout: 5) {
+            aboutRow.tap()
+        } else {
+            app.buttons["profile-about"].tap()
+        }
         app.buttons["about-privacy-policy"].tap()
         let policy = app.tables["privacy-policy"]
         XCTAssertTrue(policy.waitForExistence(timeout: 5))
@@ -200,7 +210,12 @@ final class AISettingsUITests: XCTestCase {
         shot("ai-privacy-policy", app)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.buttons["AI 服务"].tap()
+        let serviceRow = app.cells["profile-ai-service"].firstMatch
+        if serviceRow.waitForExistence(timeout: 5) {
+            serviceRow.tap()
+        } else {
+            app.buttons["AI 服务"].tap()
+        }
         app.cells["ai-send-details"].tap()
         XCTAssertTrue(app.tables["ai-sending-details"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["发送哪些内容"].exists)
@@ -226,11 +241,11 @@ final class AISettingsUITests: XCTestCase {
         print("I7_INJECT_SAVE_FAULT")
         Thread.sleep(forTimeInterval: 5)
         app.navigationBars.buttons["保存"].tap()
-        app.alerts["AI 服务发送说明"].buttons["同意并保存"].tap()
-        XCTAssertTrue(app.alerts["操作未完成"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.alerts.staticTexts["配置尚未保存，原配置未变；请重试。"].exists)
+        app.otherElements["AI 服务发送说明"].firstMatch.buttons["同意并保存"].tap()
+        XCTAssertTrue(app.otherElements["操作未完成"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["配置尚未保存，原配置未变；请重试。"].exists)
         shot("ai-real-write-failure", app)
-        app.alerts.buttons["知道了"].tap()
+        app.otherElements["book-dialog"].buttons["知道了"].tap()
         print("I7_RESTORE_SAVE_FAULT")
         Thread.sleep(forTimeInterval: 5)
         save(app, host: "127.0.0.1")

@@ -164,8 +164,8 @@ enum DesignFixture {
             ),
             for: primary.id
         )
-        try session.library.saveNote(BookNote(locator: first, body: noteText), for: primary.id)
-        try session.library.saveNote(BookNote(locator: second), for: primary.id, highlightOnly: true)
+        try session.library.saveNote(BookNote(locator: first, body: noteText, color: .yellow), for: primary.id)
+        try session.library.saveNote(BookNote(locator: second, color: .green), for: primary.id, highlightOnly: true)
         try session.library.saveBookmark(Bookmark(locator: second), for: primary.id)
         seedConversations(primary: primary, selection: first, library: session.library)
         try seedService(root: session.root, secrets: session.secrets)

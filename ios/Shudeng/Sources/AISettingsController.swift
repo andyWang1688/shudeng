@@ -14,7 +14,8 @@ final class AISettingsController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "AI 服务"
-        BookDesign.table(tableView)
+        BookDesign.formTable(tableView)
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "ai-value")
         tableView.accessibilityIdentifier = "ai-services"
         navigationItem.rightBarButtonItems = [
             UIBarButtonItem(title: "添加", style: .plain, target: self, action: #selector(add)),
@@ -45,24 +46,37 @@ final class AISettingsController: UITableViewController {
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         section == 0 ? "服务" : nil
     }
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        section == 0 ? "API Key 仅保存在本机 Keychain；点按服务可编辑或检查连接。" : nil
+    }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-        cell.textLabel?.numberOfLines = 0; cell.detailTextLabel?.numberOfLines = 0
+        let cell = tableView.dequeueReusableCell(withIdentifier: "ai-value", for: indexPath)
         if indexPath.section == 1 {
-            cell.textLabel?.text = "提问时问题与相关原文会发送到所选服务。详情"
-            cell.textLabel?.font = .preferredFont(forTextStyle: .caption1)
-            cell.textLabel?.adjustsFontForContentSizeCategory = true
-            cell.textLabel?.textColor = .secondaryLabel
-            cell.accessoryType = .disclosureIndicator
+            configureAICell(
+                cell,
+                title: "提问时问题与相关原文会发送到所选服务。详情",
+                accessory: .disclosureIndicator,
+                titleColour: BookDesign.ink2,
+                titleFont: BookType.footnote
+            )
             cell.accessibilityIdentifier = "ai-send-details"
         } else if let store, !configurations.isEmpty {
             let configuration = configurations[indexPath.row]
-            cell.textLabel?.text = configuration.name + (store.selectedID == configuration.id ? " · 使用中" : "")
-            cell.detailTextLabel?.text = "模型：" + configuration.model + (store.hasSendConsent(for: configuration) ? "" : " · 待确认发送说明")
-            cell.accessoryType = .disclosureIndicator
+            let selected = store.selectedID == configuration.id
+            configureAICell(
+                cell,
+                title: configuration.name,
+                detail: "模型：" + configuration.model
+                    + (selected ? " · 使用中" : "")
+                    + (store.hasSendConsent(for: configuration) ? "" : " · 待确认发送说明"),
+                accessory: selected ? .checkmark : .disclosureIndicator,
+                titleColour: selected ? BookDesign.lampInk : BookDesign.ink,
+                titleFont: BookType.sans(15, weight: selected ? .medium : .regular, style: .body)
+            )
             cell.accessibilityIdentifier = "ai-config-" + configuration.id.uuidString
         } else {
-            cell.textLabel?.text = failure ?? "尚未配置 AI 服务，仍可正常阅读。"
+            configureAICell(cell, title: failure ?? "尚未配置 AI 服务，仍可正常阅读。", titleColour: BookDesign.ink2)
+            cell.accessibilityIdentifier = nil
         }
         return cell
     }
@@ -78,10 +92,10 @@ final class AISettingsController: UITableViewController {
     @objc private func add() { edit(nil) }
     @objc private func switchService() {
         guard let store else { return }
-        let choices = UIAlertController(title: "切换服务", message: nil, preferredStyle: .actionSheet)
+        let choices = BookAlertController(title: "切换服务", message: nil, preferredStyle: .actionSheet)
         for configuration in configurations {
             let title = configuration.name + " · " + configuration.model
-            choices.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+            choices.addAction(BookAlertAction(title: title, style: .default) { [weak self] _ in
                 guard let self else { return }
                 if store.hasSendConsent(for: configuration) {
                     do {
@@ -92,9 +106,9 @@ final class AISettingsController: UITableViewController {
                     }
                     return
                 }
-                let notice = UIAlertController(title: "AI 服务发送说明", message: AIPrivacyController.sendNotice(for: configuration), preferredStyle: .alert)
-                notice.addAction(UIAlertAction(title: "取消", style: .cancel))
-                notice.addAction(UIAlertAction(title: "同意并使用已保存服务", style: .default) { [weak self] _ in
+                let notice = BookAlertController(title: "AI 服务发送说明", message: AIPrivacyController.sendNotice(for: configuration), preferredStyle: .alert)
+                notice.addAction(BookAlertAction(title: "取消", style: .cancel))
+                notice.addAction(BookAlertAction(title: "同意并使用已保存服务", style: .default) { [weak self] _ in
                     guard let self else { return }
                     do {
                         try store.select(configuration.id, confirmingSendConsent: true)
@@ -106,25 +120,25 @@ final class AISettingsController: UITableViewController {
                 self.present(notice, animated: true)
             })
         }
-        choices.addAction(UIAlertAction(title: "取消", style: .cancel))
-        choices.popoverPresentationController?.barButtonItem = navigationItem.rightBarButtonItems?.last
+        choices.addAction(BookAlertAction(title: "取消", style: .cancel))
+        choices.bookPopover.barButtonItem = navigationItem.rightBarButtonItems?.last
         present(choices, animated: true)
     }
     private func showSwitchFailure(_ error: Error, configuration: AIConfiguration) {
         let failure = error as? AIError ?? .storage
-        let alert = UIAlertController(title: "切换未完成", message: failure.localizedDescription, preferredStyle: .alert)
+        let alert = BookAlertController(title: "切换未完成", message: failure.localizedDescription, preferredStyle: .alert)
         if failure.offersKeyReplacement {
-            alert.addAction(UIAlertAction(title: "重新填写 API Key", style: .default) { [weak self] _ in
+            alert.addAction(BookAlertAction(title: "重新填写 API Key", style: .default) { [weak self] _ in
                 self?.edit(configuration)
             })
         }
-        alert.addAction(UIAlertAction(title: "知道了", style: .cancel))
+        alert.addAction(BookAlertAction(title: "知道了", style: .cancel))
         present(alert, animated: true)
     }
     private func showResult(_ title: String, message: String? = nil) {
         load()
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "完成", style: .default))
+        let alert = BookAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(BookAlertAction(title: "完成", style: .default))
         present(alert, animated: true)
     }
     private func edit(_ configuration: AIConfiguration?) {
@@ -160,7 +174,9 @@ final class AIConfigurationController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = original == nil ? "添加服务" : "编辑服务"
-        BookDesign.table(tableView)
+        BookDesign.formTable(tableView)
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "ai-value")
+        tableView.register(AIFieldCell.self, forCellReuseIdentifier: "ai-field")
         tableView.accessibilityIdentifier = "ai-service-editor"
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: "取消", style: .plain, target: self, action: #selector(cancel))
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "保存", style: .done, target: self, action: #selector(save))
@@ -204,32 +220,51 @@ final class AIConfigurationController: UITableViewController {
         if section == 2 { return "检查仅发送固定短文字，可能产生费用；不会保存配置。" }
         return nil
     }
+    override func tableView(_ tableView: UITableView, willDisplayHeaderView view: UIView, forSection section: Int) {
+        BookDesign.formHeaderFooter(view)
+    }
+    override func tableView(_ tableView: UITableView, willDisplayFooterView view: UIView, forSection section: Int) {
+        BookDesign.formHeaderFooter(view)
+    }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-        cell.textLabel?.numberOfLines = 0; cell.detailTextLabel?.numberOfLines = 0
+        if indexPath.section == 0 && indexPath.row == 1 {
+            let cell = tableView.dequeueReusableCell(withIdentifier: "ai-field", for: indexPath) as! AIFieldCell
+            cell.configure(label: "API Key", field: key)
+            return cell
+        }
+        let cell = tableView.dequeueReusableCell(withIdentifier: "ai-value", for: indexPath)
         if indexPath.section == 0 {
             switch indexPath.row {
             case 0:
-                cell.textLabel?.text = "服务"; cell.detailTextLabel?.text = draft.name
-                cell.accessoryType = .disclosureIndicator; cell.accessibilityIdentifier = "ai-provider"
-            case 1: return aiFieldCell(label: "API Key", field: key)
+                configureAICell(cell, title: "服务", detail: draft.name, accessory: .disclosureIndicator)
+                cell.accessibilityIdentifier = "ai-provider"
             default:
-                cell.textLabel?.text = "模型"
-                cell.detailTextLabel?.text = draft.model.isEmpty ? "请在高级设置中填写" : draft.model
+                configureAICell(cell, title: "模型", detail: draft.model.isEmpty ? "请在高级设置中填写" : draft.model)
                 cell.accessibilityIdentifier = "ai-model-summary"; cell.selectionStyle = .none
             }
         } else if indexPath.section == 1 {
-            cell.textLabel?.text = "高级设置"; cell.accessoryType = .disclosureIndicator
+            configureAICell(cell, title: "高级设置", accessory: .disclosureIndicator)
             cell.accessibilityIdentifier = "ai-advanced"
         } else if indexPath.section == 2 {
-            cell.textLabel?.text = indexPath.row == 0 ? (checking ? "正在检查…" : "检查连接") : indexPath.row == 1 ? status : "重新填写 API Key"
-            cell.accessibilityIdentifier = indexPath.row == 0 ? "ai-check" : indexPath.row == 1 ? "ai-check-status" : "ai-replace-key"
-            cell.selectionStyle = indexPath.row == 1 ? .none : .default
-            if indexPath.row != 1 { cell.textLabel?.textColor = .systemBlue }
+            switch indexPath.row {
+            case 0:
+                configureAICell(cell, title: checking ? "正在检查…" : "检查连接", titleColour: BookDesign.lampInk)
+                cell.accessibilityIdentifier = "ai-check"
+            case 1:
+                configureAICell(cell, title: status, titleColour: BookDesign.ink2, titleFont: BookType.footnote)
+                cell.accessibilityIdentifier = "ai-check-status"; cell.selectionStyle = .none
+            default:
+                configureAICell(cell, title: "重新填写 API Key", titleColour: BookDesign.lampInk)
+                cell.accessibilityIdentifier = "ai-replace-key"
+            }
         } else {
-            cell.textLabel?.text = indexPath.row == 0 ? "使用此服务" : "删除服务"
-            cell.accessibilityIdentifier = indexPath.row == 0 ? "ai-select" : "ai-delete"
-            cell.textLabel?.textColor = indexPath.row == 0 ? .systemBlue : .systemRed
+            if indexPath.row == 0 {
+                configureAICell(cell, title: "使用此服务", titleColour: BookDesign.lampInk)
+                cell.accessibilityIdentifier = "ai-select"
+            } else {
+                configureAICell(cell, title: "删除服务", titleColour: BookDesign.error)
+                cell.accessibilityIdentifier = "ai-delete"
+            }
         }
         return cell
     }
@@ -250,15 +285,15 @@ final class AIConfigurationController: UITableViewController {
         else if indexPath.section == 3 && indexPath.row == 1 { remove() }
     }
     private func chooseProvider() {
-        let alert = UIAlertController(title: "服务", message: nil, preferredStyle: .actionSheet)
-        alert.addAction(UIAlertAction(title: "DeepSeek", style: .default) { [weak self] _ in
+        let alert = BookAlertController(title: "服务", message: nil, preferredStyle: .actionSheet)
+        alert.addAction(BookAlertAction(title: "DeepSeek", style: .default) { [weak self] _ in
             guard let self else { return }
             let preset = AIConfiguration.deepSeek
             self.draft.name = preset.name; self.draft.address = preset.address
             self.draft.format = preset.format; self.draft.model = preset.model; self.draft.provider = preset.provider
             self.edited(); self.tableView.reloadData()
         })
-        alert.addAction(UIAlertAction(title: "自定义服务", style: .default) { [weak self] _ in
+        alert.addAction(BookAlertAction(title: "自定义服务", style: .default) { [weak self] _ in
             guard let self else { return }
             if self.draft.provider == .deepSeek {
                 self.draft.name = "自定义服务"; self.draft.address = ""; self.draft.model = ""; self.draft.provider = .custom
@@ -266,8 +301,8 @@ final class AIConfigurationController: UITableViewController {
             self.draft.provider = .custom
             self.edited(); self.tableView.reloadData()
         })
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.popoverPresentationController?.sourceView = tableView.cellForRow(at: IndexPath(row: 0, section: 0)) ?? view
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.bookPopover.sourceView = tableView.cellForRow(at: IndexPath(row: 0, section: 0)) ?? view
         present(alert, animated: true)
     }
     @objc private func edited() {
@@ -308,15 +343,15 @@ final class AIConfigurationController: UITableViewController {
     }
     private func confirmSending(_ configuration: AIConfiguration, action: String, confirmed: @escaping () -> Void) {
         if store.hasSendConsent(for: configuration) { confirmed(); return }
-        let alert = UIAlertController(title: "AI 服务发送说明", message: AIPrivacyController.sendNotice(for: configuration), preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: action, style: .default) { _ in confirmed() })
+        let alert = BookAlertController(title: "AI 服务发送说明", message: AIPrivacyController.sendNotice(for: configuration), preferredStyle: .alert)
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.addAction(BookAlertAction(title: action, style: .default) { _ in confirmed() })
         present(alert, animated: true)
     }
     private func remove() {
-        let alert = UIAlertController(title: "删除此服务？", message: "不改写或删除对话历史。", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "删除", style: .destructive) { [weak self] _ in
+        let alert = BookAlertController(title: "删除此服务？", message: "不改写或删除对话历史。", preferredStyle: .alert)
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.addAction(BookAlertAction(title: "删除", style: .destructive) { [weak self] _ in
             guard let self else { return }
             do { try self.store.remove(self.draft.id); self.finish("已删除服务") }
             catch { self.show(error) }
@@ -364,33 +399,90 @@ final class AIConfigurationController: UITableViewController {
     }
     private func show(_ error: Error) {
         let failure = error as? AIError ?? .storage
-        let alert = UIAlertController(title: "操作未完成", message: failure.localizedDescription, preferredStyle: .alert)
+        let alert = BookAlertController(title: "操作未完成", message: failure.localizedDescription, preferredStyle: .alert)
         if failure.offersKeyReplacement {
-            alert.addAction(UIAlertAction(title: "重新填写 API Key", style: .default) { [weak self] _ in self?.replaceKey() })
+            alert.addAction(BookAlertAction(title: "重新填写 API Key", style: .default) { [weak self] _ in self?.replaceKey() })
         }
-        alert.addAction(UIAlertAction(title: "知道了", style: .cancel))
+        alert.addAction(BookAlertAction(title: "知道了", style: .cancel))
         present(alert, animated: true)
     }
 }
 
-private func aiFieldCell(label: String, field: UITextField) -> UITableViewCell {
-    let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-    cell.selectionStyle = .none
-    let title = UILabel()
-    title.text = label; title.font = .preferredFont(forTextStyle: .subheadline)
-    title.adjustsFontForContentSizeCategory = true; title.numberOfLines = 0
-    title.accessibilityIdentifier = (field.accessibilityIdentifier ?? "ai-field") + "-label"
-    let stack = UIStackView(arrangedSubviews: [title, field])
-    stack.axis = .vertical; stack.spacing = 6; stack.translatesAutoresizingMaskIntoConstraints = false
-    cell.contentView.addSubview(stack)
-    NSLayoutConstraint.activate([
-        stack.leadingAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.leadingAnchor),
-        stack.trailingAnchor.constraint(equalTo: cell.contentView.layoutMarginsGuide.trailingAnchor),
-        stack.topAnchor.constraint(equalTo: cell.contentView.topAnchor, constant: 12),
-        stack.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor, constant: -12),
-        field.heightAnchor.constraint(greaterThanOrEqualToConstant: 32)
-    ])
-    return cell
+/// 纸墨表单文本行：系统 UIListContentConfiguration 承载标题/副标题，保留原有标识符与配色。
+private func configureAICell(
+    _ cell: UITableViewCell,
+    title: String,
+    detail: String? = nil,
+    accessory: UITableViewCell.AccessoryType = .none,
+    titleColour: UIColor = BookDesign.ink,
+    titleFont: UIFont = BookType.body
+) {
+    var content = detail == nil ? UIListContentConfiguration.cell() : UIListContentConfiguration.subtitleCell()
+    content.text = title
+    content.textProperties.font = titleFont
+    content.textProperties.color = titleColour
+    content.textProperties.numberOfLines = 0
+    content.textProperties.adjustsFontForContentSizeCategory = true
+    if let detail {
+        content.secondaryText = detail
+        content.secondaryTextProperties.font = BookType.footnote
+        content.secondaryTextProperties.color = BookDesign.ink3
+        content.secondaryTextProperties.numberOfLines = 0
+        content.secondaryTextProperties.adjustsFontForContentSizeCategory = true
+    }
+    cell.contentConfiguration = content
+    cell.backgroundColor = BookDesign.surface
+    cell.accessoryType = accessory
+    cell.tintColor = accessory == .checkmark ? BookDesign.lamp : BookDesign.ink3
+    cell.selectionStyle = .default
+}
+
+/// 内嵌 UITextField 的表单行（API Key / 高级设置）。输入框由控制器持有，复用时移动进当前 cell。
+private final class AIFieldCell: UITableViewCell {
+    private let title = UILabel()
+    private let stack = UIStackView()
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        backgroundColor = BookDesign.surface
+        selectionStyle = .none
+        title.font = BookType.subhead
+        title.textColor = BookDesign.ink2
+        title.adjustsFontForContentSizeCategory = true
+        title.numberOfLines = 0
+        stack.axis = .vertical
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(title)
+        contentView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func configure(label: String, field: UITextField) {
+        title.text = label
+        title.accessibilityIdentifier = (field.accessibilityIdentifier ?? "ai-field") + "-label"
+        guard field.superview !== stack else { return }
+        for view in stack.arrangedSubviews where view !== title && view !== field {
+            view.removeFromSuperview()
+        }
+        field.textColor = BookDesign.ink
+        field.backgroundColor = BookDesign.paperDeep
+        field.layer.cornerRadius = BookRadius.field
+        field.borderStyle = .none
+        field.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 10, height: 1))
+        field.leftViewMode = .always
+        field.rightView = UIView(frame: CGRect(x: 0, y: 0, width: 10, height: 1))
+        field.rightViewMode = .always
+        stack.addArrangedSubview(field)
+        field.heightAnchor.constraint(greaterThanOrEqualToConstant: 32).isActive = true
+    }
 }
 
 private final class AIAdvancedController: UITableViewController {
@@ -405,7 +497,9 @@ private final class AIAdvancedController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "高级设置"
-        BookDesign.table(tableView)
+        BookDesign.formTable(tableView)
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "ai-value")
+        tableView.register(AIFieldCell.self, forCellReuseIdentifier: "ai-field")
         tableView.accessibilityIdentifier = "ai-advanced-editor"
         tableView.keyboardDismissMode = .onDrag
         for (field, label, value, id) in [
@@ -427,26 +521,31 @@ private final class AIAdvancedController: UITableViewController {
     }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         if indexPath.row < 3 {
-            return aiFieldCell(label: ["服务名称", "地址", "自定义模型"][indexPath.row], field: [name, address, model][indexPath.row])
+            let cell = tableView.dequeueReusableCell(withIdentifier: "ai-field", for: indexPath) as! AIFieldCell
+            cell.configure(
+                label: ["服务名称", "地址", "自定义模型"][indexPath.row],
+                field: [name, address, model][indexPath.row]
+            )
+            return cell
         }
-        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-        cell.textLabel?.text = "接口格式"; cell.detailTextLabel?.text = draft.format.rawValue
-        cell.accessoryType = .disclosureIndicator; cell.accessibilityIdentifier = "ai-format"
+        let cell = tableView.dequeueReusableCell(withIdentifier: "ai-value", for: indexPath)
+        configureAICell(cell, title: "接口格式", detail: draft.format.rawValue, accessory: .disclosureIndicator)
+        cell.accessibilityIdentifier = "ai-format"
         return cell
     }
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         guard indexPath.row == 3 else { return }
         view.endEditing(true)
-        let alert = UIAlertController(title: "接口格式", message: "仅支持非流式文字请求", preferredStyle: .actionSheet)
+        let alert = BookAlertController(title: "接口格式", message: "仅支持非流式文字请求", preferredStyle: .actionSheet)
         for format in AIFormat.allCases {
-            alert.addAction(UIAlertAction(title: format.rawValue, style: .default) { [weak self] _ in
+            alert.addAction(BookAlertAction(title: format.rawValue, style: .default) { [weak self] _ in
                 guard let self else { return }
                 self.draft.format = format; self.changed(self.draft); self.tableView.reloadRows(at: [indexPath], with: .none)
             })
         }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.popoverPresentationController?.sourceView = tableView.cellForRow(at: indexPath) ?? view
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.bookPopover.sourceView = tableView.cellForRow(at: indexPath) ?? view
         present(alert, animated: true)
     }
     @objc private func edited() {

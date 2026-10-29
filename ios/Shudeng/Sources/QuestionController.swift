@@ -4,7 +4,7 @@ import ReadiumShared
 @MainActor
 enum QuestionSheetPresentation {
     static let heightFraction: CGFloat = 0.76
-    static let cornerRadius: CGFloat = 23
+    static let cornerRadius: CGFloat = 22
 
     static func configure(_ navigation: UINavigationController) {
         navigation.modalPresentationStyle = .pageSheet
@@ -15,11 +15,13 @@ enum QuestionSheetPresentation {
                     context.maximumDetentValue,
                     UIScreen.main.bounds.height * heightFraction
                 )
-            }
+            },
+            .large()
         ]
         sheet.prefersGrabberVisible = false
         sheet.preferredCornerRadius = cornerRadius
-        sheet.prefersScrollingExpandsWhenScrolledToEdge = false
+        // 向上拖动内容或把手可展开到全屏。
+        sheet.prefersScrollingExpandsWhenScrolledToEdge = true
     }
 }
 
@@ -32,27 +34,38 @@ private final class QuestionSheetHeader: UIView {
         accessibilityIdentifier = "question-sheet-header"
 
         let handle = UIView()
-        handle.backgroundColor = BookDesign.secondary
-        handle.alpha = 0.45
+        handle.backgroundColor = BookDesign.ink3
+        handle.alpha = 0.35
         handle.layer.cornerRadius = 2
         handle.accessibilityIdentifier = "question-sheet-handle"
         handle.isAccessibilityElement = true
         handle.accessibilityLabel = "问答面板把手"
 
-        let lamp = UIImageView(image: BookDesign.symbol("lightbulb", size: 22))
+        let mark = UIView()
+        mark.backgroundColor = BookDesign.lampWash
+        mark.layer.cornerRadius = 15
+        mark.isAccessibilityElement = false
+        let lamp = UIImageView(image: BookDesign.symbol("lightbulb", size: 15, weight: .medium))
         lamp.contentMode = .scaleAspectFit
-        lamp.tintColor = BookDesign.ink
-        lamp.setContentHuggingPriority(.required, for: .horizontal)
-        lamp.widthAnchor.constraint(equalToConstant: 25).isActive = true
-        lamp.heightAnchor.constraint(equalToConstant: 25).isActive = true
+        lamp.tintColor = BookDesign.lamp
+        lamp.translatesAutoresizingMaskIntoConstraints = false
+        mark.addSubview(lamp)
+        mark.setContentHuggingPriority(.required, for: .horizontal)
+        mark.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        mark.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        mark.accessibilityIdentifier = "question-sheet-mark"
+        NSLayoutConstraint.activate([
+            lamp.centerXAnchor.constraint(equalTo: mark.centerXAnchor),
+            lamp.centerYAnchor.constraint(equalTo: mark.centerYAnchor)
+        ])
 
-        let title = BookDesign.label("问问书灯", size: 17, weight: .semibold, style: .headline)
-        let brand = UIStackView(arrangedSubviews: [lamp, title, UIView()])
+        let title = BookDesign.label("问问书灯", font: BookType.serif(16, weight: .semibold, style: .headline))
+        let brand = UIStackView(arrangedSubviews: [mark, title, UIView()])
         brand.spacing = 8
         brand.alignment = .center
 
-        close.setImage(BookDesign.symbol("xmark", size: 18), for: .normal)
-        close.tintColor = BookDesign.ink
+        close.setImage(BookDesign.symbol("xmark", size: 15, weight: .medium), for: .normal)
+        close.tintColor = BookDesign.ink2
         close.accessibilityLabel = "收起问答，继续阅读"
         close.accessibilityIdentifier = "question-close"
         close.addAction(UIAction { [weak self] _ in self?.onClose?() }, for: .touchUpInside)
@@ -172,27 +185,27 @@ final class QuestionController: UIViewController, UITextViewDelegate {
 
         input.font = BookDesign.font(14); input.adjustsFontForContentSizeCategory = true
         input.textColor = BookDesign.ink; input.backgroundColor = .clear
-        input.textContainerInset = .init(top: 8, left: 8, bottom: 8, right: 4)
+        input.textContainerInset = .init(top: 10, left: 6, bottom: 8, right: 4)
         input.accessibilityIdentifier = "question-input"; input.accessibilityLabel = "问题"; input.delegate = self
         input.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        placeholder.font = BookType.sans(13, weight: .regular, style: .subheadline)
         placeholder.isUserInteractionEnabled = false
         input.addSubview(placeholder); placeholder.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([placeholder.topAnchor.constraint(equalTo: input.topAnchor, constant: 9),
                                      placeholder.leadingAnchor.constraint(equalTo: input.leadingAnchor, constant: 11)])
         var sendConfiguration = UIButton.Configuration.filled()
-        sendConfiguration.image = BookDesign.symbol("arrow.up", size: 18)
+        sendConfiguration.image = BookDesign.symbol("arrow.up", size: 16, weight: .semibold)
         sendConfiguration.baseBackgroundColor = BookDesign.ink
         sendConfiguration.baseForegroundColor = BookDesign.paper
-        sendConfiguration.background.cornerRadius = 13
+        sendConfiguration.background.cornerRadius = 17
         send.configuration = sendConfiguration
         send.accessibilityIdentifier = "question-send"; send.addTarget(self, action: #selector(sendQuestion), for: .touchUpInside)
-        send.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        send.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        send.widthAnchor.constraint(equalToConstant: 34).isActive = true
+        send.heightAnchor.constraint(equalToConstant: 34).isActive = true
         let field = UIStackView(arrangedSubviews: [input, send]); field.alignment = .center; field.spacing = 6
         field.accessibilityIdentifier = "question-composer-field"
-        field.backgroundColor = BookDesign.wash; field.layer.cornerRadius = 16; field.layer.borderWidth = 1
-        field.layer.borderColor = BookDesign.line.cgColor
-        field.isLayoutMarginsRelativeArrangement = true; field.layoutMargins = .init(top: 6, left: 6, bottom: 6, right: 6)
+        field.backgroundColor = BookDesign.paperDeep; field.layer.cornerRadius = BookRadius.pill
+        field.isLayoutMarginsRelativeArrangement = true; field.layoutMargins = .init(top: 5, left: 12, bottom: 5, right: 5)
         BookDesign.button(cancel, title: "取消生成"); cancel.addTarget(self, action: #selector(cancelQuestion), for: .touchUpInside)
         BookDesign.button(retry, title: "重试保存"); retry.addTarget(self, action: #selector(retrySave), for: .touchUpInside)
         var moreConfiguration = UIButton.Configuration.plain()
@@ -338,26 +351,24 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         let question = UILabel()
         question.numberOfLines = 0
         question.adjustsFontForContentSizeCategory = true
-        question.font = BookDesign.font(15)
+        question.font = BookType.body
         question.textColor = BookDesign.ink
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 4
         question.attributedText = NSAttributedString(
             string: turn.question,
-            attributes: [.font: BookDesign.font(15), .foregroundColor: BookDesign.ink, .paragraphStyle: paragraph]
+            attributes: [.font: BookType.body, .foregroundColor: BookDesign.ink, .paragraphStyle: paragraph]
         )
         question.accessibilityIdentifier = "question-user-\(turn.id)"
         question.accessibilityLabel = "你的提问，" + turn.question
 
         let bubble = UIStackView(); bubble.axis = .vertical; bubble.spacing = 8
         bubble.accessibilityIdentifier = "question-user-bubble-\(turn.id)"
-        bubble.backgroundColor = BookDesign.wash
-        bubble.layer.cornerRadius = 16
-        bubble.layer.borderWidth = 1
-        bubble.layer.borderColor = BookDesign.line.cgColor
+        bubble.backgroundColor = BookDesign.paperDeep
+        bubble.layer.cornerRadius = BookRadius.card
         bubble.layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         bubble.isLayoutMarginsRelativeArrangement = true
-        bubble.layoutMargins = .init(top: 12, left: 15, bottom: 12, right: 15)
+        bubble.layoutMargins = .init(top: 10, left: 12, bottom: 10, right: 12)
         if turn.freeQuestion != true {
             let attachment = UIButton(type: .system)
             var attachmentConfiguration = UIButton.Configuration.plain()
@@ -383,9 +394,8 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             if expanded.contains(turn.id) {
                 let quoteText = (turn.selectionParts ?? [turn.selection]).map(\.quote).joined(separator: "\n")
                 let quoteBox = UIView()
-                let rule = UIView(); rule.backgroundColor = BookDesign.line
-                let text = BookDesign.label(quoteText, size: 13, colour: BookDesign.secondary)
-                text.font = BookDesign.readingFont(13)
+                let rule = UIView(); rule.backgroundColor = BookDesign.lamp
+                let text = BookDesign.label(quoteText, font: BookType.serif(13, weight: .regular, style: .footnote), colour: BookDesign.ink2)
                 text.accessibilityIdentifier = "question-selection-\(turn.id)"
                 for child in [rule, text] {
                     child.translatesAutoresizingMaskIntoConstraints = false
@@ -415,15 +425,15 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         ])
         messages.addArrangedSubview(row)
 
-        let identity = BookDesign.label("书灯 · AI", size: 13, weight: .medium)
+        let identity = BookDesign.label("书灯 · AI", font: BookType.caption, colour: BookDesign.ink2)
         identity.accessibilityIdentifier = "question-ai-identity-\(turn.id)"
-        let lamp = UIImageView(image: BookDesign.symbol("lightbulb", size: 17))
+        let lamp = UIImageView(image: BookDesign.symbol("lightbulb", size: 13, weight: .medium))
         lamp.tintColor = BookDesign.lamp
         lamp.contentMode = .scaleAspectFit
-        lamp.backgroundColor = BookDesign.glow
-        lamp.layer.cornerRadius = 12.5
-        lamp.widthAnchor.constraint(equalToConstant: 25).isActive = true
-        lamp.heightAnchor.constraint(equalToConstant: 25).isActive = true
+        lamp.backgroundColor = BookDesign.lampWash
+        lamp.layer.cornerRadius = 9
+        lamp.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        lamp.heightAnchor.constraint(equalToConstant: 18).isActive = true
         let heading = UIStackView(arrangedSubviews: [lamp, identity, UIView()])
         heading.spacing = 7
         heading.alignment = .center
@@ -432,10 +442,10 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             self?.open(evidence, origin: turn)
         }
         body.textContainerInset = .zero; body.textContainer.lineFragmentPadding = 0
-        body.font = BookDesign.font(15); body.adjustsFontForContentSizeCategory = true; body.textColor = BookDesign.ink
+        body.font = BookType.body; body.adjustsFontForContentSizeCategory = true; body.textColor = BookDesign.ink
         body.isHidden = turn.answer.isEmpty
         body.accessibilityIdentifier = latest ? "question-answer" : "question-answer-\(turn.id)"
-        let reply = UIStackView(arrangedSubviews: [heading, body]); reply.axis = .vertical; reply.spacing = 12
+        let reply = UIStackView(arrangedSubviews: [heading, body]); reply.axis = .vertical; reply.spacing = 9
         for (index, evidence) in turn.citations.enumerated() {
             let button = UIButton(type: .system)
             var configuration = UIButton.Configuration.plain()
@@ -445,14 +455,12 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             configuration.imagePadding = 8
             configuration.titleAlignment = .leading
             configuration.baseForegroundColor = BookDesign.ink
-            configuration.background.backgroundColor = BookDesign.paper
-            configuration.background.cornerRadius = 12
-            configuration.background.strokeColor = BookDesign.line
-            configuration.background.strokeWidth = 1
-            configuration.contentInsets = .init(top: 13, leading: 12, bottom: 13, trailing: 12)
+            configuration.background.backgroundColor = BookDesign.surface
+            configuration.background.cornerRadius = BookRadius.field
+            configuration.contentInsets = .init(top: 11, leading: 12, bottom: 11, trailing: 12)
             configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
                 var outgoing = incoming
-                outgoing.font = BookDesign.font(12, style: .footnote)
+                outgoing.font = BookType.footnote
                 return outgoing
             }
             button.configuration = configuration
@@ -549,42 +557,42 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             let ready = library.preparation.states[record.bookID]?.ready == true
             let continuing = (record.turnIndex ?? 0) > 0
             if continuing && !ready {
-                let alert = UIAlertController(title: "资料尚未准备完整", message: "追问需要重新查书，请等待资料准备；草稿已保留。", preferredStyle: .alert)
-                alert.addAction(UIAlertAction(title: "等待资料准备", style: .cancel)); present(alert, animated: true); return
+                let alert = BookAlertController(title: "资料尚未准备完整", message: "追问需要重新查书，请等待资料准备；草稿已保留。", preferredStyle: .alert)
+                alert.addAction(BookAlertAction(title: "等待资料准备", style: .cancel)); present(alert, animated: true); return
             }
             if ready {
                 library.questions.send(id, library: library, local: false)
                 return
             }
             let free = record.freeQuestion == true
-            let alert = UIAlertController(
+            let alert = BookAlertController(
                 title: "资料尚未准备完整",
                 message: "可以继续等待，或先用本次\(free ? "已准备资料" : "选文")解释。",
                 preferredStyle: .alert
             )
-            alert.addAction(UIAlertAction(title: free ? "仅用已准备资料解释" : "仅用选文解释", style: .default) { [weak self] _ in
+            alert.addAction(BookAlertAction(title: free ? "仅用已准备资料解释" : "仅用选文解释", style: .default) { [weak self] _ in
                 guard let self else { return }
                 self.library.questions.send(self.id, library: self.library, local: true)
             })
-            alert.addAction(UIAlertAction(title: "等待资料准备", style: .cancel))
+            alert.addAction(BookAlertAction(title: "等待资料准备", style: .cancel))
             present(alert, animated: true)
         } catch let error as AIError {
-            let alert = UIAlertController(
+            let alert = BookAlertController(
                 title: error == .consentRequired ? "先确认发送说明" : "AI 服务需要处理",
                 message: error.errorDescription,
                 preferredStyle: .alert
             )
-            alert.addAction(UIAlertAction(title: "去 AI 服务", style: .default) { [weak self] _ in
+            alert.addAction(BookAlertAction(title: "去 AI 服务", style: .default) { [weak self] _ in
                 self?.openAISettings()
             })
-            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+            alert.addAction(BookAlertAction(title: "取消", style: .cancel))
             present(alert, animated: true)
         } catch {
-            let alert = UIAlertController(title: "尚未发送", message: error.localizedDescription, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "去 AI 服务", style: .default) { [weak self] _ in
+            let alert = BookAlertController(title: "尚未发送", message: error.localizedDescription, preferredStyle: .alert)
+            alert.addAction(BookAlertAction(title: "去 AI 服务", style: .default) { [weak self] _ in
                 self?.openAISettings()
             })
-            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+            alert.addAction(BookAlertAction(title: "取消", style: .cancel))
             present(alert, animated: true)
         }
     }
@@ -593,8 +601,8 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         input.resignFirstResponder(); returningFromReference = true
         if let jump { dismiss(animated: true) { jump(target, origin) }; return }
         guard let book = library.books.first(where: { $0.id == record.bookID }), library.sourceAvailable(for: record.bookID) else {
-            let alert = UIAlertController(title: "原文不可用", message: "引用文字仍可回看；重新导入相同文件后可定位原书。", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "知道了", style: .default)); present(alert, animated: true); return
+            let alert = BookAlertController(title: "原文不可用", message: "引用文字仍可回看；重新导入相同文件后可定位原书。", preferredStyle: .alert)
+            alert.addAction(BookAlertAction(title: "知道了", style: .default)); present(alert, animated: true); return
         }
         Task {
             do {
@@ -604,8 +612,8 @@ final class QuestionController: UIViewController, UITextViewDelegate {
                 reader.questionOrigin = origin; reader.modalPresentationStyle = .fullScreen
                 present(reader, animated: true)
             } catch {
-                let alert = UIAlertController(title: "原文不可用", message: "引用文字已保留，未能打开原书。", preferredStyle: .alert)
-                alert.addAction(UIAlertAction(title: "知道了", style: .default)); present(alert, animated: true)
+                let alert = BookAlertController(title: "原文不可用", message: "引用文字已保留，未能打开原书。", preferredStyle: .alert)
+                alert.addAction(BookAlertAction(title: "知道了", style: .default)); present(alert, animated: true)
             }
         }
     }
@@ -620,8 +628,10 @@ final class QuestionController: UIViewController, UITextViewDelegate {
 private final class QuestionSkeletonView: UIView {
     init(identifier: String) {
         super.init(frame: .zero)
+        isAccessibilityElement = true
         accessibilityIdentifier = identifier
         accessibilityLabel = "书灯正在组织回答"
+        accessibilityTraits = .updatesFrequently
         let widths: [CGFloat] = [0.82, 1.0, 0.62]
         let bars = widths.map { _ -> UIView in
             let bar = UIView()
@@ -697,12 +707,16 @@ final class EvidenceController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad(); title = "原文材料"
         BookDesign.table(tableView)
+        tableView.register(EvidenceRecordCell.self, forCellReuseIdentifier: "evidence-record")
         if jump != nil { navigationItem.rightBarButtonItem = UIBarButtonItem(title: "跳转原文", style: .plain, target: self, action: #selector(go)) }
     }
     @objc private func go() { jump?() }
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { values.count }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let value = values[indexPath.row], cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        guard let cell = tableView.dequeueReusableCell(withIdentifier: "evidence-record", for: indexPath) as? EvidenceRecordCell else {
+            return UITableViewCell()
+        }
+        let value = values[indexPath.row]
         cell.textLabel?.text = "\(value.id) · \(value.chapter)\n\(value.quote)"
         cell.detailTextLabel?.text = value.context
         cell.textLabel?.numberOfLines = 0; cell.detailTextLabel?.numberOfLines = 0
@@ -714,8 +728,16 @@ final class EvidenceController: UITableViewController {
     }
 }
 
+private final class EvidenceRecordCell: UITableViewCell {
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: .subtitle, reuseIdentifier: reuseIdentifier)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+}
+
 @MainActor
-final class QuestionHistoryController: UITableViewController {
+final class QuestionHistoryController: UIViewController, UICollectionViewDelegate, UISearchControllerDelegate, UISearchResultsUpdating {
     private struct Section {
         let book: Book?
         let bookID: String
@@ -723,18 +745,39 @@ final class QuestionHistoryController: UITableViewController {
         let conversations: [ReadingConversation]
     }
 
+    private enum SectionID: Hashable { case book(String) }
+    private enum ItemID: Hashable {
+        case header(String)
+        case record(UUID)
+    }
+
     private let library: LibraryStore
     private let covers = BookCoverStore()
-    private let pageHeader = ConversationsPageHeader()
+    private let thumbnails = BookThumbnailStore()
     private let groupState: BookGroupListState
+    private let searchController = UISearchController(searchResultsController: nil)
+    private var offsetBeforeSearch: CGPoint?
     private var sections: [Section] = []
+    private var appliedSectionIDs: [SectionID] = []
     private var query = ""
     private var observers: [NSObjectProtocol] = []
+    private(set) var collectionView: UICollectionView!
+    private lazy var dataSource = makeDataSource()
+    private lazy var headerRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, ItemID> {
+        [weak self] cell, _, item in
+        guard let self, case let .header(bookID) = item else { return }
+        self.configure(header: cell, bookID: bookID)
+    }
+    private lazy var recordRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, ItemID> {
+        [weak self] cell, indexPath, item in
+        guard let self, case let .record(conversationID) = item else { return }
+        self.configure(record: cell, indexPath: indexPath, conversationID: conversationID)
+    }
 
     init(library: LibraryStore) {
         self.library = library
         groupState = BookGroupListState(root: library.root, page: "conversations")
-        super.init(style: .plain)
+        super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -746,24 +789,27 @@ final class QuestionHistoryController: UITableViewController {
         view.backgroundColor = BookDesign.paper
         view.accessibilityIdentifier = "conversations-surface"
 
-        tableView.backgroundColor = BookDesign.paper
-        tableView.separatorStyle = .none
-        tableView.rowHeight = UITableView.automaticDimension
-        tableView.estimatedRowHeight = 132
-        tableView.estimatedSectionHeaderHeight = 53
-        tableView.keyboardDismissMode = .onDrag
-        tableView.sectionHeaderTopPadding = 0
-        tableView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 24, right: 0)
-        tableView.accessibilityIdentifier = "question-history"
-        tableView.register(ConversationRecordCell.self, forCellReuseIdentifier: "conversation-record")
-
-        pageHeader.onSearch = { [weak self] text in
-            guard let self else { return }
-            rememberScroll()
-            query = text
-            reload()
+        navigationItem.largeTitleDisplayMode = .always
+        BookDesign.applyListPageNavigationAppearance(to: navigationItem)
+        searchController.searchResultsUpdater = self
+        searchController.delegate = self
+        searchController.obscuresBackgroundDuringPresentation = false
+        searchController.searchBar.placeholder = "搜索你的问题"
+        searchController.searchBar.searchTextField.accessibilityIdentifier = "conversation-search"
+        searchController.searchBar.searchTextField.font = BookType.body
+        searchController.searchBar.tintColor = BookDesign.lamp
+        searchController.searchBar.searchTextField.textColor = BookDesign.ink
+        navigationItem.searchController = searchController
+        navigationItem.hidesSearchBarWhenScrolling = false
+        if #available(iOS 16.0, *) {
+            // iOS 26 默认把搜索栏放到底部 integrated 位置；固定为 stacked，保持搜索在标题下方。
+            navigationItem.preferredSearchBarPlacement = .stacked
         }
-        tableView.tableHeaderView = pageHeader
+        definesPresentationContext = true
+
+        configureCollectionView()
+        installCollectionView()
+        registerForDynamicTypeChanges()
 
         let questions = NotificationCenter.default.addObserver(
             forName: QuestionStore.changed,
@@ -785,14 +831,14 @@ final class QuestionHistoryController: UITableViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        navigationController?.setNavigationBarHidden(true, animated: false)
+        navigationController?.setNavigationBarHidden(false, animated: false)
+        navigationController?.navigationBar.prefersLargeTitles = true
         reload()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        layoutPageHeader()
-        groupState.restoreScroll(in: tableView)
+        groupState.restoreScroll(in: collectionView)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -800,11 +846,11 @@ final class QuestionHistoryController: UITableViewController {
         rememberScroll()
     }
 
-    override func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate { rememberScroll() }
     }
 
-    override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         rememberScroll()
     }
 
@@ -813,26 +859,130 @@ final class QuestionHistoryController: UITableViewController {
     }
 
     private func rememberScroll() {
-        if !searching { groupState.rememberScroll(in: tableView) }
+        if !searching { groupState.rememberScroll(in: collectionView) }
     }
 
-    private func layoutPageHeader() {
-        let width = max(view.bounds.width, 320)
-        let size = pageHeader.systemLayoutSizeFitting(
-            CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
-            withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel
-        )
-        let frame = CGRect(origin: .zero, size: CGSize(width: width, height: ceil(size.height)))
-        guard pageHeader.frame != frame else { return }
-        pageHeader.frame = frame
-        tableView.tableHeaderView = pageHeader
+    private func registerForDynamicTypeChanges() {
+        if #available(iOS 17.0, *) {
+            registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) {
+                (self: QuestionHistoryController, _: UITraitCollection) in
+                self.reconfigureListFonts()
+            }
+        }
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard #unavailable(iOS 17.0) else { return }
+        if previousTraitCollection?.preferredContentSizeCategory != traitCollection.preferredContentSizeCategory {
+            reconfigureListFonts()
+        }
+    }
+
+    /// 字号变化后重配可见 cell：BookType 字体是一次性 UIFontMetrics 缩放的，不随 Dynamic Type 自动更新。
+    private func reconfigureListFonts() {
+        for cell in collectionView.visibleCells {
+            guard let listCell = cell as? UICollectionViewListCell,
+                  let indexPath = collectionView.indexPath(for: cell),
+                  let item = dataSource.itemIdentifier(for: indexPath) else { continue }
+            switch item {
+            case let .header(bookID):
+                configure(header: listCell, bookID: bookID)
+            case let .record(conversationID):
+                configure(record: listCell, indexPath: indexPath, conversationID: conversationID)
+            }
+        }
+    }
+
+    private func configureCollectionView() {
+        var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
+        configuration.headerMode = .firstItemInSection
+        configuration.headerTopPadding = 12
+        configuration.showsSeparators = true
+        configuration.backgroundColor = BookDesign.paper
+        configuration.separatorConfiguration.color = BookDesign.line
+        configuration.trailingSwipeActionsConfigurationProvider = { [weak self] indexPath in
+            self?.swipeActions(at: indexPath)
+        }
+        let layout = UICollectionViewCompositionalLayout.list(using: configuration)
+
+        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        collectionView.backgroundColor = BookDesign.paper
+        collectionView.keyboardDismissMode = .onDrag
+        collectionView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 24, right: 0)
+        collectionView.accessibilityIdentifier = "question-history"
+        collectionView.delegate = self
+        self.collectionView = collectionView
+        // UIKit 禁止在 cell provider 内首次创建 CellRegistration；在设置 dataSource 前先求值。
+        _ = headerRegistration
+        _ = recordRegistration
+        collectionView.dataSource = dataSource
+    }
+
+    private func installCollectionView() {
+        collectionView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(collectionView)
+        NSLayoutConstraint.activate([
+            collectionView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+    }
+
+    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionID, ItemID> {
+        let dataSource = UICollectionViewDiffableDataSource<SectionID, ItemID>(collectionView: collectionView) {
+            [weak self] collectionView, indexPath, item in
+            guard let self else { return nil }
+            switch item {
+            case .header:
+                return collectionView.dequeueConfiguredReusableCell(
+                    using: self.headerRegistration,
+                    for: indexPath,
+                    item: item
+                )
+            case .record:
+                return collectionView.dequeueConfiguredReusableCell(
+                    using: self.recordRegistration,
+                    for: indexPath,
+                    item: item
+                )
+            }
+        }
+        return dataSource
+    }
+
+    /// 供单元测试与程序化展开／收起：与分组头轻点走同一路径。
+    func toggleGroup(bookID: String) {
+        guard !searching else { return }
+        let sectionID = SectionID.book(bookID)
+        let header = ItemID.header(bookID)
+        var snapshot = dataSource.snapshot(for: sectionID)
+        guard snapshot.contains(header) else { return }
+        let wasExpanded = snapshot.isExpanded(header)
+        if wasExpanded {
+            snapshot.collapse([header])
+        } else {
+            snapshot.expand([header])
+        }
+        groupState.setExpanded(!wasExpanded, for: bookID)
+        dataSource.apply(snapshot, to: sectionID, animatingDifferences: !UIAccessibility.isReduceMotionEnabled) {
+            [weak self] in
+            self?.updateHeaderAccessibility(bookID: bookID)
+            self?.rememberScroll()
+        }
+    }
+
+    private func updateHeaderAccessibility(bookID: String) {
+        guard let indexPath = dataSource.indexPath(for: ItemID.header(bookID)),
+              let cell = collectionView.cellForItem(at: indexPath) as? UICollectionViewListCell else { return }
+        cell.accessibilityValue = groupState.isExpanded(bookID, searching: searching) ? "已展开" : "已收起"
     }
 
     private func reload() {
         guard !library.questions.loadFailed else {
             sections = []
-            tableView.reloadData()
+            applySnapshots(animated: false)
             updateBackground()
             return
         }
@@ -850,8 +1000,28 @@ final class QuestionHistoryController: UITableViewController {
                 conversations: conversations.sorted { $0.updated > $1.updated }
             )
         }.sorted { $0.conversations[0].updated > $1.conversations[0].updated }
-        groupState.reload(tableView)
+        applySnapshots(animated: false)
         updateBackground()
+    }
+
+    private func applySnapshots(animated: Bool) {
+        let sectionIDs = sections.map { SectionID.book($0.bookID) }
+        if sectionIDs != appliedSectionIDs {
+            var snapshot = NSDiffableDataSourceSnapshot<SectionID, ItemID>()
+            snapshot.appendSections(sectionIDs)
+            dataSource.apply(snapshot, animatingDifferences: animated)
+            appliedSectionIDs = sectionIDs
+        }
+        for (index, section) in sections.enumerated() {
+            let header = ItemID.header(section.bookID)
+            var snapshot = NSDiffableDataSourceSectionSnapshot<ItemID>()
+            snapshot.append([header])
+            snapshot.append(section.conversations.map { ItemID.record($0.id) }, to: header)
+            if groupState.isExpanded(section.bookID, searching: searching) {
+                snapshot.expand([header])
+            }
+            dataSource.apply(snapshot, to: sectionIDs[index], animatingDifferences: animated)
+        }
     }
 
     private func matches(_ conversation: ReadingConversation, needle: String) -> Bool {
@@ -862,45 +1032,94 @@ final class QuestionHistoryController: UITableViewController {
 
     private func updateBackground() {
         guard sections.isEmpty else {
-            tableView.backgroundView = nil
+            collectionView.backgroundView = nil
+            if #available(iOS 17.0, *) { contentUnavailableConfiguration = nil }
             return
         }
-        let empty: ConversationsEmptyView
+        let symbol: String
+        let title: String
+        let detail: String
+        let actionTitle: String
+        let action: () -> Void
         if library.questions.loadFailed {
-            empty = ConversationsEmptyView(
-                symbol: "exclamationmark.triangle",
-                title: "对话读取失败",
-                detail: "原记录未被覆盖。检查储存空间后重试。",
-                actionTitle: "重试"
-            )
-            empty.onAction = { [weak self] in
+            symbol = "exclamationmark.triangle"
+            title = "对话读取失败"
+            detail = "原记录未被覆盖。检查储存空间后重试。"
+            actionTitle = "重试"
+            action = { [weak self] in
                 guard let self else { return }
-                library.questions.load()
-                reload()
+                self.library.questions.load()
+                self.reload()
             }
         } else if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            empty = ConversationsEmptyView(
-                symbol: "magnifyingglass",
-                title: "没有找到相关对话",
-                detail: "换一个关键词，或清除搜索查看全部记录。",
-                actionTitle: "清除搜索"
-            )
-            empty.onAction = { [weak self] in
+            symbol = "magnifyingglass"
+            title = "没有找到相关对话"
+            detail = "换一个关键词，或清除搜索查看全部记录。"
+            actionTitle = "清除搜索"
+            action = { [weak self] in
                 guard let self else { return }
-                query = ""
-                pageHeader.clearSearch()
-                reload()
+                self.query = ""
+                self.searchController.searchBar.text = ""
+                self.reload()
             }
         } else {
-            empty = ConversationsEmptyView(
-                symbol: "bubble.left.and.bubble.right",
-                title: "还没有对话",
-                detail: "阅读时选中原文提问，问题与回答会留在这里。",
-                actionTitle: "去书架读书"
-            )
-            empty.onAction = { [weak self] in self?.rootTabs?.select(RootDestination.library.rawValue) }
+            symbol = "bubble.left.and.bubble.right"
+            title = "还没有对话"
+            detail = "阅读时选中原文提问，问题与回答会留在这里。"
+            actionTitle = "去书架读书"
+            action = { [weak self] in self?.rootTabs?.select(RootDestination.library.rawValue) }
         }
-        tableView.backgroundView = empty
+        if #available(iOS 17.0, *) {
+            contentUnavailableConfiguration = BookContentUnavailable.configuration(
+                title: title,
+                detail: detail,
+                symbol: symbol,
+                actionTitle: actionTitle,
+                action: action
+            )
+        } else {
+            let empty = ConversationsEmptyView(symbol: symbol, title: title, detail: detail, actionTitle: actionTitle)
+            empty.onAction = action
+            collectionView.backgroundView = empty
+        }
+    }
+
+    // MARK: - UISearchControllerDelegate（iOS 26 取消搜索后大标题不绘制的恢复）
+
+    func willPresentSearchController(_ searchController: UISearchController) {
+        offsetBeforeSearch = collectionView.contentOffset
+    }
+
+    func didDismissSearchController(_ searchController: UISearchController) {
+        guard let before = offsetBeforeSearch else { return }
+        offsetBeforeSearch = nil
+        collectionView.setContentOffset(before, animated: false)
+        guard #available(iOS 26.0, *) else { return }
+        let top = -collectionView.adjustedContentInset.top
+        guard abs(before.y - top) < 1 else { return }
+        // iOS 26（stacked 搜索 + 系统大标题）：取消搜索后导航栏高度已恢复大标题布局，
+        // 但大标题的 scroll-edge 进度可能停在搜索态（label 存在、屏幕却不绘制）。
+        // 同 runloop 内改 offset 会被合并、不产生真实 scroll 事件；推迟到后续 runloop
+        // 做两段 offset 变化（+1pt → 回位），复刻一次真实滚动让导航栏重算大标题进度。
+        // 位移仅 1pt，不可见，也不改变用户原有的滚动位置。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+            self.collectionView.setContentOffset(CGPoint(x: before.x, y: top + 1), animated: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self else { return }
+                self.collectionView.setContentOffset(before, animated: false)
+                self.navigationController?.navigationBar.setNeedsLayout()
+                self.navigationController?.navigationBar.layoutIfNeeded()
+            }
+        }
+    }
+
+    func updateSearchResults(for searchController: UISearchController) {
+        let text = searchController.searchBar.text ?? ""
+        guard text != query else { return }
+        rememberScroll()
+        query = text
+        reload()
     }
 
     private var rootTabs: RootTabController? {
@@ -912,75 +1131,127 @@ final class QuestionHistoryController: UITableViewController {
         return nil
     }
 
-    override func numberOfSections(in tableView: UITableView) -> Int {
-        sections.count
-    }
-
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        groupState.isExpanded(sections[section].bookID, searching: searching) ? sections[section].conversations.count : 0
-    }
-
-    override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
-        let item = sections[section]
-        let header = BookGroupHeader()
-        header.configure(
-            bookID: item.bookID,
-            bookTitle: item.bookTitle,
-            book: item.book,
-            covers: covers,
-            library: library,
-            identifierPrefix: "conversations-book",
-            countText: "\(item.conversations.count) 段对话",
-            expanded: groupState.isExpanded(item.bookID, searching: searching),
-            searching: searching
+    private func configure(header cell: UICollectionViewListCell, bookID: String) {
+        guard let section = sections.first(where: { $0.bookID == bookID }) else { return }
+        let countText = "\(section.conversations.count) 段对话"
+        cell.contentConfiguration = BookDesign.listGroupHeaderContent(
+            title: section.bookTitle,
+            countText: countText,
+            image: thumbnails.placeholder(for: section.bookTitle)
         )
-        header.onToggle = { [weak self] in
-            guard let self, !searching else { return }
-            groupState.toggle(item.bookID)
-            reload()
-            rememberScroll()
+        let expanded = groupState.isExpanded(bookID, searching: searching)
+        cell.accessories = [.outlineDisclosure(
+            options: UICellAccessory.OutlineDisclosureOptions(style: .header),
+            actionHandler: { [weak self] in self?.toggleGroup(bookID: bookID) }
+        )]
+        cell.accessibilityIdentifier = "conversations-book-\(bookID)"
+        cell.accessibilityLabel = "\(section.bookTitle)，\(countText)"
+        cell.accessibilityValue = expanded ? "已展开" : "已收起"
+        cell.accessibilityTraits = [.header, .button]
+        cell.accessibilityHint = searching ? "搜索期间自动展开匹配记录" : "轻点展开或收起本书的记录"
+        loadCover(of: section.book, bookTitle: section.bookTitle, bookID: bookID, into: cell)
+    }
+
+    private func loadCover(of book: Book?, bookTitle: String, bookID: String, into cell: UICollectionViewListCell) {
+        guard let book else { return }
+        Task { [weak self, weak cell] in
+            guard let self, let cell else { return }
+            let image = await self.thumbnails.image(for: book, covers: self.covers, library: self.library)
+            guard cell.accessibilityIdentifier == "conversations-book-\(bookID)",
+                  var content = cell.contentConfiguration as? UIListContentConfiguration else { return }
+            content.image = image
+            cell.contentConfiguration = content
         }
-        return header
     }
 
-    override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        UITableView.automaticDimension
-    }
-
-    override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
-        section == sections.indices.last ? 18 : 0
-    }
-
-    override func tableView(_ tableView: UITableView, viewForFooterInSection section: Int) -> UIView? {
-        UIView()
-    }
-
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "conversation-record", for: indexPath) as! ConversationRecordCell
-        let conversation = sections[indexPath.section].conversations[indexPath.row]
-        cell.configure(
-            conversation,
-            dateText: Self.dateText(conversation.updated),
-            unsaved: library.questions.unsaved(conversation.latest.id)
-        )
-        return cell
-    }
-
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true)
+    private func configure(record cell: UICollectionViewListCell, indexPath: IndexPath, conversationID: UUID) {
         guard sections.indices.contains(indexPath.section),
-              sections[indexPath.section].conversations.indices.contains(indexPath.row) else { return }
-        let conversation = sections[indexPath.section].conversations[indexPath.row]
+              let conversation = sections[indexPath.section].conversations.first(where: { $0.id == conversationID }) else { return }
+        let dateText = BookDateFormat.conversationTime(conversation.updated)
+        let unsaved = library.questions.unsaved(conversation.latest.id)
+        let meta = "\(conversation.submittedCount) 次提问" + (unsaved ? " · 尚未保存" : "")
+        let preview = conversation.latest.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let renderedPreview = String(preview.prefix(180))
+
+        var content = UIListContentConfiguration.subtitleCell()
+        content.attributedText = paragraph(
+            conversation.title,
+            font: BookType.serif(16, weight: .semibold, style: .headline),
+            colour: BookDesign.ink,
+            lineHeightMultiple: 1.45
+        )
+        content.textProperties.numberOfLines = 2
+        let secondary = NSMutableAttributedString()
+        if !renderedPreview.isEmpty {
+            secondary.append(NSAttributedString(
+                string: renderedPreview + "\n",
+                attributes: [
+                    .font: BookType.sans(12.5, weight: .regular, style: .footnote),
+                    .foregroundColor: BookDesign.ink2
+                ]
+            ))
+        }
+        secondary.append(NSAttributedString(
+            string: meta,
+            attributes: [
+                .font: BookType.caption,
+                .foregroundColor: BookDesign.ink3
+            ]
+        ))
+        content.secondaryAttributedText = secondary
+        content.secondaryTextProperties.numberOfLines = renderedPreview.isEmpty ? 1 : 3
+        cell.contentConfiguration = content
+
+        var timeOptions = UICellAccessory.LabelOptions(font: BookType.caption, adjustsFontForContentSizeCategory: true)
+        timeOptions.tintColor = BookDesign.ink3
+        cell.accessories = [
+            .label(text: dateText, options: timeOptions),
+            .disclosureIndicator()
+        ]
+        cell.accessibilityIdentifier = "question-\(conversation.id)"
+        cell.accessibilityLabel = [conversation.title, renderedPreview, dateText, meta].joined(separator: "\n")
+        cell.accessibilityTraits = .button
+        cell.isAccessibilityElement = true
+    }
+
+    private func paragraph(
+        _ text: String,
+        font: UIFont,
+        colour: UIColor,
+        lineHeightMultiple: CGFloat
+    ) -> NSAttributedString {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = lineHeightMultiple
+        style.lineBreakMode = .byTruncatingTail
+        return NSAttributedString(
+            string: text,
+            attributes: [
+                .font: font,
+                .foregroundColor: colour,
+                .paragraphStyle: style
+            ]
+        )
+    }
+
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        collectionView.deselectItem(at: indexPath, animated: true)
+        guard sections.indices.contains(indexPath.section) else { return }
+        guard let item = dataSource.itemIdentifier(for: indexPath), case let .record(conversationID) = item,
+              let conversation = sections[indexPath.section].conversations.first(where: { $0.id == conversationID }) else { return }
         let controller = QuestionController(library: library, id: conversation.latest.id)
         let navigation = UINavigationController(rootViewController: controller)
         QuestionSheetPresentation.configure(navigation)
         present(navigation, animated: true)
     }
 
-    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard sections.indices.contains(indexPath.section),
-              sections[indexPath.section].conversations.indices.contains(indexPath.row) else { return nil }
-        let conversation = sections[indexPath.section].conversations[indexPath.row]
+    private func swipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let item = dataSource.itemIdentifier(for: indexPath), case let .record(conversationID) = item else { return nil }
+        return swipeActions(forConversationID: conversationID)
+    }
+
+    /// 供单元测试验证滑动操作；与列表 layout 的 provider 是同一实现。
+    func swipeActions(forConversationID conversationID: UUID) -> UISwipeActionsConfiguration? {
+        guard let conversation = sections.flatMap(\.conversations).first(where: { $0.id == conversationID }) else { return nil }
         let rename = UIContextualAction(style: .normal, title: "改名") { [weak self] _, _, done in
             done(false)
             self?.rename(conversation)
@@ -995,10 +1266,10 @@ final class QuestionHistoryController: UITableViewController {
     }
 
     private func rename(_ conversation: ReadingConversation) {
-        let alert = UIAlertController(title: "对话改名", message: "生成中或内容尚未保存时请先取消生成或重试保存。", preferredStyle: .alert)
+        let alert = BookAlertController(title: "对话改名", message: "生成中或内容尚未保存时请先取消生成或重试保存。", preferredStyle: .alert)
         alert.addTextField { $0.text = conversation.title; $0.accessibilityIdentifier = "conversation-name" }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "保存", style: .default) { [weak self] _ in
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.addAction(BookAlertAction(title: "保存", style: .default) { [weak self] _ in
             guard let self else { return }
             if !self.library.questions.rename(conversation.id, title: alert.textFields?[0].text ?? "") {
                 self.failure("改名尚未保存，原名称未变；请检查名称、生成及保存状态后重试。")
@@ -1008,9 +1279,9 @@ final class QuestionHistoryController: UITableViewController {
     }
 
     private func delete(_ conversation: ReadingConversation) {
-        let alert = UIAlertController(title: "删除对话？", message: "删除本对话的所有轮次及引用快照；生成中的请求将取消。", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "删除", style: .destructive) { [weak self] _ in
+        let alert = BookAlertController(title: "删除对话？", message: "删除本对话的所有轮次及引用快照；生成中的请求将取消。", preferredStyle: .alert)
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.addAction(BookAlertAction(title: "删除", style: .destructive) { [weak self] _ in
             guard let self else { return }
             if !self.library.questions.delete(conversation.id) {
                 self.failure("删除失败，对话仍保留；生成已取消，请重试删除。")
@@ -1020,171 +1291,11 @@ final class QuestionHistoryController: UITableViewController {
     }
 
     private func failure(_ message: String) {
-        let alert = UIAlertController(title: "操作未保存", message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "知道了", style: .default))
+        let alert = BookAlertController(title: "操作未保存", message: message, preferredStyle: .alert)
+        alert.addAction(BookAlertAction(title: "知道了", style: .default))
         present(alert, animated: true)
     }
 
-    private static func dateText(_ date: Date) -> String {
-        let clock = DateFormatter()
-        clock.locale = Locale(identifier: "zh_CN")
-        clock.dateFormat = "HH:mm"
-        let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "今天 \(clock.string(from: date))" }
-        if calendar.isDateInYesterday(date) { return "昨天 \(clock.string(from: date))" }
-        clock.dateFormat = "M月d日 HH:mm"
-        return clock.string(from: date)
-    }
-}
-
-@MainActor
-private final class ConversationsPageHeader: UIView, UITextFieldDelegate {
-    var onSearch: ((String) -> Void)?
-    private let searchField = UITextField()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        accessibilityIdentifier = "conversations-header"
-        backgroundColor = BookDesign.paper
-
-        let title = BookDesign.label("对话", size: 31, weight: .bold, style: .largeTitle)
-        title.accessibilityIdentifier = "conversations-title"
-        let description = BookDesign.label(
-            "读过的疑问，留在这本书里。",
-            size: 12,
-            colour: BookDesign.secondary
-        )
-        description.accessibilityIdentifier = "conversations-description"
-
-        let search = UIView()
-        search.backgroundColor = BookDesign.wash
-        search.layer.cornerRadius = 12
-        search.accessibilityIdentifier = "conversation-search-surface"
-        let icon = UIImageView(image: BookDesign.symbol("magnifyingglass", size: 19))
-        icon.tintColor = BookDesign.secondary
-        icon.alpha = 0.65
-        icon.contentMode = .scaleAspectFit
-        icon.isAccessibilityElement = false
-        searchField.placeholder = "搜索你的问题"
-        searchField.font = BookDesign.font(15)
-        searchField.textColor = BookDesign.ink
-        searchField.tintColor = BookDesign.accent
-        searchField.adjustsFontForContentSizeCategory = true
-        searchField.clearButtonMode = .whileEditing
-        searchField.returnKeyType = .search
-        searchField.autocorrectionType = .no
-        searchField.spellCheckingType = .no
-        searchField.delegate = self
-        searchField.accessibilityIdentifier = "conversation-search"
-        searchField.addAction(UIAction { [weak self] _ in
-            self?.onSearch?(self?.searchField.text ?? "")
-        }, for: .editingChanged)
-
-        for child in [icon, searchField] {
-            child.translatesAutoresizingMaskIntoConstraints = false
-            search.addSubview(child)
-        }
-        NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: search.leadingAnchor, constant: 14),
-            icon.centerYAnchor.constraint(equalTo: search.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 19),
-            icon.heightAnchor.constraint(equalToConstant: 19),
-            searchField.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
-            searchField.trailingAnchor.constraint(equalTo: search.trailingAnchor, constant: -14),
-            searchField.topAnchor.constraint(equalTo: search.topAnchor),
-            searchField.bottomAnchor.constraint(equalTo: search.bottomAnchor)
-        ])
-
-        for child in [title, description, search] {
-            child.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(child)
-        }
-        NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: topAnchor, constant: 18),
-            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            description.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 7),
-            description.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            description.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            search.topAnchor.constraint(equalTo: description.bottomAnchor, constant: 17),
-            search.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            search.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            search.heightAnchor.constraint(equalToConstant: 44),
-            search.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    func clearSearch() {
-        searchField.text = ""
-        onSearch?("")
-    }
-
-    func textFieldShouldClear(_ textField: UITextField) -> Bool {
-        onSearch?("")
-        return true
-    }
-
-    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        textField.resignFirstResponder()
-        return true
-    }
-}
-
-@MainActor
-private final class ConversationRecordCell: UITableViewCell {
-    private let question = BookDesign.label(nil, size: 16, weight: .semibold)
-    private let answer = BookDesign.label(nil, size: 13, colour: BookDesign.secondary)
-    private let meta = BookDesign.label(nil, size: 11, colour: BookDesign.muted)
-    private let bottomLine = UIView()
-
-    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
-        super.init(style: style, reuseIdentifier: reuseIdentifier)
-        backgroundColor = BookDesign.paper
-        contentView.backgroundColor = BookDesign.paper
-        selectionStyle = .default
-
-        question.numberOfLines = 2
-        question.lineBreakMode = .byTruncatingTail
-        answer.numberOfLines = 2
-        answer.lineBreakMode = .byTruncatingTail
-        meta.numberOfLines = 1
-        bottomLine.backgroundColor = BookDesign.line
-
-        let stack = UIStackView(arrangedSubviews: [question, answer, meta])
-        stack.axis = .vertical
-        stack.spacing = 7
-        stack.setCustomSpacing(11, after: answer)
-        for child in [stack, bottomLine] {
-            child.translatesAutoresizingMaskIntoConstraints = false
-            contentView.addSubview(child)
-        }
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 19),
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
-            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -20),
-            bottomLine.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
-            bottomLine.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
-            bottomLine.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            bottomLine.heightAnchor.constraint(equalToConstant: 1)
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    func configure(_ conversation: ReadingConversation, dateText: String, unsaved: Bool) {
-        question.text = conversation.title
-        answer.text = String(conversation.latest.answer.prefix(180))
-        var values = [dateText, "\(conversation.submittedCount) 次提问"]
-        if unsaved { values.append("尚未保存") }
-        meta.text = values.joined(separator: " · ")
-        accessibilityIdentifier = "question-\(conversation.id)"
-        accessibilityLabel = [conversation.title, answer.text ?? "", meta.text ?? ""].joined(separator: "\n")
-        accessibilityTraits = .button
-        isAccessibilityElement = true
-    }
 }
 
 @MainActor
@@ -1200,27 +1311,26 @@ private final class ConversationsEmptyView: UIView {
         accessibilityIdentifier = identifier
         backgroundColor = BookDesign.paper
 
-        let icon = UIImageView(image: BookDesign.symbol(symbol, size: 47, weight: .light))
-        icon.tintColor = BookDesign.secondary
+        let icon = UIImageView(image: BookDesign.symbol(symbol, size: 40, weight: .light))
+        icon.tintColor = BookDesign.lamp
         icon.contentMode = .scaleAspectFit
-        icon.alpha = 0.55
-        icon.widthAnchor.constraint(equalToConstant: 47).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 47).isActive = true
+        icon.widthAnchor.constraint(equalToConstant: 40).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 40).isActive = true
 
-        let heading = BookDesign.label(title, size: 24, style: .title2)
-        heading.font = BookDesign.readingFont(24)
+        let heading = BookDesign.label(title, font: BookType.serif(24, weight: .semibold, style: .title2))
         heading.textAlignment = .center
         heading.accessibilityIdentifier = "\(identifier)-title"
-        let description = BookDesign.label(detail, size: 13, colour: BookDesign.secondary)
+        let description = BookDesign.label(detail, font: BookType.subhead, colour: BookDesign.ink2)
         description.textAlignment = .center
+        description.numberOfLines = 0
         description.accessibilityIdentifier = "\(identifier)-detail"
 
         var configuration = UIButton.Configuration.filled()
         configuration.title = actionTitle
         configuration.baseForegroundColor = BookDesign.paper
         configuration.baseBackgroundColor = BookDesign.ink
-        configuration.cornerStyle = .capsule
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 11, leading: 22, bottom: 11, trailing: 22)
+        configuration.background.cornerRadius = 12
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20)
         action.configuration = configuration
         action.accessibilityIdentifier = "\(identifier)-action"
         action.addAction(UIAction { [weak self] _ in self?.onAction?() }, for: .touchUpInside)
