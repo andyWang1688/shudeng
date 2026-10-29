@@ -1,6 +1,8 @@
 import XCTest
 import UIKit
+import PDFKit
 import ReadiumNavigator
+import ReadiumShared
 @testable import Shudeng
 
 @MainActor
@@ -55,6 +57,1774 @@ final class DesignFixtureTests: XCTestCase {
             .rose,
             "改色应持久化"
         )
+    }
+
+    /// PDF Spike：pdf 夹具 = normal 3 本 EPUB + 1 本 2 页文字 PDF；format/pdfInfo/文件扩展名正确，旧目录无 format 仍按 epub。
+    func testPDFFixtureImportsTextPDFAndSkipsEPUBIndexing() async throws {
+        let request = DesignFixture.Request(scenario: .pdf, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        XCTAssertEqual(session.library.books.count, 4, "pdf 夹具应为 3 本 EPUB + 1 本 PDF")
+
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        XCTAssertEqual(pdf.format, .pdf)
+        XCTAssertEqual(pdf.resolvedFormat, .pdf)
+        let info = try XCTUnwrap(pdf.pdfInfo, "PDF 应写入 pdfInfo")
+        XCTAssertEqual(info.pageCount, 2)
+        XCTAssertEqual(info.textPageCount, 2, "2 页都应有可抽取文字")
+        XCTAssertTrue(info.hasTextPages)
+        XCTAssertFalse(info.hasScannedPages)
+        let url = session.library.fileURL(for: pdf)
+        XCTAssertEqual(url.pathExtension.lowercased(), "pdf", "文件扩展名应按格式存储")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+
+        // EPUB 仍为 3 本，扩展名 .epub；旧数据无 format 时按 epub。
+        let epubs = session.library.books.filter { $0.resolvedFormat == .epub }
+        XCTAssertEqual(epubs.count, 3)
+        XCTAssertTrue(epubs.allSatisfy { $0.format == .epub }, "新导入 EPUB 应显式写 .epub；旧数据 nil 由下面解码用例覆盖")
+        XCTAssertEqual(session.library.fileURL(for: epubs[0]).pathExtension.lowercased(), "epub")
+
+        // 旧 catalog（去除 format/pdfInfo 字段）解码后仍为合法 Book，按 epub 处理。
+        let catalogURL = session.root.appendingPathComponent("library.json")
+        let raw = try JSONSerialization.jsonObject(with: try Data(contentsOf: catalogURL)) as? [[String: Any]]
+        var legacy = try XCTUnwrap(raw?.first { ($0["title"] as? String) != DesignFixture.pdfFixtureTitle })
+        legacy.removeValue(forKey: "format")
+        legacy.removeValue(forKey: "pdfInfo")
+        let legacyBook = try JSONDecoder().decode(Book.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(legacyBook.format)
+        XCTAssertNil(legacyBook.pdfInfo)
+        XCTAssertEqual(legacyBook.resolvedFormat, .epub)
+
+        // BookIndex/准备：M4a 起 PDF 走页级索引（不再跳过），且不会按 EPUB XHTML 解析失败。
+        session.library.preparation.start(pdf, file: url)
+        var probed: BookPreparationState?
+        for _ in 0..<300 {
+            if let current = session.library.preparation.states[pdf.id], !current.preparing {
+                probed = current
+                break
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let prepared = try XCTUnwrap(probed, "PDF 页级索引应到达终态")
+        XCTAssertNil(prepared.failure, "PDF 不应因 EPUB HTML 解析失败")
+        XCTAssertEqual(prepared.pdfPageCount, info.pageCount)
+        XCTAssertEqual(prepared.searchablePageCount, info.textPageCount)
+        XCTAssertEqual(prepared.completed, info.pageCount)
+        XCTAssertFalse(prepared.textIndexUnavailable, "文字 PDF 不应标记索引不可用")
+    }
+
+    /// PDF 阅读器：PDFKit 渲染第一页并显示页码（1/2）；浅/深各出一张渲染图。
+    /// PDF M2：扫描版夹具 2/0、hasScannedPages、提示文案精确串且不含技术词；文字版静默（title=nil）。
+    func testPDFScannedFixtureInfoAndNonTechnicalCopy() async throws {
+        let request = DesignFixture.Request(scenario: .pdfScan, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        XCTAssertEqual(session.library.books.count, 4, "pdf-scan 夹具应为 3 EPUB + 1 扫描 PDF")
+        let scanned = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfScanFixtureTitle })
+        XCTAssertEqual(scanned.format, .pdf)
+        let info = try XCTUnwrap(scanned.pdfInfo)
+        XCTAssertEqual(info.pageCount, 2)
+        XCTAssertEqual(info.textPageCount, 0, "扫描版夹具应无可抽取文字")
+        XCTAssertEqual(info.scannedPageCount, 2)
+        XCTAssertTrue(info.hasScannedPages)
+        XCTAssertEqual(info.scannedPagesTitle, "这份 PDF 是扫描版")
+        XCTAssertEqual(
+            info.scannedPagesMessage,
+            "页面上的字是图片，目前还不能选字提问或高亮。阅读、缩放和加书签都可以正常使用。"
+        )
+        let combined = (info.scannedPagesTitle ?? "") + info.scannedPagesMessage
+        for banned in ["文字层", "文本层", "OCR", "格式限制", "PDF 本身的问题", "不是书灯的问题"] {
+            XCTAssertFalse(combined.contains(banned), "用户文案不应出现技术词：\(banned)")
+        }
+        XCTAssertTrue(session.library.fileURL(for: scanned).pathExtension.lowercased() == "pdf")
+
+        // 文字版 PDF：无扫描页 → 不应弹卡（title=nil）；混排文案精确。
+        let textRequest = DesignFixture.Request(scenario: .pdf, theme: .light)
+        let textSession = try DesignFixture.makeSession(textRequest)
+        try await DesignFixture.seed(textSession)
+        let textPDF = try XCTUnwrap(textSession.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let textInfo = try XCTUnwrap(textPDF.pdfInfo)
+        XCTAssertFalse(textInfo.hasScannedPages)
+        XCTAssertNil(textInfo.scannedPagesTitle, "无扫描页不应出现提示卡标题")
+
+        let mixed = PDFInfo(pageCount: 4, textPageCount: 3)
+        XCTAssertEqual(mixed.scannedPageCount, 1)
+        XCTAssertEqual(mixed.scannedPagesTitle, "这份 PDF 有 1 页是扫描图片")
+        XCTAssertEqual(mixed.scannedPagesMessage, "这些页目前还不能选字提问或高亮；其余页面正常。")
+    }
+
+    /// PDF M2：导入进度回调序列、扫描版确认取消不落库、继续导入保留 pdfInfo、文字版静默不调 confirm。
+    func testPDFImportProgressConfirmCancelContinueAndSilentTextPDF() async throws {
+        let scanSession = try DesignFixture.makeSession(.init(scenario: .pdfScan, theme: .light))
+        try await DesignFixture.seed(scanSession)
+        let scanBook = try XCTUnwrap(scanSession.library.books.first { $0.title == DesignFixture.pdfScanFixtureTitle })
+        let scanSource = scanSession.library.fileURL(for: scanBook)
+        let textSession = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(textSession)
+        let textBook = try XCTUnwrap(textSession.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let textSource = textSession.library.fileURL(for: textBook)
+        defer {
+            try? FileManager.default.removeItem(at: scanSession.root)
+            try? FileManager.default.removeItem(at: textSession.root)
+        }
+
+        func makeLibrary() throws -> LibraryStore {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("PDFImportCheck-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            return try LibraryStore(root: root, secrets: EphemeralSecrets())
+        }
+
+        // 扫描版 + 用户取消：进度 1/2、2/2；抛 CancellationError；不落库。
+        let cancelLibrary = try makeLibrary()
+        var cancelProgress: [PDFCheckProgress] = []
+        var confirmCalls = 0
+        do {
+            _ = try await cancelLibrary.importBook(
+                from: scanSource,
+                pdfProgress: { cancelProgress.append($0) },
+                confirmPDFInfo: { _ in
+                    confirmCalls += 1
+                    return false
+                }
+            )
+            XCTFail("取消导入不应成功")
+        } catch is CancellationError {
+            // expected
+        }
+        XCTAssertEqual(cancelProgress, [PDFCheckProgress(completed: 1, total: 2), PDFCheckProgress(completed: 2, total: 2)])
+        XCTAssertEqual(confirmCalls, 1)
+        XCTAssertTrue(cancelLibrary.books.isEmpty, "取消后不应写入书架")
+        try? FileManager.default.removeItem(at: cancelLibrary.root)
+
+        // 扫描版 + 继续导入：书落库且 pdfInfo 保留 2/0。
+        let continueLibrary = try makeLibrary()
+        var continueProgress: [PDFCheckProgress] = []
+        let imported = try await continueLibrary.importBook(
+            from: scanSource,
+            pdfProgress: { continueProgress.append($0) },
+            confirmPDFInfo: { info in
+                XCTAssertEqual(info.textPageCount, 0)
+                return true
+            }
+        )
+        XCTAssertEqual(continueProgress.count, 2)
+        XCTAssertEqual(continueProgress.map(\.completed), [1, 2])
+        XCTAssertEqual(imported.book.pdfInfo, PDFInfo(pageCount: 2, textPageCount: 0))
+        XCTAssertEqual(continueLibrary.books.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: continueLibrary.fileURL(for: imported.book).path))
+        try? FileManager.default.removeItem(at: continueLibrary.root)
+
+        // 文字版：静默导入，不应调用 confirm；pdfInfo 2/2 保留。
+        let textLibrary = try makeLibrary()
+        var textConfirmCalls = 0
+        let textImported = try await textLibrary.importBook(
+            from: textSource,
+            confirmPDFInfo: { _ in
+                textConfirmCalls += 1
+                return true
+            }
+        )
+        XCTAssertEqual(textConfirmCalls, 0, "文字版 PDF 不应弹确认卡")
+        XCTAssertEqual(textImported.book.pdfInfo, PDFInfo(pageCount: 2, textPageCount: 2))
+        try? FileManager.default.removeItem(at: textLibrary.root)
+    }
+
+    func testPDFReaderRendersFirstPageWithPageIndicator() async throws {
+        let request = DesignFixture.Request(scenario: .pdf, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let image = DesignFixture.renderRoot(reader, size: CGSize(width: 375, height: 667), style: .light)
+        let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
+        attachment.name = "pdf-reader-375x667-light"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        let pageLabel = try XCTUnwrap(
+            reader.view.allViews.first { $0.accessibilityIdentifier == "pdf-reader-page" } as? UILabel
+        )
+        XCTAssertEqual(pageLabel.text, "第 1 / 2 页")
+        XCTAssertNotNil(reader.view.allViews.first { $0.accessibilityIdentifier == "pdf-reader-view" })
+        XCTAssertNotNil(reader.view.allViews.first { $0.accessibilityIdentifier == "pdf-reader-progress" })
+        XCTAssertNotNil(reader.view.allViews.first { $0.accessibilityIdentifier == "reader-close" })
+        XCTAssertNotNil(reader.view.allViews.first { $0.accessibilityIdentifier == "pdf-reader-mode" })
+    }
+
+    /// PDF M3：书签按钮/丝带、locator 格式（pdf://page/N）、扫描页 excerpt 空、重启持久化。
+    func testPDFReaderBookmarkLocatorRibbonScannedExcerptAndRestart() async throws {
+        func button(_ identifier: String, in root: UIView) -> UIButton? {
+            root.allViews.compactMap { $0 as? UIButton }
+                .first { $0.accessibilityIdentifier == identifier }
+        }
+        func pdfBookmark(page: Int, excerpt: String) -> Bookmark {
+            let total = Double(page - 1) / 2
+            return Bookmark(locator: Locator(
+                href: AnyURL(string: "pdf://page/\(page)")!,
+                mediaType: .pdf,
+                title: "第 \(page) 页",
+                locations: .init(progression: total, totalProgression: total, position: page),
+                text: .init(highlight: excerpt)
+            ))
+        }
+
+        // 文字 PDF：点书签按钮 → locator 格式正确 + 丝带出现；再点取消。
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        let toggle = try XCTUnwrap(button("pdf-bookmark-toggle", in: reader.view))
+        let ribbon = try XCTUnwrap(button("pdf-bookmark-ribbon", in: reader.view))
+        XCTAssertTrue(ribbon.isHidden, "初始不应显示丝带")
+        toggle.sendActions(for: .touchUpInside)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        var marks = session.library.books.first { $0.id == pdf.id }?.bookmarks ?? []
+        XCTAssertEqual(marks.count, 1)
+        let locator = try XCTUnwrap(marks.first?.location())
+        XCTAssertEqual(locator.href.string, "pdf://page/1")
+        XCTAssertTrue(locator.mediaType.matches(.pdf))
+        XCTAssertEqual(locator.locations.position, 1)
+        XCTAssertEqual(locator.title, "第 1 页")
+        XCTAssertEqual(try XCTUnwrap(marks.first).excerpt, "书灯 PDF 示例 · 第一页")
+        XCTAssertFalse(ribbon.isHidden, "加书签后丝带应出现")
+        XCTAssertEqual(toggle.accessibilityValue, "此页已有书签")
+
+        // 重启持久化：重新加载 LibraryStore 后新 reader 仍显示书签。
+        let reloaded = try LibraryStore(root: session.root, secrets: EphemeralSecrets())
+        let pdfReloaded = try XCTUnwrap(reloaded.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let reader2 = try PDFReaderController(book: pdfReloaded, library: reloaded)
+        let window2 = host(reader2, size: CGSize(width: 375, height: 667))
+        defer { window2.isHidden = true }
+        let toggle2 = try XCTUnwrap(button("pdf-bookmark-toggle", in: reader2.view))
+        XCTAssertEqual(toggle2.accessibilityValue, "此页已有书签", "重启后应恢复本页书签")
+        XCTAssertFalse(try XCTUnwrap(button("pdf-bookmark-ribbon", in: reader2.view)).isHidden)
+
+        // 同页重复保存去重。
+        try session.library.saveBookmark(pdfBookmark(page: 2, excerpt: "第二页摘要"), for: pdf.id)
+        try session.library.saveBookmark(pdfBookmark(page: 2, excerpt: "第二页摘要"), for: pdf.id)
+        marks = session.library.books.first { $0.id == pdf.id }?.bookmarks ?? []
+        XCTAssertEqual(marks.filter { $0.excerpt == "第二页摘要" }.count, 1, "同页书签应去重")
+
+        // 扫描版：书签 excerpt 为空。
+        let scanSession = try DesignFixture.makeSession(.init(scenario: .pdfScan, theme: .light))
+        try await DesignFixture.seed(scanSession)
+        try? FileManager.default.removeItem(at: session.root)
+        defer { try? FileManager.default.removeItem(at: scanSession.root) }
+        let scanBook = try XCTUnwrap(scanSession.library.books.first { $0.title == DesignFixture.pdfScanFixtureTitle })
+        let scanReader = try PDFReaderController(book: scanBook, library: scanSession.library)
+        let scanWindow = host(scanReader, size: CGSize(width: 375, height: 667))
+        defer { scanWindow.isHidden = true }
+        let scanHelp = scanReader.view.allViews.compactMap { $0 as? UIButton }
+            .first { $0.accessibilityIdentifier == "pdf-reader-help" }
+        scanReader.view.layoutIfNeeded()
+        let toolbarButtons = ["pdf-bookmark-toggle", "pdf-contents", "pdf-reader-help"].map { identifier in
+            let button = scanReader.view.allViews.compactMap { $0 as? UIButton }
+                .first { $0.accessibilityIdentifier == identifier }
+            return "\(identifier): frame=\(String(describing: button?.frame)) hidden=\(button?.isHidden ?? true)"
+        }
+        let titleFrame = scanReader.view.allViews.first { $0.accessibilityIdentifier == "reader-title" }?.frame
+        print("QA_PDF_SCAN_HELP info=\(String(describing: scanBook.pdfInfo)) exists=\(scanHelp != nil) hidden=\(scanHelp?.isHidden ?? true) title=\(String(describing: titleFrame)) \n\(toolbarButtons.joined(separator: "\n"))")
+        XCTAssertNotNil(scanHelp, "扫描版应有「?」按钮")
+        XCTAssertFalse(scanHelp?.isHidden ?? true, "扫描版「?」按钮应可见")
+        XCTAssertGreaterThan(
+            scanHelp?.frame.width ?? 0,
+            20,
+            "M3 回归：工具栏三个按钮 + 居中标题时「?」按钮不应被压缩为 0 宽"
+        )
+        try XCTUnwrap(button("pdf-bookmark-toggle", in: scanReader.view)).sendActions(for: .touchUpInside)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        let scanMark = try XCTUnwrap(scanSession.library.books.first { $0.id == scanBook.id }?.bookmarks?.first)
+        XCTAssertEqual(scanMark.excerpt, "", "扫描页无可提取首行时 excerpt 应为空")
+        XCTAssertEqual(try scanMark.location().href.string, "pdf://page/1")
+    }
+
+    /// PDF M3：目录/书签面板——目录空态、书签按页排序/摘要、点击跳页、滑删、书签空态。
+    func testPDFContentsPanelBookmarkSortJumpDeleteAndEmptyStates() async throws {
+        func pdfBookmark(page: Int, excerpt: String) -> Bookmark {
+            let total = Double(page - 1) / 2
+            return Bookmark(locator: Locator(
+                href: AnyURL(string: "pdf://page/\(page)")!,
+                mediaType: .pdf,
+                title: "第 \(page) 页",
+                locations: .init(progression: total, totalProgression: total, position: page),
+                text: .init(highlight: excerpt)
+            ))
+        }
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        // 故意乱序保存：第 2 页先、第 1 页后。
+        try session.library.saveBookmark(pdfBookmark(page: 2, excerpt: "第二页摘要"), for: pdf.id)
+        try session.library.saveBookmark(pdfBookmark(page: 1, excerpt: "第一页摘要"), for: pdf.id)
+
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        let contentsButton = try XCTUnwrap(
+            reader.view.allViews.compactMap { $0 as? UIButton }
+                .first { $0.accessibilityIdentifier == "pdf-contents" }
+        )
+        contentsButton.sendActions(for: .touchUpInside)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        let navigation = try XCTUnwrap(reader.presentedViewController as? UINavigationController)
+        let panel = try XCTUnwrap(navigation.topViewController)
+        let table = try XCTUnwrap(
+            panel.view.allViews.compactMap { $0 as? UITableView }
+                .first { $0.accessibilityIdentifier == "pdf-contents-panel" }
+        )
+        let tabs = try XCTUnwrap(
+            panel.navigationItem.titleView as? UISegmentedControl,
+            "面板 tab 应为导航栏 titleView"
+        )
+        XCTAssertEqual(tabs.numberOfSegments, 3)
+        XCTAssertEqual((0..<3).map { tabs.titleForSegment(at: $0) }, ["目录", "书签", "搜索"])
+        // 夹具 PDF 无 outline：目录空态。
+        if #available(iOS 17.0, *) {
+            XCTAssertEqual(
+                (panel.contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?.text,
+                "这份 PDF 没有目录"
+            )
+        }
+        tabs.selectedSegmentIndex = 1
+        tabs.sendActions(for: .valueChanged)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(table.numberOfRows(inSection: 0), 2)
+        func rowText(_ index: Int) -> (String, String) {
+            let cell = table.dataSource?.tableView(table, cellForRowAt: IndexPath(row: index, section: 0))
+            let content = cell?.contentConfiguration as? UIListContentConfiguration
+            return (content?.text ?? "", content?.secondaryText ?? "")
+        }
+        XCTAssertEqual(rowText(0).0, "第 1 页", "书签应按页升序")
+        XCTAssertEqual(rowText(0).1, "第一页摘要")
+        XCTAssertEqual(rowText(1).0, "第 2 页")
+        XCTAssertEqual(rowText(1).1, "第二页摘要")
+        XCTAssertNotNil(rowText(0).0)
+
+        // 书签行点击跳页由 UI 用例覆盖（单测宿主里 dismiss 动画/completion 不稳定）。
+        panel.dismiss(animated: false)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        // 重新打开面板，滑删第 1 行（第 1 页书签）。
+        contentsButton.sendActions(for: .touchUpInside)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        let nav2 = try XCTUnwrap(reader.presentedViewController as? UINavigationController)
+        let panel2 = try XCTUnwrap(nav2.topViewController)
+        let table2 = try XCTUnwrap(
+            panel2.view.allViews.compactMap { $0 as? UITableView }
+                .first { $0.accessibilityIdentifier == "pdf-contents-panel" }
+        )
+        let tabs2 = try XCTUnwrap(panel2.navigationItem.titleView as? UISegmentedControl)
+        tabs2.selectedSegmentIndex = 1
+        tabs2.sendActions(for: .valueChanged)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        // 删除后只剩第 2 页书签。
+        let config = table2.delegate?.tableView?(table2, trailingSwipeActionsConfigurationForRowAt: IndexPath(row: 0, section: 0))
+        let action = try XCTUnwrap(config?.actions.first)
+        var finished = false
+        action.handler(action, UIView()) { finished = $0 }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        XCTAssertTrue(finished)
+        var marks = session.library.books.first { $0.id == pdf.id }?.bookmarks ?? []
+        XCTAssertEqual(marks.count, 1)
+        XCTAssertEqual(marks.first?.excerpt, "第二页摘要")
+        // 继续删除剩余 → 书签空态。
+        let config2 = table2.delegate?.tableView?(table2, trailingSwipeActionsConfigurationForRowAt: IndexPath(row: 0, section: 0))
+        let action2 = try XCTUnwrap(config2?.actions.first)
+        var finished2 = false
+        action2.handler(action2, UIView()) { finished2 = $0 }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        XCTAssertTrue(finished2)
+        marks = session.library.books.first { $0.id == pdf.id }?.bookmarks ?? []
+        XCTAssertTrue(marks.isEmpty)
+        if #available(iOS 17.0, *) {
+            XCTAssertEqual(
+                (panel2.contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?.text,
+                "还没有书签"
+            )
+        }
+    }
+
+    /// PDF M4a：页级索引（2 页/2 章）+ 页级 search/page 字段/permits/evidence scope 页级过滤。
+    func testPDFPageIndexPrepareSearchPermitsAndEvidenceScope() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let book = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let file = session.library.fileURL(for: book)
+        let index = session.library.preparation.index
+
+        // 生产路径：BookPreparation.start → 页级索引终态（2 页可检索）。
+        session.library.preparation.start(book, file: file)
+        var state: BookPreparationState?
+        for _ in 0..<400 {
+            if let current = session.library.preparation.states[book.id], !current.preparing {
+                state = current
+                break
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let final = try XCTUnwrap(state, "PDF 索引准备应到达终态")
+        XCTAssertEqual(final.total, 2, "PDF 每页一个 chapter")
+        XCTAssertEqual(final.completed, 2)
+        XCTAssertEqual(final.pdfPageCount, 2)
+        XCTAssertEqual(final.searchablePageCount, 2)
+        XCTAssertFalse(final.textIndexUnavailable)
+        XCTAssertNil(final.failure)
+        // 向量准备依赖本地模型：成功则 ready=true；失败/未完成不阻塞 FTS 验证（下方打印实际值）。
+        print("QA_M4A_STATE ready=\(final.ready) total=\(final.total) searchable=\(String(describing: final.searchablePageCount)) semantic=\(final.semanticReady) vectors=\(final.vectorsCompleted)/\(final.vectorsTotal)")
+
+        // 页级 search：page 字段、locator 页码/href/title。
+        let page1Hits = try await index.search(bookID: book.id, query: "灯把书页照亮")
+        XCTAssertEqual(page1Hits.count, 1)
+        let hit1 = try XCTUnwrap(page1Hits.first)
+        XCTAssertEqual(hit1.page, 1)
+        XCTAssertEqual(hit1.chapter, "第 1 页")
+        XCTAssertEqual(hit1.locator.href.string, "pdf://page/1")
+        XCTAssertTrue(hit1.locator.mediaType.matches(.pdf))
+        XCTAssertTrue(hit1.context.contains("灯把书页照亮"))
+        XCTAssertTrue(hit1.locator.text.highlight?.contains("灯把书页照亮") == true)
+        XCTAssertEqual(hit1.locator.locations.position, 1)
+        XCTAssertEqual(hit1.locator.locations.progression ?? -1, 0, accuracy: 0.001)
+        // 章节/片段落库：2 页 chapter、fragments > 0。
+        let pdfDB = try IndexDatabase(url: session.library.root.appendingPathComponent("book-index.sqlite"))
+        XCTAssertEqual(Int(try pdfDB.rows("SELECT count(*) FROM chapters WHERE book_id=?", [book.id])[0][0]) ?? 0, 2)
+        XCTAssertGreaterThan(Int(try pdfDB.rows("SELECT count(*) FROM fragments WHERE book_id=?", [book.id])[0][0]) ?? 0, 0)
+
+        let page2Hits = try await index.search(bookID: book.id, query: "PDFKit")
+        XCTAssertEqual(page2Hits.count, 1)
+        let hit2 = try XCTUnwrap(page2Hits.first)
+        XCTAssertEqual(hit2.page, 2)
+        XCTAssertEqual(hit2.chapter, "第 2 页")
+        XCTAssertEqual(hit2.locator.href.string, "pdf://page/2")
+        XCTAssertEqual(hit2.locator.locations.position, 2)
+        XCTAssertEqual(hit2.locator.locations.progression ?? -1, 1.0, accuracy: 0.001, "末页 progression 应为 1.0")
+        let none = try await index.search(bookID: book.id, query: "不存在的检索词")
+        XCTAssertTrue(none.isEmpty)
+        print("QA_M4A_SEARCH p1=\(hit1.page ?? -1) p2=\(hit2.page ?? -1) none=\(none.count)")
+
+        // 页级 permits / evidence scope：throughPage 1 只允许第 1 页。
+        let evidence1 = QuestionEvidence(locator: hit1.locator, context: hit1.context)
+        let evidence2 = QuestionEvidence(locator: hit2.locator, context: hit2.context)
+        let scopePage1 = BookEvidenceScope(bookID: book.id, throughPage: 1)
+        XCTAssertEqual(scopePage1.throughChapter, 0)
+        XCTAssertEqual(scopePage1.throughOrdinal, Int.max)
+        let permitted1 = try await index.permits([evidence1], scope: scopePage1)
+        XCTAssertTrue(permitted1)
+        let permitted2 = try await index.permits([evidence2], scope: scopePage1)
+        XCTAssertFalse(permitted2, "第 2 页证据不应通过第 1 页范围")
+        let scopePage2 = BookEvidenceScope(bookID: book.id, throughPage: 2)
+        let permittedBoth = try await index.permits([evidence1, evidence2], scope: scopePage2)
+        XCTAssertTrue(permittedBoth)
+        let db = try IndexDatabase(url: session.library.root.appendingPathComponent("book-index.sqlite"))
+        let termsPage1 = try db.keywordFragments(scope: scopePage1, terms: ["PDFKit"], limit: 10)
+        XCTAssertTrue(termsPage1.isEmpty, "PDFKit 只在第 2 页，第 1 页范围不应命中")
+        let termsPage2 = try db.keywordFragments(scope: scopePage2, terms: ["PDFKit"], limit: 10)
+        XCTAssertFalse(termsPage2.isEmpty)
+        print("QA_M4A_PERMITS scope1=\(scopePage1.throughChapter) scope2=\(scopePage2.throughChapter) kw1=\(termsPage1.count) kw2=\(termsPage2.count)")
+
+        // 进度序列：独立空 LibraryStore 直接驱动 actor prepare（不经导入，避免自动准备并发）。
+        let progressRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PDFIndexProgress-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: progressRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: progressRoot) }
+        let progressLibrary = try LibraryStore(root: progressRoot, secrets: EphemeralSecrets())
+        let copied = progressRoot.appendingPathComponent("fixture.pdf")
+        try FileManager.default.copyItem(at: file, to: copied)
+        var events: [BookPreparationState] = []
+        try await progressLibrary.preparation.index.prepare(
+            bookID: "progress-book",
+            file: copied,
+            progress: { events.append($0) }
+        )
+        XCTAssertEqual(events.map(\.completed), [0, 1, 2])
+        XCTAssertEqual(events.compactMap(\.pdfPageCount), [2, 2, 2])
+        XCTAssertEqual(events.last?.searchablePageCount, 2)
+        XCTAssertFalse(events.last?.textIndexUnavailable ?? true)
+    }
+
+    /// PDF M4a：扫描版终态明确（2 页、0 可检索页、ready、textIndexUnavailable），search/keywords 均空。
+    func testPDFScannedIndexTerminalStateAndEmptySearch() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdfScan, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let book = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfScanFixtureTitle })
+        let index = session.library.preparation.index
+        // 生产路径：扫描版在 start() 即给出明确终态（不空跑逐页、不停在准备中）。
+        session.library.preparation.start(book, file: session.library.fileURL(for: book))
+        var state: BookPreparationState?
+        for _ in 0..<100 {
+            if let current = session.library.preparation.states[book.id], !current.preparing {
+                state = current
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let final = try XCTUnwrap(state, "扫描版应到达明确终态而不是准备中")
+        XCTAssertEqual(final.total, 2)
+        XCTAssertEqual(final.completed, 2)
+        XCTAssertEqual(final.pdfPageCount, 2)
+        XCTAssertEqual(final.searchablePageCount, 0)
+        XCTAssertTrue(final.textIndexUnavailable)
+        XCTAssertTrue(final.ready, "扫描版应到达明确终态而不是准备中")
+        XCTAssertEqual(final.message, "PDF 已可阅读（共2页）；没有可搜索的文字")
+        let hits = try await index.search(bookID: book.id, query: "这一页的文字")
+        XCTAssertTrue(hits.isEmpty, "扫描版没有文字索引，搜索应为空")
+        let wholeScope = BookEvidenceScope(bookID: book.id, throughPage: 2)
+        let db = try IndexDatabase(url: session.library.root.appendingPathComponent("book-index.sqlite"))
+        XCTAssertTrue(try db.keywordFragments(scope: wholeScope, terms: ["图片"], limit: 10).isEmpty)
+
+        // 直接驱动页级 prepare：扫描版仍应建 2 个 chapter、0 fragments，search 为空。
+        let scanRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PDFScanIndex-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: scanRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scanRoot) }
+        let scanLibrary = try LibraryStore(root: scanRoot, secrets: EphemeralSecrets())
+        let scanCopy = scanRoot.appendingPathComponent("scan.pdf")
+        try FileManager.default.copyItem(at: session.library.fileURL(for: book), to: scanCopy)
+        var scanEvents: [BookPreparationState] = []
+        try await scanLibrary.preparation.index.prepare(
+            bookID: "scan-book",
+            file: scanCopy,
+            progress: { scanEvents.append($0) }
+        )
+        XCTAssertEqual(scanEvents.map(\.completed), [0, 1, 2])
+        XCTAssertEqual(scanEvents.last?.completed, 2)
+        XCTAssertEqual(scanEvents.last?.total, 2)
+        XCTAssertEqual(scanEvents.last?.searchablePageCount, 0)
+        XCTAssertTrue(scanEvents.last?.textIndexUnavailable ?? false)
+        let scanDB = try IndexDatabase(url: scanRoot.appendingPathComponent("book-index.sqlite"))
+        XCTAssertEqual(Int(try scanDB.rows("SELECT count(*) FROM chapters WHERE book_id=?", ["scan-book"])[0][0]) ?? 0, 2)
+        XCTAssertEqual(Int(try scanDB.rows("SELECT count(*) FROM fragments WHERE book_id=?", ["scan-book"])[0][0]) ?? 0, 0)
+        let scanHits = try await scanLibrary.preparation.index.search(bookID: "scan-book", query: "这一页")
+        XCTAssertTrue(scanHits.isEmpty)
+        print("QA_M4A_SCAN ready=\(final.ready) searchable=\(String(describing: final.searchablePageCount)) hits=\(hits.count) msg=\(final.message)")
+    }
+
+    /// PDF M4b：搜索 tab 在准备中/失败/扫描版时的状态文案与输入禁用；三段 tab。
+    func testPDFSearchPanelAvailabilityStatesAndScannedUnsearchable() async throws {
+        func searchField(in root: UIView) -> UITextField? {
+            root.allViews.compactMap { $0 as? UITextField }
+                .first { $0.accessibilityIdentifier == "pdf-search-field" }
+        }
+        func openSearchTab(_ reader: PDFReaderController) throws -> (UITableView, UISegmentedControl, UITextField) {
+            let contentsButton = try XCTUnwrap(
+                reader.view.allViews.compactMap { $0 as? UIButton }
+                    .first { $0.accessibilityIdentifier == "pdf-contents" }
+            )
+            contentsButton.sendActions(for: .touchUpInside)
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+            let navigation = try XCTUnwrap(reader.presentedViewController as? UINavigationController)
+            let panel = try XCTUnwrap(navigation.topViewController)
+            let tabs = try XCTUnwrap(panel.navigationItem.titleView as? UISegmentedControl)
+            tabs.selectedSegmentIndex = 2
+            tabs.sendActions(for: .valueChanged)
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+            let field = try XCTUnwrap(searchField(in: panel.view))
+            let table = try XCTUnwrap(
+                panel.view.allViews.compactMap { $0 as? UITableView }
+                    .first { $0.accessibilityIdentifier == "pdf-search-results" }
+            )
+            return (table, tabs, field)
+        }
+
+        // 文字 PDF：准备中 → 文案 + 输入禁用；失败 → 文案。
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        var preparing = BookPreparationState(completed: 1, total: 2, preparing: true)
+        preparing.pdfPageCount = 2
+        preparing.searchablePageCount = 2
+        session.library.preparation.setDesignState(preparing, for: pdf.id)
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        let (preparingTable, tabs, preparingField) = try openSearchTab(reader)
+        XCTAssertEqual(tabs.numberOfSegments, 3)
+        XCTAssertFalse(preparingField.isEnabled, "准备中不应允许输入")
+        let preparingCell = preparingTable.dataSource?.tableView(preparingTable, cellForRowAt: IndexPath(row: 0, section: 0))
+        XCTAssertEqual((preparingCell?.contentConfiguration as? UIListContentConfiguration)?.text, "正在准备搜索…")
+
+        var failed = BookPreparationState(completed: 2, total: 2, preparing: false)
+        failed.pdfPageCount = 2
+        failed.searchablePageCount = 2
+        failed.failure = "fixture failure"
+        session.library.preparation.setDesignState(failed, for: pdf.id)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        let failedCell = preparingTable.dataSource?.tableView(preparingTable, cellForRowAt: IndexPath(row: 0, section: 0))
+        XCTAssertEqual((failedCell?.contentConfiguration as? UIListContentConfiguration)?.text, "搜索暂时不可用，请稍后重试")
+        XCTAssertFalse(searchField(in: reader.presentedViewController!.view)?.isEnabled ?? true)
+
+        // 扫描版：不可搜索文案 + 输入禁用。
+        let scanSession = try DesignFixture.makeSession(.init(scenario: .pdfScan, theme: .light))
+        try await DesignFixture.seed(scanSession)
+        defer { try? FileManager.default.removeItem(at: scanSession.root) }
+        let scanBook = try XCTUnwrap(scanSession.library.books.first { $0.title == DesignFixture.pdfScanFixtureTitle })
+        let scanReader = try PDFReaderController(book: scanBook, library: scanSession.library)
+        let scanWindow = host(scanReader, size: CGSize(width: 375, height: 667))
+        defer { scanWindow.isHidden = true }
+        let (scanTable, _, scanField) = try openSearchTab(scanReader)
+        XCTAssertFalse(scanField.isEnabled, "扫描版不应允许输入")
+        let scanCell = scanTable.dataSource?.tableView(scanTable, cellForRowAt: IndexPath(row: 0, section: 0))
+        XCTAssertEqual((scanCell?.contentConfiguration as? UIListContentConfiguration)?.text, "没有可搜索的文字")
+    }
+
+    /// PDF M5a：BookNote.pdf 模型兼容、几何换算、saveNote 校验/去重、旧 JSON 兼容。
+    func testPDFNoteModelGeometryAndSaveValidation() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let document = try XCTUnwrap(PDFKit.PDFDocument(url: session.library.fileURL(for: pdf)))
+
+        // 几何换算：选区 → 归一化矩形 + 页级 locator（pdf://page/N）。
+        let selection = try XCTUnwrap(document.findString("灯把书页照亮", withOptions: [.caseInsensitive]).first)
+        let made = try XCTUnwrap(PDFNoteGeometry.make(from: selection, document: document))
+        XCTAssertEqual(made.geometry.page, 1)
+        XCTAssertFalse(made.geometry.rects.isEmpty)
+        for rect in made.geometry.rects {
+            XCTAssertTrue((0...1).contains(rect.x) && (0...1).contains(rect.y))
+            XCTAssertGreaterThan(rect.w, 0)
+            XCTAssertGreaterThan(rect.h, 0)
+        }
+        XCTAssertEqual(made.locator.href.string, "pdf://page/1")
+        XCTAssertEqual(made.locator.locations.position, 1)
+        XCTAssertEqual(made.locator.text.highlight, "灯把书页照亮")
+        XCTAssertFalse(made.locator.text.after?.isEmpty ?? true, "页级上下文应带前后文")
+        XCTAssertTrue(made.locator.text.before?.contains("书灯 PDF 示例") ?? false)
+
+        // 旧 JSON 兼容：没有 pdf 字段的 BookNote 解码为 nil；geometry 可往返。
+        let legacy = try JSONDecoder().decode(
+            BookNote.self,
+            from: Data(#"{"id":"11111111-1111-1111-1111-111111111111","locatorJSON":"{}","body":"旧笔记"}"#.utf8)
+        )
+        XCTAssertNil(legacy.pdf, "旧笔记无 pdf 几何应解码为 nil")
+        let roundTrip = try JSONDecoder().decode(PDFNoteGeometry.self, from: JSONEncoder().encode(made.geometry))
+        XCTAssertEqual(roundTrip, made.geometry)
+
+        // saveNote：PDF 几何可无 domRange；highlightOnly 清空正文；缺 highlight 报错。
+        var highlight = BookNote(locator: made.locator, body: "不该保存", color: .yellow, pdf: made.geometry)
+        try session.library.saveNote(highlight, for: pdf.id, highlightOnly: true)
+        var marks = session.library.books.first { $0.id == pdf.id }?.notes ?? []
+        let savedHighlight = try XCTUnwrap(marks.first { $0.id == highlight.id })
+        XCTAssertEqual(savedHighlight.body, "")
+        XCTAssertEqual(savedHighlight.pdf, made.geometry)
+        // 重复 highlightOnly 保存不覆盖（不消费草稿语义）。
+        highlight.body = "再次"
+        try session.library.saveNote(highlight, for: pdf.id, highlightOnly: true)
+        marks = session.library.books.first { $0.id == pdf.id }?.notes ?? []
+        XCTAssertEqual(marks.first { $0.id == highlight.id }?.body, "")
+
+        // 无 pdf 几何且无 domRange（非 EPUB 映射）→ 拒绝。
+        let invalidLocator = Locator(
+            href: made.locator.href, mediaType: .pdf, title: made.locator.title,
+            locations: made.locator.locations, text: .init(highlight: "")
+        )
+        let bad = BookNote(locator: invalidLocator, pdf: nil)
+        XCTAssertThrowsError(try session.library.saveNote(bad, for: pdf.id)) { error in
+            guard case LibraryError.invalidLocation = error else { return XCTFail("应抛 invalidLocation：\(error)") }
+        }
+        let noHighlight = BookNote(
+            locator: Locator(href: made.locator.href, mediaType: .pdf, locations: made.locator.locations, text: .init(highlight: "")),
+            pdf: made.geometry
+        )
+        XCTAssertThrowsError(try session.library.saveNote(noHighlight, for: pdf.id))
+
+        // 改色 / 删除持久化。
+        try session.library.updateNoteColor(.blue, forNoteID: highlight.id, bookID: pdf.id)
+        XCTAssertEqual(session.library.books.first { $0.id == pdf.id }?.notes?.first { $0.id == highlight.id }?.color, .blue)
+        try session.library.removeNote(highlight.id, bookID: pdf.id)
+        XCTAssertNil(session.library.books.first { $0.id == pdf.id }?.notes?.first { $0.id == highlight.id })
+        let reloaded = try LibraryStore(root: session.root, secrets: EphemeralSecrets())
+        XCTAssertNil(reloaded.books.first { $0.id == pdf.id }?.notes?.first { $0.id == highlight.id })
+    }
+
+    /// PDF M5a：注解渲染数量/类型/userName/内容；改色刷新；删除后移除；选区→创建路径。
+    func testPDFAnnotationRenderingCountsTypesUserNamesAndRefresh() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let fixtureNotes = session.library.books.first { $0.id == pdf.id }?.notes ?? []
+        XCTAssertEqual(fixtureNotes.count, 2, "pdf 夹具应预置 1 高亮 + 1 笔记")
+        let highlightNote = try XCTUnwrap(fixtureNotes.first { $0.body.isEmpty })
+        let textNote = try XCTUnwrap(fixtureNotes.first { !$0.body.isEmpty })
+        XCTAssertEqual(highlightNote.pdf?.page, 1)
+        XCTAssertEqual(textNote.pdf?.page, 2)
+
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        let pdfView = try XCTUnwrap(
+            reader.view.allViews.compactMap { $0 as? PDFView }.first { $0.accessibilityIdentifier == "pdf-reader-view" }
+        )
+        let document = try XCTUnwrap(pdfView.document)
+        XCTAssertEqual(document.pageCount, 2)
+        func light(_ color: UIColor?) -> UIColor? {
+            color?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        }
+        func kind(_ annotation: PDFAnnotation) -> String { (annotation.type ?? "").lowercased() }
+        // 只统计本控制器添加的注解（PDFKit 会为 .text 自动附带 userName=nil 的 Popup）。
+        func authored(_ page: PDFPage?) -> [PDFAnnotation] {
+            (page?.annotations ?? []).filter { $0.userName != nil }
+        }
+        func waitAnnotations() async throws {
+            try await Task.sleep(nanoseconds: 400_000_000)
+        }
+        let originalHighlightRects = highlightNote.pdf?.rects.count ?? 1
+        let textNoteRects = textNote.pdf?.rects.count ?? 1
+        let page1Annotations = authored(document.page(at: 0))
+        let page2Annotations = authored(document.page(at: 1))
+        print("QA_M5A_P1", page1Annotations.map { "\($0.type ?? "nil")|\($0.userName ?? "nil")" })
+        print("QA_M5A_P2", page2Annotations.map { "\($0.type ?? "nil")|\($0.userName ?? "nil")" })
+        print("QA_M5A_GEOM highlightRects=\(originalHighlightRects) noteRects=\(textNoteRects)")
+        XCTAssertEqual(page1Annotations.count, originalHighlightRects, "第 1 页高亮注解数与几何矩形数一致")
+        XCTAssertEqual(page2Annotations.count, textNoteRects + 1, "第 2 页应为下划线（按行）+ 笔记图标")
+        let highlight = try XCTUnwrap(page1Annotations.first)
+        XCTAssertTrue(kind(highlight).contains("highlight"))
+        XCTAssertEqual(highlight.userName, "shudeng-pdf-note:" + highlightNote.id.uuidString)
+        XCTAssertEqual(highlight.contents, highlightNote.quote)
+        XCTAssertEqual(light(highlight.color), light(HighlightColor.yellow.tint))
+        let underline = try XCTUnwrap(page2Annotations.first { kind($0).contains("underline") })
+        let icon = try XCTUnwrap(page2Annotations.first { kind($0).contains("text") })
+        XCTAssertEqual(underline.userName, "shudeng-pdf-note:" + textNote.id.uuidString)
+        XCTAssertEqual(icon.userName, underline.userName)
+        XCTAssertEqual(underline.contents, textNote.body)
+        XCTAssertEqual(icon.contents, textNote.body)
+        XCTAssertEqual(light(underline.color), light(HighlightColor.green.tint))
+
+        // 选区 → 高亮创建路径：几何 + saveNote(highlightOnly) → 渲染新注解。
+        let selection = try XCTUnwrap(document.findString("书灯 PDF 示例", withOptions: [.caseInsensitive]).first)
+        let made = try XCTUnwrap(PDFNoteGeometry.make(from: selection, document: document))
+        let created = BookNote(locator: made.locator, color: .rose, pdf: made.geometry)
+        try session.library.saveNote(created, for: pdf.id, highlightOnly: true)
+        try await waitAnnotations()
+        let page1After = authored(document.page(at: 0))
+        print("QA_M5A_AFTER", page1After.map { "\($0.type ?? "nil")|\($0.userName ?? "nil")" }, "created=\(created.id)")
+        XCTAssertEqual(page1After.count, originalHighlightRects + made.geometry.rects.count)
+        let createdAnnotation = try XCTUnwrap(page1After.first { $0.userName == "shudeng-pdf-note:" + created.id.uuidString })
+        XCTAssertTrue(kind(createdAnnotation).contains("highlight"))
+        XCTAssertEqual(light(createdAnnotation.color), light(HighlightColor.rose.tint))
+
+        // 改色 → 注解颜色刷新；删除 → 注解移除。
+        try session.library.updateNoteColor(.blue, forNoteID: highlightNote.id, bookID: pdf.id)
+        try await waitAnnotations()
+        let recolored = try XCTUnwrap(
+            authored(document.page(at: 0)).first { $0.userName == "shudeng-pdf-note:" + highlightNote.id.uuidString }
+        )
+        XCTAssertEqual(light(recolored.color), light(HighlightColor.blue.tint), "改色后注解颜色应刷新")
+        try session.library.removeNote(highlightNote.id, bookID: pdf.id)
+        try await waitAnnotations()
+        XCTAssertEqual(authored(document.page(at: 0)).count, made.geometry.rects.count, "删除高亮后仅剩新建高亮注解")
+        try session.library.removeNote(textNote.id, bookID: pdf.id)
+        try await waitAnnotations()
+        XCTAssertEqual(authored(document.page(at: 1)).count, 0, "删除笔记后注解应移除")
+    }
+
+    /// PDF M5a：程序化选区（pdfView.currentSelection）→ 纸白选区浮层 → 创建高亮/笔记（不依赖 XCUITest 拖拽）。
+    func testPDFSelectionMenuCreatesHighlightAndNoteViaUI() async throws {
+        func button(_ identifier: String, in root: UIView) -> UIButton? {
+            root.allViews.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == identifier }
+        }
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        let pdfView = try XCTUnwrap(
+            reader.view.allViews.compactMap { $0 as? PDFView }.first { $0.accessibilityIdentifier == "pdf-reader-view" }
+        )
+        let document = try XCTUnwrap(pdfView.document)
+        let page = try XCTUnwrap(document.page(at: 0))
+        let text = try XCTUnwrap(page.string)
+
+        func select(_ quote: String) throws {
+            let range = (text as NSString).range(of: quote)
+            XCTAssertNotEqual(range.location, NSNotFound)
+            let selection = try XCTUnwrap(page.selection(for: range))
+            pdfView.currentSelection = selection
+            NotificationCenter.default.post(name: .PDFViewSelectionChanged, object: pdfView)
+        }
+        func waitMenu() async throws -> UIView {
+            for _ in 0..<30 {
+                if let menu = reader.view.allViews.first(where: { $0.accessibilityIdentifier == "pdf-selection-menu" }) {
+                    return menu
+                }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            throw XCTSkip("程序化选区未产生纸白浮层")
+        }
+
+        // 选区 → 高亮创建。
+        let beforeCreate = session.library.books.first { $0.id == pdf.id }?.notes?.count ?? 0
+        try select("灯把书页照亮")
+        let menu = try await waitMenu()
+        try XCTUnwrap(button("pdf-selection-highlight", in: menu)).sendActions(for: .touchUpInside)
+        var palette: UIView?
+        for _ in 0..<30 {
+            if let view = reader.presentedViewController?.view, view.accessibilityIdentifier == "pdf-highlight-palette" {
+                palette = view; break
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let paletteView = try XCTUnwrap(palette, "点「高亮」应打开调色盘")
+        try XCTUnwrap(button("pdf-highlight-color-green", in: paletteView)).sendActions(for: .touchUpInside)
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if (session.library.books.first { $0.id == pdf.id }?.notes?.count ?? 0) > beforeCreate { break }
+        }
+        let highlighted = session.library.books.first { $0.id == pdf.id }?.notes ?? []
+        XCTAssertEqual(highlighted.count, beforeCreate + 1)
+        let createdHighlight = try XCTUnwrap(highlighted.last)
+        XCTAssertEqual(createdHighlight.pdf?.page, 1)
+        XCTAssertEqual(createdHighlight.body, "")
+        XCTAssertEqual(createdHighlight.quote, "灯把书页照亮")
+        XCTAssertEqual(createdHighlight.highlightColor, .green)
+
+        // 选区 → 写笔记 → 编辑器输入并保存。
+        try select("书灯 PDF 示例")
+        let noteMenu = try await waitMenu()
+        try XCTUnwrap(button("pdf-selection-note", in: noteMenu)).sendActions(for: .touchUpInside)
+        var editor: UIView?
+        for _ in 0..<30 {
+            if let view = reader.presentedViewController?.view, view.accessibilityIdentifier == "pdf-note-editor" {
+                editor = view; break
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        for _ in 0..<20 where editor == nil {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let view = reader.presentedViewController?.view, view.accessibilityIdentifier == "pdf-note-editor" { editor = view }
+        }
+        let editorView = try XCTUnwrap(editor, "点「写笔记」应打开笔记编辑器")
+        let body = try XCTUnwrap(editorView.allViews.compactMap { $0 as? UITextView }.first { $0.accessibilityIdentifier == "note-body" })
+        body.text = "单元创建的 PDF 笔记"
+        body.delegate?.textViewDidChange?(body)
+        try XCTUnwrap(button("note-save", in: editorView)).sendActions(for: .touchUpInside)
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if reader.presentedViewController == nil,
+               (session.library.books.first { $0.id == pdf.id }?.notes?.count ?? 0) > beforeCreate + 1 { break }
+        }
+        let notesAfterNote = session.library.books.first { $0.id == pdf.id }?.notes ?? []
+        XCTAssertEqual(notesAfterNote.count, beforeCreate + 2)
+        let createdNote = try XCTUnwrap(notesAfterNote.last)
+        XCTAssertEqual(createdNote.body, "单元创建的 PDF 笔记")
+        XCTAssertEqual(createdNote.pdf?.page, 1)
+
+        // 注解渲染：新建高亮 + 笔记（下划线）都在第 1 页。
+        try await Task.sleep(nanoseconds: 400_000_000)
+        let authored = (document.page(at: 0)?.annotations ?? []).filter { $0.userName != nil }
+        let highlightAnnotation = authored.first { $0.userName == "shudeng-pdf-note:" + createdHighlight.id.uuidString }
+        XCTAssertNotNil(highlightAnnotation)
+        let underline = authored.first {
+            $0.userName == "shudeng-pdf-note:" + createdNote.id.uuidString && ($0.type ?? "").lowercased().contains("underline")
+        }
+        XCTAssertNotNil(underline, "笔记应渲染为下划线注解")
+    }
+
+    /// PDF M5b：笔记页 PDF 行页号（pdf.page / locator.position 回退）、点击路由到 PDF 阅读器对应页、
+    /// 编辑保留几何、滑删、导出面板；EPUB 行仍显示章节。
+    func testNotesPagePDFRowsPageNumbersRoutingEditDeleteAndExport() async throws {
+        func allButtons(_ root: UIView) -> [UIButton] {
+            root.allViews.compactMap { $0 as? UIButton }
+        }
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        var notes = session.library.books.first { $0.id == pdf.id }?.notes ?? []
+        XCTAssertEqual(notes.count, 2)
+        let highlight = try XCTUnwrap(notes.first { $0.pdf?.page == 1 })
+        let textNote = try XCTUnwrap(notes.first { !$0.body.isEmpty })
+
+        // locator.position 回退：无 pdf 几何但 locator 有位置（带 domRange 以通过 EPUB 旧校验）→ 仍显示「第 2 页」。
+        let domRange = DOMRange(
+            start: DOMRange.Point(cssSelector: "p", textNodeIndex: 0, charOffset: 0),
+            end: DOMRange.Point(cssSelector: "p", textNodeIndex: 0, charOffset: 1)
+        )
+        let sourceLocator = try highlight.location()
+        var fallbackLocator = Locator(
+            href: sourceLocator.href, mediaType: .pdf, title: "PDF 位置",
+            locations: sourceLocator.locations,
+            text: .init(highlight: "回退位置引文")
+        )
+        fallbackLocator.locations.position = 2
+        fallbackLocator.locations.otherLocations["domRange"] = JSONValue.object(domRange.jsonObject)
+        let fallback = BookNote(locator: fallbackLocator, body: "回退正文", pdf: nil)
+        try session.library.saveNote(fallback, for: pdf.id)
+        notes = session.library.books.first { $0.id == pdf.id }?.notes ?? []
+        XCTAssertEqual(notes.count, 3)
+
+        // 笔记页宿主（需要导航容器才能渲染导出按钮）。
+        let controller = NotesController(library: session.library)
+        let nav = UINavigationController(rootViewController: controller)
+        let window = host(nav, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            if controller.view.allViews.contains(where: { $0.accessibilityIdentifier == "notes" }) { break }
+        }
+        let collection = try XCTUnwrap(
+            controller.view.allViews.compactMap { $0 as? UICollectionView }.first { $0.accessibilityIdentifier == "notes" }
+        )
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        XCTAssertGreaterThan(collection.numberOfSections, 0)
+
+        // 行内容：identifier / accessibilityLabel 含「第 N 页」、引文/正文。
+        collection.layoutIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        var rows: [(indexPath: IndexPath, id: UUID, label: String)] = []
+        for cell in collection.visibleCells {
+            guard let identifier = cell.accessibilityIdentifier,
+                  identifier.hasPrefix("annotation-"),
+                  let id = UUID(uuidString: String(identifier.dropFirst("annotation-".count))),
+                  let indexPath = collection.indexPath(for: cell) else { continue }
+            rows.append((indexPath, id, cell.accessibilityLabel ?? ""))
+        }
+        XCTAssertEqual(rows.count, 3, "PDF 分组应有 3 行（高亮/笔记/回退位置）")
+        let highlightRow = try XCTUnwrap(rows.first { $0.id == highlight.id })
+        XCTAssertTrue(highlightRow.label.contains("第 1 页"), "高亮行应显示第 1 页：\(highlightRow.label)")
+        XCTAssertTrue(highlightRow.label.contains("灯把书页照亮"))
+        let noteRow = try XCTUnwrap(rows.first { $0.id == textNote.id })
+        XCTAssertTrue(noteRow.label.contains("第 2 页"), "笔记行应显示第 2 页：\(noteRow.label)")
+        XCTAssertTrue(noteRow.label.contains("夹具笔记"))
+        if let fallbackRow = rows.first(where: { $0.id == fallback.id }) {
+            XCTAssertTrue(fallbackRow.label.contains("第 2 页"), "locator.position 回退应显示第 2 页：\(fallbackRow.label)")
+            XCTAssertFalse(fallbackRow.label.contains("PDF 位置"), "PDF 行不应显示 locator 标题")
+        }
+
+        // 点击高亮行 → 打开 PDFReaderController 并停在第 1 页；不预写阅读进度（task-59）。
+        let progressBeforeNoteClick = session.library.books.first { $0.id == pdf.id }?.locatorJSON
+        controller.collectionView(collection, didSelectItemAt: highlightRow.indexPath)
+        var reader: PDFReaderController?
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let presented = (controller.presentedViewController ?? nav.presentedViewController) as? PDFReaderController {
+                reader = presented; break
+            }
+        }
+        if reader == nil {
+            print("QA_M5B_ROUTE controller.presented=\(String(describing: controller.presentedViewController)) nav.presented=\(String(describing: nav.presentedViewController)) progress=\(String(describing: session.library.books.first { $0.id == pdf.id }?.locatorJSON))")
+        }
+        let pdfReader = try XCTUnwrap(reader, "点击 PDF 笔记行应打开 PDFReaderController")
+        var pageText = ""
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let label = pdfReader.view.allViews.first(where: { $0.accessibilityIdentifier == "pdf-reader-page" }) as? UILabel {
+                pageText = label.text ?? ""
+                if pageText == "第 1 / 2 页" { break }
+            }
+        }
+        XCTAssertEqual(pageText, "第 1 / 2 页", "应停在笔记所在第 1 页")
+        // task-59：NotesController target 路由不再预写阅读进度；关闭后进度应保持打开前状态。
+        let progressAfterOpen = session.library.books.first { $0.id == pdf.id }?.locatorJSON
+        XCTAssertEqual(progressAfterOpen, progressBeforeNoteClick, "点笔记打开阅读器不应改写原阅读进度：\(String(describing: progressAfterOpen))")
+        pdfReader.dismiss(animated: false)
+        for _ in 0..<20 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            if controller.presentedViewController == nil && nav.presentedViewController == nil { break }
+        }
+        // 关闭后（flush 不应写回 target 页）。
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8))
+        XCTAssertEqual(
+            session.library.books.first { $0.id == pdf.id }?.locatorJSON,
+            progressBeforeNoteClick,
+            "关闭笔记跳转后原阅读进度不应被改写"
+        )
+
+        // 点击笔记行 → 第 2 页。
+        controller.collectionView(collection, didSelectItemAt: noteRow.indexPath)
+        var reader2: PDFReaderController?
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let presented = (controller.presentedViewController ?? nav.presentedViewController) as? PDFReaderController {
+                reader2 = presented; break
+            }
+        }
+        let pdfReader2 = try XCTUnwrap(reader2)
+        var pageText2 = ""
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let label = pdfReader2.view.allViews.first(where: { $0.accessibilityIdentifier == "pdf-reader-page" }) as? UILabel {
+                pageText2 = label.text ?? ""
+                if pageText2 == "第 2 / 2 页" { break }
+            }
+        }
+        XCTAssertEqual(pageText2, "第 2 / 2 页", "应停在笔记所在第 2 页")
+        pdfReader2.dismiss(animated: false)
+        for _ in 0..<20 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            if controller.presentedViewController == nil && nav.presentedViewController == nil { break }
+        }
+
+        // leading 编辑保留 pdf 几何（模拟编辑保存：只改 body）。
+        let leading = try XCTUnwrap(controller.leadingSwipeActions(for: textNote.id))
+        XCTAssertEqual(leading.actions.map(\.title), ["编辑"])
+        XCTAssertNil(controller.leadingSwipeActions(for: highlight.id), "高亮行不应有编辑入口")
+        let geometryBefore = textNote.pdf
+        var edited = textNote
+        edited.body = "编辑后的 PDF 笔记正文"
+        try session.library.saveNote(edited, for: pdf.id)
+        let saved = try XCTUnwrap(session.library.books.first { $0.id == pdf.id }?.notes?.first { $0.id == textNote.id })
+        XCTAssertEqual(saved.pdf, geometryBefore, "编辑保存必须保留 pdf 几何")
+        XCTAssertEqual(saved.body, "编辑后的 PDF 笔记正文")
+
+        // trailing 删除（走 UI 确认弹层）→ removeNote。
+        let trailing = try XCTUnwrap(controller.trailingSwipeActions(for: fallback.id))
+        let deleteAction = try XCTUnwrap(trailing.actions.first)
+        XCTAssertEqual(deleteAction.title, "删除")
+        deleteAction.handler(deleteAction, UIView()) { _ in }
+        var alertView: UIView?
+        for _ in 0..<20 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            if let presented = controller.presentedViewController ?? nav.presentedViewController,
+               presented.view.accessibilityIdentifier == "book-dialog" {
+                alertView = presented.view; break
+            }
+        }
+        let dialog = try XCTUnwrap(alertView, "滑删应弹出删除确认")
+        let dialogButtons = allButtons(dialog)
+        let confirm = try XCTUnwrap(dialogButtons.first(where: { $0.accessibilityLabel == "删除" || $0.configuration?.title == "删除" }))
+        confirm.sendActions(for: .touchUpInside)
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            let remainingNotes = session.library.books.first(where: { $0.id == pdf.id })?.notes ?? []
+            if !remainingNotes.contains(where: { $0.id == fallback.id }) { break }
+        }
+        let finalNotes = session.library.books.first(where: { $0.id == pdf.id })?.notes ?? []
+        XCTAssertNil(finalNotes.first(where: { $0.id == fallback.id }), "确认删除后应 removeNote")
+
+        // 导出：写入「书灯笔记-YYYYMMDD.txt」，文本含 PDF 页号与书头。
+        let exportItem = try XCTUnwrap(controller.navigationItem.rightBarButtonItem)
+        XCTAssertEqual(exportItem.accessibilityIdentifier, "notes-export")
+        _ = exportItem.target?.perform(exportItem.action, with: exportItem)
+        let temp = FileManager.default.temporaryDirectory
+        var exportFile: URL?
+        for _ in 0..<20 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            if let found = try? FileManager.default.contentsOfDirectory(at: temp, includingPropertiesForKeys: nil)
+                .first(where: { $0.lastPathComponent.hasPrefix("书灯笔记-") && $0.pathExtension == "txt" }),
+               FileManager.default.fileExists(atPath: found.path) {
+                exportFile = found; break
+            }
+        }
+        let exported = try XCTUnwrap(exportFile, "导出应写入分享文件")
+        let content = try String(contentsOf: exported, encoding: .utf8)
+        XCTAssertTrue(content.contains("《书灯 PDF 示例》"))
+        XCTAssertTrue(content.contains("第 1 页"), "导出应包含第 1 页：\(content)")
+        XCTAssertTrue(content.contains("第 2 页"), "导出应包含第 2 页：\(content)")
+        XCTAssertTrue(content.contains("原文：灯把书页照亮"))
+        XCTAssertTrue(content.contains("想法：编辑后的 PDF 笔记正文"))
+        try? FileManager.default.removeItem(at: exported)
+        if let presented = controller.presentedViewController ?? nav.presentedViewController {
+            presented.dismiss(animated: false)
+        }
+    }
+
+    /// PDF M6：QuestionEvidence 页级字段/citation 标题；PDF 引用按钮 → PDFReaderController(target:) 跳到引用页。
+    func testQuestionEvidencePDFCitationAndReferenceJump() async throws {
+        func evidence(quote: String, in document: PDFKit.PDFDocument) throws -> QuestionEvidence {
+            let selection = try XCTUnwrap(document.findString(quote, withOptions: [.caseInsensitive]).first)
+            let made = try XCTUnwrap(PDFNoteGeometry.make(from: selection, document: document))
+            return QuestionEvidence(locator: made.locator)
+        }
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let document = try XCTUnwrap(PDFKit.PDFDocument(url: session.library.fileURL(for: pdf)))
+        let page1 = try evidence(quote: "灯把书页照亮", in: document)
+        let page2 = try evidence(quote: "PDFKit", in: document)
+        XCTAssertEqual(page1.pdfPage, 1)
+        XCTAssertEqual(page1.locationTitle, "第 1 页")
+        XCTAssertEqual(page2.pdfPage, 2)
+        XCTAssertEqual(page2.locationTitle, "第 2 页")
+        // EPUB 引用不带 pdfPage，沿用 chapter 标题。
+        let epubLocator = Locator(href: AnyURL(string: "OEBPS/ch1.xhtml")!, mediaType: .xhtml, title: "第三回 · 林黛玉进贾府",
+                                  locations: .init(progression: 0.2, totalProgression: 0.2),
+                                  text: .init(highlight: "灯把书页照亮"))
+        let epubEvidence = QuestionEvidence(locator: epubLocator)
+        XCTAssertNil(epubEvidence.pdfPage)
+        XCTAssertEqual(epubEvidence.locationTitle, "第三回 · 林黛玉进贾府")
+
+        // 已完成、含 PDF 引用的问答记录。
+        var record = ReadingQuestion(book: pdf, origin: try page2.location())
+        record.question = "这份 PDF 讲了什么？"
+        record.answer = "依据原文：第 1 页说灯把书页照亮，第 2 页说明 PDFKit 渲染与翻页。"
+        record.state = .complete
+        record.citations = [page1, page2]
+        record.evidence = [page1, page2]
+        record.conversationTitle = record.question
+        XCTAssertTrue(session.library.questions.save(record))
+
+        let controller = QuestionController(library: session.library, id: record.id)
+        let window = host(controller, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        let reference0 = try XCTUnwrap(
+            controller.view.allViews.compactMap { $0 as? UIButton }
+                .first { $0.accessibilityIdentifier == "question-reference-0" }
+        )
+        let title = try XCTUnwrap(reference0.configuration?.title)
+        XCTAssertTrue(title.contains("第 1 页"), "PDF 引用标题应显示页码：\(title)")
+        XCTAssertTrue(title.contains("灯把书页照亮"), "PDF 引用应带引文摘要：\(title)")
+        let sheetImage = DesignFixture.renderRoot(controller, size: CGSize(width: 375, height: 667), style: .light)
+        let sheetAttachment = XCTAttachment(data: try XCTUnwrap(sheetImage.pngData()), uniformTypeIdentifier: "public.png")
+        sheetAttachment.name = "pdf-m6-question-pdf-citations-375-light"
+        sheetAttachment.lifetime = .keepAlways
+        add(sheetAttachment)
+
+        // 点引用 → 打开 PDFReaderController(target:) 并停在引用页（第 1 页）。
+        reference0.sendActions(for: .touchUpInside)
+        var reader: PDFReaderController?
+        for _ in 0..<50 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let presented = controller.presentedViewController as? PDFReaderController { reader = presented; break }
+        }
+        let pdfReader = try XCTUnwrap(reader, "点 PDF 引用应打开 PDFReaderController")
+        var pageText = ""
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let label = pdfReader.view.allViews.first(where: { $0.accessibilityIdentifier == "pdf-reader-page" }) as? UILabel {
+                pageText = label.text ?? ""
+                if pageText == "第 1 / 2 页" { break }
+            }
+        }
+        XCTAssertEqual(pageText, "第 1 / 2 页", "引用跳转应停在引用页（第 1 页）")
+        let readerImage = DesignFixture.renderRoot(pdfReader, size: CGSize(width: 375, height: 667), style: .light)
+        let readerAttachment = XCTAttachment(data: try XCTUnwrap(readerImage.pngData()), uniformTypeIdentifier: "public.png")
+        readerAttachment.name = "pdf-m6-reference-jump-page1-375-light"
+        readerAttachment.lifetime = .keepAlways
+        add(readerAttachment)
+        pdfReader.dismiss(animated: false)
+
+        // PDFReaderController(target:) 应优先于已保存的阅读进度（locatorJSON 第 1 页）。
+        let page1Locator = try page1.location()
+        let page2Locator = try page2.location()
+        try session.library.saveReadingState(page1Locator, settings: ReadingSettings(), for: pdf.id)
+        let targetReader = try PDFReaderController(book: pdf, library: session.library, target: page2Locator)
+        let targetWindow = host(targetReader, size: CGSize(width: 375, height: 667))
+        defer { targetWindow.isHidden = true }
+        var targetPageText = ""
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let label = targetReader.view.allViews.first(where: { $0.accessibilityIdentifier == "pdf-reader-page" }) as? UILabel {
+                targetPageText = label.text ?? ""
+                if targetPageText == "第 2 / 2 页" { break }
+            }
+        }
+        XCTAssertEqual(targetPageText, "第 2 / 2 页", "target 应优先于 locatorJSON 恢复")
+    }
+
+    /// PDF M6：问答面板内点引用（有 jump 闭包）→ 关闭面板并 goToPage，不再新开阅读器。
+    func testPDFQuestionPanelReferenceJumpClosesSheetAndGoToPage() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let document = try XCTUnwrap(PDFKit.PDFDocument(url: session.library.fileURL(for: pdf)))
+        func evidence(_ quote: String) throws -> QuestionEvidence {
+            let selection = try XCTUnwrap(document.findString(quote, withOptions: [.caseInsensitive]).first)
+            let made = try XCTUnwrap(PDFNoteGeometry.make(from: selection, document: document))
+            return QuestionEvidence(locator: made.locator)
+        }
+        let page1 = try evidence("灯把书页照亮")
+        let page2 = try evidence("PDFKit")
+        var record = ReadingQuestion(book: pdf, origin: try page1.location())
+        record.question = "面板内引用跳转"
+        record.answer = "见引用。"
+        record.state = .complete
+        record.citations = [page1, page2]
+        XCTAssertTrue(session.library.questions.save(record))
+
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        var jumped: Locator?
+        let panel = QuestionController(library: session.library, id: record.id) { target, _ in jumped = target }
+        reader.present(panel, animated: false)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        let reference1 = try XCTUnwrap(
+            panel.view.allViews.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "question-reference-1" }
+        )
+        reference1.sendActions(for: .touchUpInside)
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if jumped != nil && reader.presentedViewController == nil { break }
+        }
+        XCTAssertEqual(try jumped?.pdfPageNumber, 2, "面板内引用应通过 jump 跳到第 2 页")
+        XCTAssertNil(reader.presentedViewController, "点引用应关闭问答面板")
+        XCTAssertNil(reader.presentedViewController as? PDFReaderController, "不应在面板跳转时新开阅读器")
+    }
+
+    /// PDF M6：页脚「问书灯」入口 → 打开 QuestionController（自由提问按当前页）。
+    func testPDFAskFooterAndSelectionAskOpenQuestionSheet() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        // 页脚入口。
+        let ask = try XCTUnwrap(
+            reader.view.allViews.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "pdf-reader-ask" }
+        )
+        ask.sendActions(for: .touchUpInside)
+        var questionSheet: UIView?
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let nav = reader.presentedViewController as? UINavigationController,
+               let sheet = nav.topViewController?.view, sheet.accessibilityIdentifier == "question-sheet" {
+                questionSheet = sheet; break
+            }
+        }
+        let sheet = try XCTUnwrap(questionSheet, "页脚「问书灯」应打开 QuestionController")
+        XCTAssertTrue(sheet.allViews.contains { $0.accessibilityIdentifier == "question-input" })
+        let origin = try XCTUnwrap(session.library.questions.records.first { $0.bookID == pdf.id }?.origin())
+        XCTAssertEqual(origin.pdfPageNumber, 1, "自由提问应按当前页建立页级 origin")
+        let askImage = DesignFixture.renderRoot(reader.presentedViewController!, size: CGSize(width: 375, height: 667), style: .light)
+        let askAttachment = XCTAttachment(data: try XCTUnwrap(askImage.pngData()), uniformTypeIdentifier: "public.png")
+        askAttachment.name = "pdf-m6-footer-ask-question-sheet-375-light"
+        askAttachment.lifetime = .keepAlways
+        add(askAttachment)
+        reader.presentedViewController?.dismiss(animated: false)
+        for _ in 0..<20 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            if reader.presentedViewController == nil { break }
+        }
+
+    }
+
+    /// PDF M6：程序化选区 → 纸白浮层「问 AI」→ QuestionController 记录页级 selection。
+    func testPDFSelectionAskOpensQuestionSheet() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        // 程序化选区 → 纸白浮层「问 AI」（用新阅读器，避免 sheet dismiss 过渡态干扰）。
+        let pdfView = try XCTUnwrap(
+            reader.view.allViews.compactMap { $0 as? PDFView }.first { $0.accessibilityIdentifier == "pdf-reader-view" }
+        )
+        let document = try XCTUnwrap(pdfView.document)
+        let page = try XCTUnwrap(document.page(at: 0))
+        let text = try XCTUnwrap(page.string)
+        let range = (text as NSString).range(of: "灯把书页照亮")
+        let selection = try XCTUnwrap(page.selection(for: range))
+        pdfView.currentSelection = selection
+        NotificationCenter.default.post(name: .PDFViewSelectionChanged, object: pdfView)
+        var menuView: UIView?
+        for _ in 0..<30 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+            try await Task.sleep(nanoseconds: 100_000_000)
+            if let menu = reader.view.allViews.first(where: { $0.accessibilityIdentifier == "pdf-selection-menu" }) {
+                menuView = menu; break
+            }
+        }
+        let menu = try XCTUnwrap(menuView, "选区应出现纸白浮层")
+        let askSelection = try XCTUnwrap(
+            menu.allViews.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "pdf-selection-ask" }
+        )
+        askSelection.sendActions(for: .touchUpInside)
+        var selectionSheet: UIView?
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let nav = reader.presentedViewController as? UINavigationController,
+               let view = nav.topViewController?.view, view.accessibilityIdentifier == "question-sheet" {
+                selectionSheet = view; break
+            }
+        }
+        XCTAssertNotNil(selectionSheet, "选区「问 AI」应打开 QuestionController")
+        let newest = try XCTUnwrap(session.library.questions.records.max { $0.updated < $1.updated })
+        XCTAssertEqual((try? newest.selection.location().pdfPageNumber), 1, "选区提问应记录页级 selection")
+        XCTAssertEqual(newest.selection.quote, "灯把书页照亮")
+
+    }
+
+    /// PDF M6：扫描版页脚「问书灯」→ 无文字提示，不打开问答。
+    func testPDFScannedAskFooterShowsNoTextAlert() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdfScan, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let book = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfScanFixtureTitle })
+        let reader = try PDFReaderController(book: book, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        let ask = try XCTUnwrap(
+            reader.view.allViews.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "pdf-reader-ask" }
+        )
+        ask.sendActions(for: .touchUpInside)
+        var dialog: UIView?
+        for _ in 0..<30 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            if let presented = reader.presentedViewController, presented.view.accessibilityIdentifier == "book-dialog" {
+                dialog = presented.view; break
+            }
+        }
+        let view = try XCTUnwrap(dialog, "扫描版「问书灯」应弹无文字提示")
+        let texts = view.allViews.compactMap { ($0 as? UILabel)?.text }
+        XCTAssertTrue(texts.contains("没有可搜索的文字；阅读、缩放和加书签都可以正常使用。"), "应说明没有可搜索文字：\(texts)")
+        XCTAssertNil(reader.presentedViewController as? UINavigationController?.Type, "扫描版不应打开问答面板")
+        let alertRoot = reader.presentedViewController ?? reader
+        let image = DesignFixture.renderRoot(alertRoot, size: CGSize(width: 375, height: 667), style: .light)
+        let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
+        attachment.name = "pdf-m6-scan-ask-no-text-alert-375-light"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// PDF M6：375 宽 + accessibilityLarge 字号下页脚「问书灯/页码/模式」不与彼此重叠。
+    func testPDFFooterAskLayoutAtAccessibilityLargeSize() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        if #available(iOS 17.0, *) {
+            window.traitOverrides.preferredContentSizeCategory = .accessibilityLarge
+        }
+        reader.view.setNeedsLayout()
+        reader.view.layoutIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        func frame(_ id: String) -> CGRect? {
+            reader.view.allViews.first { $0.accessibilityIdentifier == id }?.frame
+        }
+        let ask = try XCTUnwrap(frame("pdf-reader-ask"))
+        let page = try XCTUnwrap(frame("pdf-reader-page"))
+        let mode = try XCTUnwrap(frame("pdf-reader-mode"))
+        XCTAssertGreaterThan(ask.width, 0)
+        XCTAssertFalse(ask.intersects(page), "问书灯不应与页码重叠：ask=\(ask) page=\(page)")
+        XCTAssertFalse(page.intersects(mode), "页码不应与模式按钮重叠：page=\(page) mode=\(mode)")
+        XCTAssertGreaterThanOrEqual(ask.minX, 0)
+        XCTAssertLessThanOrEqual(mode.maxX, reader.view.bounds.width + 0.5)
+        let image = DesignFixture.renderRoot(reader, size: CGSize(width: 375, height: 667), style: .light)
+        let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
+        attachment.name = "pdf-m6-footer-ask-accessibility-large-375-light"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        _ = window
+    }
+
+    /// PDF 最终验收：300 页文字 PDF 的页级索引/打开/翻页耗时与常驻内存（秒表 + task_info）。
+    func testPDFLargeTextIndexingAndOpenPerformance() async throws {
+        func residentMB() -> Double {
+            var info = mach_task_basic_info()
+            var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) { pointer in
+                pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                }
+            }
+            return result == KERN_SUCCESS ? Double(info.resident_size) / 1_048_576 : -1
+        }
+        let pageCount = 300
+        let bounds = CGRect(x: 0, y: 0, width: 595, height: 842)
+        let renderer = UIGraphicsPDFRenderer(bounds: bounds)
+        let data = renderer.pdfData { context in
+            for index in 1...pageCount {
+                context.beginPage()
+                let heading = "性能夹具 · 第 \(index) 页"
+                (heading as NSString).draw(
+                    at: CGPoint(x: 56, y: 64),
+                    withAttributes: [.font: UIFont.boldSystemFont(ofSize: 20), .foregroundColor: UIColor.black]
+                )
+                let body = "PERF-\(index) 这是用于 PDF 页级索引与翻页性能验证的第 \(index) 页正文。"
+                (body as NSString).draw(
+                    in: CGRect(x: 56, y: 112, width: 480, height: 200),
+                    withAttributes: [.font: UIFont.systemFont(ofSize: 14), .foregroundColor: UIColor.black]
+                )
+            }
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PDFPerf-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("perf-300.pdf")
+        try data.write(to: file)
+        let library = try LibraryStore(root: root, secrets: EphemeralSecrets())
+        let memoryBefore = residentMB()
+        var events: [BookPreparationState] = []
+        let indexStarted = Date()
+        try await library.preparation.index.prepare(bookID: "perf-book", file: file, progress: { events.append($0) })
+        let indexSeconds = Date().timeIntervalSince(indexStarted)
+        let memoryAfterIndex = residentMB()
+        XCTAssertEqual(events.last?.completed, pageCount)
+        XCTAssertEqual(events.last?.searchablePageCount, pageCount)
+        let hits = try await library.preparation.index.search(bookID: "perf-book", query: "PERF-150")
+        XCTAssertEqual(hits.first?.page, 150)
+        print(String(format: "QA_PERF text_pdf_index_seconds=%.3f pages=%d size_kb=%.0f events=%d resident_before_mb=%.1f after_index_mb=%.1f", indexSeconds, pageCount, Double(data.count) / 1024, events.count, memoryBefore, memoryAfterIndex))
+
+        // 打开（PDFDocument + 阅读器首屏）。
+        let openStarted = Date()
+        var book = Book(id: "perf-book", title: "perf-300", author: "")
+        book.format = .pdf
+        let booksDir = root.appendingPathComponent("Books", isDirectory: true)
+        try FileManager.default.createDirectory(at: booksDir, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: file, to: library.fileURL(for: book))
+        let reader = try PDFReaderController(book: book, library: library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        let openSeconds = Date().timeIntervalSince(openStarted)
+        let memoryAfterOpen = residentMB()
+        let pdfView = try XCTUnwrap(
+            reader.view.allViews.compactMap { $0 as? PDFView }.first { $0.accessibilityIdentifier == "pdf-reader-view" }
+        )
+        let document = try XCTUnwrap(pdfView.document)
+        XCTAssertEqual(document.pageCount, pageCount)
+        // 连续翻页 20 次（跳到后半段附近页面）。
+        let turnStarted = Date()
+        for index in stride(from: 30, through: 220, by: 10) {
+            if let page = document.page(at: index) { pdfView.go(to: page) }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
+        }
+        let turnSeconds = Date().timeIntervalSince(turnStarted)
+        print(String(format: "QA_PERF text_pdf_open_seconds=%.3f page_turns_20_seconds=%.3f resident_after_open_mb=%.1f", openSeconds, turnSeconds, memoryAfterOpen))
+        XCTAssertLessThan(indexSeconds, 60, "300 页索引应在一分钟内完成")
+        XCTAssertLessThan(openSeconds, 5, "300 页 PDF 打开应低于 5s")
+        XCTAssertLessThan(turnSeconds, 5, "20 次翻页应低于 5s")
+    }
+
+    /// PDF M6 夹具检查：AI 问答所需的准备状态是否 ready（供 UI 真跑生成前置）。
+    func testPDFFixturePreparationStateReadyForAI() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let state = session.library.preparation.states[pdf.id]
+        print("QA_AI_FIXTURE_STATE", String(describing: state))
+        let value = try XCTUnwrap(state, "pdf 夹具应留下准备状态")
+        XCTAssertTrue(value.ready, "pdf 夹具准备状态应 ready：\(value)")
+        XCTAssertEqual(value.completed, value.total)
+        XCTAssertFalse(value.preparing)
+        XCTAssertFalse(value.textIndexUnavailable)
+        XCTAssertEqual(value.searchablePageCount, 2)
+    }
+
+    /// P1-4：纯白尾页不弹提示卡/无「?」；扫描页+空白页提示“N 页是扫描图片”，空白不计入扫描页。
+    func testPDFBlankTailPageNoPromptAndScanBlankCounts() async throws {
+        func makePDF(pages: [(text: String?, scan: Bool)]) -> Data {
+            let bounds = CGRect(x: 0, y: 0, width: 595, height: 842)
+            let renderer = UIGraphicsPDFRenderer(bounds: bounds)
+            return renderer.pdfData { context in
+                for page in pages {
+                    context.beginPage()
+                    if let text = page.text {
+                        (text as NSString).draw(
+                            at: CGPoint(x: 56, y: 112),
+                            withAttributes: [.font: UIFont.systemFont(ofSize: 14), .foregroundColor: UIColor.black]
+                        )
+                    }
+                    if page.scan {
+                        let image = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 420)).image { imageContext in
+                            UIColor.white.setFill()
+                            imageContext.fill(CGRect(x: 0, y: 0, width: 320, height: 420))
+                            ("扫描页" as NSString).draw(
+                                at: CGPoint(x: 20, y: 40),
+                                withAttributes: [.font: UIFont.boldSystemFont(ofSize: 24), .foregroundColor: UIColor.black]
+                            )
+                        }
+                        image.draw(in: CGRect(x: 100, y: 180, width: 320, height: 420))
+                    }
+                }
+            }
+        }
+        func importPDF(_ data: Data, in library: LibraryStore, name: String) async throws -> ImportedBook {
+            let source = library.root.appendingPathComponent(name + ".pdf")
+            try data.write(to: source)
+            defer { try? FileManager.default.removeItem(at: source) }
+            return try await library.importBook(from: source)
+        }
+
+        // 2 文字页 + 1 纯白尾页：不弹卡、无扫描页、无「?」。
+        let textRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PDFBlankTail-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: textRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: textRoot) }
+        let textLibrary = try LibraryStore(root: textRoot, secrets: EphemeralSecrets())
+        var textConfirmed = 0
+        let textData = makePDF(pages: [("第 1 页正文", false), ("第 2 页正文", false), (nil, false)])
+        let textImported = try await textLibrary.importBook(
+            from: {
+                let source = textRoot.appendingPathComponent("blank-tail.pdf")
+                try? textData.write(to: source)
+                return source
+            }(),
+            confirmPDFInfo: { _ in textConfirmed += 1; return true }
+        )
+        XCTAssertEqual(textConfirmed, 0, "纯白尾页不应触发扫描提示卡")
+        let textInfo = try XCTUnwrap(textImported.book.pdfInfo)
+        XCTAssertEqual(textInfo.pageCount, 3)
+        XCTAssertEqual(textInfo.textPageCount, 2)
+        XCTAssertEqual(textInfo.blankPageCount, 1)
+        XCTAssertEqual(textInfo.scannedPageCount, 0)
+        XCTAssertFalse(textInfo.hasScannedPages)
+        XCTAssertNil(textInfo.scannedPagesTitle)
+        let textReader = try PDFReaderController(book: textImported.book, library: textLibrary)
+        let textWindow = host(textReader, size: CGSize(width: 375, height: 667))
+        defer { textWindow.isHidden = true }
+        let help = try XCTUnwrap(
+            textReader.view.allViews.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "pdf-reader-help" }
+        )
+        XCTAssertTrue(help.isHidden, "含空白尾页但没有扫描页时不应显示「?」")
+
+        // 2 扫描页 + 1 纯白尾页：**task-62 性能修复后**，textPageCount==0 走“整本扫描”短路，
+        // 不再逐页 ink 判定，空白尾页被保守计为扫描页（blankPageCount=nil、scannedPageCount=3，
+        // 提示卡文案为“这份 PDF 是扫描版”）。这是性能优先的已知语义取舍。
+        let scanRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PDFScanBlank-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: scanRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scanRoot) }
+        let scanLibrary = try LibraryStore(root: scanRoot, secrets: EphemeralSecrets())
+        var scanConfirmed = 0
+        let scanData = makePDF(pages: [(nil, true), (nil, true), (nil, false)])
+        let scanSource = scanRoot.appendingPathComponent("scan-blank.pdf")
+        try scanData.write(to: scanSource)
+        let scanImported = try await scanLibrary.importBook(
+            from: scanSource,
+            confirmPDFInfo: { info in
+                scanConfirmed += 1
+                XCTAssertNil(info.blankPageCount, "整本扫描短路不再逐页判定空白页")
+                XCTAssertEqual(info.scannedPageCount, 3)
+                XCTAssertEqual(info.scannedPagesTitle, "这份 PDF 是扫描版")
+                return true
+            }
+        )
+        XCTAssertEqual(scanConfirmed, 1)
+        let scanInfo = try XCTUnwrap(scanImported.book.pdfInfo)
+        XCTAssertEqual(scanInfo.pageCount, 3)
+        XCTAssertEqual(scanInfo.textPageCount, 0)
+        XCTAssertNil(scanInfo.blankPageCount)
+        XCTAssertEqual(scanInfo.scannedPageCount, 3)
+        XCTAssertEqual(scanInfo.scannedPagesTitle, "这份 PDF 是扫描版")
+        XCTAssertEqual(scanInfo.scannedPagesMessage, "页面上的字是图片，目前还不能选字提问或高亮。阅读、缩放和加书签都可以正常使用。")
+    }
+
+    /// P1-5：PDF 封面来自首页缩略图（非 nil），并走 BookCoverStore 缓存（重复取同一对象）。
+    func testPDFCoverFromFirstPageIsNonNilAndCached() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let covers = BookCoverStore()
+        let first = await covers.image(for: pdf, library: session.library)
+        let image = try XCTUnwrap(first, "PDF 首页应能生成封面")
+        XCTAssertGreaterThan(image.size.width, 1)
+        XCTAssertGreaterThan(image.size.height, 1)
+        let second = await covers.image(for: pdf, library: session.library)
+        XCTAssertTrue(second === image, "重复取封面应命中缓存、不重复渲染")
+    }
+
+    /// P1-6：PDF 进度 trailing debounce 0.7s（快速翻页只写最后一页），关闭/离开立即 flush。
+    func testPDFProgressDebounceAndFlush() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        // host 不会自动触发 appearance；显式调用以完成 restore 流程（否则 didRestoreProgress=false 不落盘）。
+        reader.viewDidAppear(false)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        let pdfView = try XCTUnwrap(
+            reader.view.allViews.compactMap { $0 as? PDFView }.first { $0.accessibilityIdentifier == "pdf-reader-view" }
+        )
+        let document = try XCTUnwrap(pdfView.document)
+        XCTAssertNil(session.library.books.first { $0.id == pdf.id }?.locatorJSON, "初始不应有 PDF 阅读进度")
+        // 连续翻到第 2 页再回第 1 页：0.7s 内不应落盘，之后只写最后一页（第 1 页）。
+        pdfView.go(to: try XCTUnwrap(document.page(at: 1)))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.15))
+        pdfView.go(to: try XCTUnwrap(document.page(at: 0)))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertNil(session.library.books.first { $0.id == pdf.id }?.locatorJSON, "0.7s debounce 内不应写进度")
+        for _ in 0..<20 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if session.library.books.first { $0.id == pdf.id }?.locatorJSON != nil { break }
+        }
+        let debounced = try XCTUnwrap(session.library.books.first { $0.id == pdf.id }?.locatorJSON)
+        XCTAssertTrue(debounced.contains("pdf://page/1") || debounced.contains("\"position\":1"), "debounce 后应只写最后一页：\(debounced)")
+
+        // 离开阅读器立即 flush：翻到第 2 页后立刻 viewWillDisappear，应马上写入第 2 页。
+        pdfView.go(to: try XCTUnwrap(document.page(at: 1)))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        reader.viewWillDisappear(false)
+        let flushed = try XCTUnwrap(session.library.books.first { $0.id == pdf.id }?.locatorJSON)
+        XCTAssertTrue(flushed.contains("pdf://page/2") || flushed.contains("\"position\":2"), "关闭/离开应立刻 flush 当前页：\(flushed)")
+        let locator = try XCTUnwrap(try? Locator(json: JSONValue(jsonString: flushed, warnings: nil), warnings: nil))
+        XCTAssertEqual(locator.locations.progression ?? -1, 1.0, accuracy: 0.001, "末页 progression=1.0")
+    }
+
+    /// P0-1：页中部（起始偏移>80）选文 evidence 可被 permits/QuestionPlan 接受；篡改 quote 仍拒绝。
+    func testPDFMidPageSelectionPermitsAndForgedQuoteRejected() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let file = session.library.fileURL(for: pdf)
+        let document = try XCTUnwrap(PDFKit.PDFDocument(url: file))
+        // 页面中部（第 2 页靠后文字），before 上下文 >80 字符触发过 P0 scope 拒绝路径。
+        let page = try XCTUnwrap(document.page(at: 1))
+        let text = try XCTUnwrap(page.string)
+        let quote = "渲染与翻页"
+        let range = (text as NSString).range(of: quote)
+        XCTAssertNotEqual(range.location, NSNotFound)
+        XCTAssertGreaterThan(text.count, 0)
+        let selection = try XCTUnwrap(page.selection(for: range))
+        let made = try XCTUnwrap(PDFNoteGeometry.make(from: selection, document: document))
+        let evidence = QuestionEvidence(locator: made.locator)
+        let beforeCount = (try evidence.location().text.before ?? "").count
+        XCTAssertGreaterThan(beforeCount, 0)
+        let state = try XCTUnwrap(session.library.preparation.states[pdf.id])
+        XCTAssertTrue(state.ready, "夹具准备状态应 ready")
+        let scope = BookEvidenceScope(bookID: pdf.id)
+        let permitted = try await session.library.preparation.index.permits([evidence], scope: scope)
+        XCTAssertTrue(permitted, "页中部选文 evidence 应通过 permits（P0-1）")
+        var record = ReadingQuestion(book: pdf, selection: evidence, neighbors: [])
+        record.question = "这几句是什么意思？"
+        let plan = try await QuestionPlan.make(record, index: session.library.preparation.index, local: false, state: state)
+        XCTAssertFalse(plan.evidence.isEmpty, "页中部选文应生成问答证据，不应 scope 拒绝")
+
+        // 篡改 quote：不在原文中 → permits 拒绝 / QuestionPlan 抛 scope。
+        var forged = evidence
+        forged = QuestionEvidence(id: evidence.id, locator: try {
+            var locator = try evidence.location()
+            locator.text = .init(highlight: "被篡改的引文")
+            return locator
+        }(), context: "")
+        let forgedPermitted = try await session.library.preparation.index.permits([forged], scope: scope)
+        XCTAssertFalse(forgedPermitted, "篡改 quote 不应通过 permits")
+        var forgedRecord = ReadingQuestion(book: pdf, selection: forged, neighbors: [])
+        forgedRecord.question = "篡改测试"
+        do {
+            _ = try await QuestionPlan.make(forgedRecord, index: session.library.preparation.index, local: false, state: state)
+            XCTFail("篡改 quote 应被拒绝")
+        } catch QuestionError.scope {
+            // expected
+        }
+    }
+
+    /// P0-1 + AI 真跑（需 scripts/issue9-http-fixture.rb 18769）：页中部选文 → 生成回答/PDF 引用 → 引用跳页。
+    func testPDFMidPageSelectionAIGenerationWithLoopback() async throws {
+        // 仅在显式带 QA_AI_LOOPBACK=1 时跑（配合 scripts/issue9-http-fixture.rb 18769）。
+        guard ProcessInfo.processInfo.environment["QA_AI_LOOPBACK"] == "1" else {
+            throw XCTSkip("未设置 QA_AI_LOOPBACK=1，跳过 AI 真跑")
+        }
+        // 生成长文本 PDF，取页面中部（起始偏移>80）选文，复现 P0-1。
+        let bounds = CGRect(x: 0, y: 0, width: 595, height: 842)
+        let renderer = UIGraphicsPDFRenderer(bounds: bounds)
+        let longLine = "这是用于 P0 复现的页中部长文本，" + String(repeating: "书灯把原文照亮。", count: 12) + " 末尾的答案是照明。"
+        let data = renderer.pdfData { context in
+            context.beginPage()
+            (longLine as NSString).draw(in: CGRect(x: 56, y: 112, width: 480, height: 500),
+                                        withAttributes: [.font: UIFont.systemFont(ofSize: 14), .foregroundColor: UIColor.black])
+            context.beginPage()
+            ("第 2 页内容。" as NSString).draw(at: CGPoint(x: 56, y: 112),
+                                            withAttributes: [.font: UIFont.systemFont(ofSize: 14), .foregroundColor: UIColor.black])
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PDFAILoop-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try LibraryStore(root: root, secrets: EphemeralSecrets())
+        let source = root.appendingPathComponent("mid-selection.pdf")
+        try data.write(to: source)
+        let imported = try await library.importBook(from: source)
+        let book = imported.book
+        // 等索引与向量准备完成。
+        var state: BookPreparationState?
+        for _ in 0..<300 {
+            if let value = library.preparation.states[book.id], value.ready { state = value; break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let readyState = try XCTUnwrap(state, "PDF 准备应完成（含向量）")
+        XCTAssertTrue(readyState.semanticReady, "夹具/真实导入应完成向量准备：\(readyState)")
+        // 中部选文：before 偏移 >80。
+        let document = try XCTUnwrap(PDFKit.PDFDocument(url: library.fileURL(for: book)))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let text = try XCTUnwrap(page.string)
+        let quote = "末尾的答案是照明"
+        let range = (text as NSString).range(of: quote)
+        XCTAssertNotEqual(range.location, NSNotFound)
+        XCTAssertGreaterThan(range.location, 80, "选文起始偏移应 >80")
+        let selection = try XCTUnwrap(page.selection(for: range))
+        let made = try XCTUnwrap(PDFNoteGeometry.make(from: selection, document: document))
+        let evidence = QuestionEvidence(locator: made.locator)
+        var record = ReadingQuestion(book: book, selection: evidence, neighbors: [])
+        record.question = "页面中部这句话给出的答案是什么？"
+        XCTAssertTrue(library.questions.save(record))
+        // 配置 loopback AI。
+        let configurations = try AIConfigurationStore(root: root, secrets: library.secrets)
+        let configuration = AIConfiguration(
+            name: "PDF final loopback",
+            format: .openAI,
+            address: "http://127.0.0.1:18769/v1",
+            model: "pdf-final-ai"
+        )
+        try configurations.save(configuration, newKey: "not-a-real-credential", confirmingSendConsent: true)
+        try configurations.select(configuration.id)
+        // 真实生成（P0 页中部选文不应 scope 拒绝）。
+        let started = Date()
+        library.questions.send(record.id, library: library, local: false)
+        var generated: ReadingQuestion?
+        for _ in 0..<300 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if let value = library.questions.record(record.id),
+               value.state == .complete || value.state == .incomplete {
+                generated = value; break
+            }
+        }
+        if generated == nil {
+            let current = library.questions.record(record.id)
+            print("QA_AI_UNIT_DEBUG state=\(String(describing: current?.state)) failure=\(String(describing: current?.failure)) answer=\(String(describing: current?.answer.prefix(40))) recordCount=\(library.questions.records.count)")
+        }
+        let result = try XCTUnwrap(generated, "问答应进入完成/未完成状态")
+        print(String(format: "QA_PERF pdf_ai_unit_generation_seconds=%.3f state=%@", Date().timeIntervalSince(started), result.state.rawValue))
+        XCTAssertEqual(result.state, .complete, "页中部选文不应 scope 拒绝：\(result.failure ?? "")")
+        XCTAssertFalse(result.answer.isEmpty)
+        XCTAssertFalse(result.citations.isEmpty, "应返回 PDF 页级引用")
+        let citationPage = try XCTUnwrap(result.citations.first?.pdfPage)
+        let reader = try PDFReaderController(book: book, library: library, target: try result.citations[0].location())
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        reader.viewDidAppear(false)
+        var pageText = ""
+        for _ in 0..<40 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            if let label = reader.view.allViews.first(where: { $0.accessibilityIdentifier == "pdf-reader-page" }) as? UILabel {
+                pageText = label.text ?? ""
+                if pageText.contains("第 \(citationPage) /") { break }
+            }
+        }
+        XCTAssertTrue(pageText.contains("第 \(citationPage) /"), "引用跳转应落到第 \(citationPage) 页：\(pageText)")
     }
 
     func testPaperDialogsRenderBothThemes() throws {

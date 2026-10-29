@@ -4,6 +4,8 @@ import ReadiumShared
 import NaturalLanguage
 
 /// Scope is enforced before scoring and again when resolving source ranges.
+/// EPUB chapters are reading-order indexes; for PDF books a chapter is one page
+/// (ordinal = page - 1), so `throughChapter`/`chapters` already express page ranges.
 struct BookEvidenceScope: Codable {
     let bookID: String
     var throughChapter: Int = Int.max
@@ -25,6 +27,14 @@ struct BookEvidenceScope: Codable {
         let allowed = chapters.map { $0.isEmpty ? " AND 0" : " AND f.chapter IN (" + $0.map { _ in "?" }.joined(separator: ",") + ")" } ?? ""
         return ("f.book_id=? AND (f.chapter<? OR (f.chapter=? AND f.ordinal<=?))" + allowed,
                 [bookID, String(throughChapter), String(throughChapter), String(throughOrdinal)] + (chapters ?? []).map(String.init))
+    }
+}
+extension BookEvidenceScope {
+    /// PDF 页级范围：限定证据只来自第 1...page 页（chapter = 页号 - 1）。
+    init(bookID: String, throughPage page: Int) {
+        self.bookID = bookID
+        throughChapter = max(0, page - 1)
+        throughOrdinal = Int.max
     }
 }
 struct RetrievalTrace: Codable {
@@ -192,8 +202,9 @@ extension IndexDatabase {
         let span = range ?? NSRange(location: 0, length: original.length)
         guard span.location >= 0, span.length > 0, NSMaxRange(span) <= original.length else { return nil }
         let quote = original.substring(with: span)
-        // Use the canonical fragment and its existing source mapping, not model-generated positions.
-        if let nodes = locator.locations.otherLocations["shudengTextNodes"]?.array {
+        // PDF locators are page-level fragments: there is no DOM mapping, so the page fragment
+        // itself is the canonical source range and the EPUB DOM rebuild below is skipped.
+        if !locator.mediaType.matches(.pdf), let nodes = locator.locations.otherLocations["shudengTextNodes"]?.array {
             func point(_ offset: Int, end: Bool) -> DOMRange.Point? {
                 for node in nodes {
                     guard let value = node.object, let start = value["start"]?.integer, let length = value["length"]?.integer, length > 0,
@@ -242,6 +253,17 @@ extension BookIndex {
                           start >= fragmentStart, end >= start, end <= fragmentStart + original.length else { return false }
                     return original.substring(with: NSRange(location: start - fragmentStart, length: end - start)) == value.quote
                 }
+                if location.mediaType.matches(.pdf) {
+                    // PDF 页级 locator 没有 DOM；选区 before 是「页面内 quote 前 80 字」，与
+                    // fragment before（fragment 前 80 字）不能拼接反推偏移（页中下部选区会算错）。
+                    // 改为在 fragment 原文中直接定位 quote：精确匹配 → 忽略空白/换行归一化匹配；
+                    // 都失败才回退旧的 before 偏移算法，保持既有边界不放宽。
+                    if Self.pdfQuote(value.quote, occursIn: original) { return true }
+                    guard let before = location.text.before, before.hasPrefix(source.text.before ?? "") else { return false }
+                    let start = before.utf16.count - (source.text.before ?? "").utf16.count
+                    guard start >= 0, start + value.quote.utf16.count <= original.length else { return false }
+                    return original.substring(with: NSRange(location: start, length: value.quote.utf16.count)) == value.quote
+                }
                 guard source.locations.cssSelector == location.locations.cssSelector,
                       let before = location.text.before, before.hasPrefix(source.text.before ?? "") else { return false }
                 let start = before.utf16.count - fragmentStart
@@ -252,7 +274,27 @@ extension BookIndex {
         }
         return true
     }
+
+    /// PDF 页级证据的内容定位：直接在 fragment 原文中查找 quote。
+    /// 先精确子串；失败则忽略空白/换行/不可见字符后再查找（PDF 抽取的换行位置可能与选区
+    /// 字符串不一致）。仍找不到返回 false，由调用方回退旧的 before 偏移算法。
+    private static func pdfQuote(_ quote: String, occursIn original: NSString) -> Bool {
+        guard !quote.isEmpty else { return false }
+        if original.range(of: quote).location != NSNotFound { return true }
+        let normalizedQuote = pdfNormalized(quote)
+        guard !normalizedQuote.isEmpty else { return false }
+        return pdfNormalized(original as String).contains(normalizedQuote)
+    }
+
+    /// 归一化 PDF 文本：只去掉空白、换行与抽取产生的软连字符/零宽字符，不改动可见字符。
+    private static func pdfNormalized(_ text: String) -> String {
+        String(text.filter { character in
+            if character.isWhitespace { return false }
+            return character != "\u{00AD}" && character != "\u{200B}" && character != "\u{FEFF}"
+        })
+    }
 }
+
 
 /// Offline structural assessment. Kept separate from the production question path.
 struct SourceSentenceUnit: Codable {

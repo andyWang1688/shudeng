@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import PDFKit
 import ReadiumShared
 import ReadiumStreamer
 
@@ -11,10 +12,139 @@ struct ReadingSettings: Codable, Equatable {
     var pageCurl: Bool? = nil
 }
 
+/// 书籍格式。旧目录没有 format 字段时按 .epub 读取（Codable 兼容）。
+enum BookFormat: String, Codable {
+    case epub, pdf
+
+    var fileExtension: String { rawValue }
+
+    init?(fileExtension: String) {
+        switch fileExtension.lowercased() {
+        case "epub": self = .epub
+        case "pdf": self = .pdf
+        default: return nil
+        }
+    }
+}
+
+/// PDF 导入时的一次性检查结果（ADR-0017：导入时完整检查每页文字）。
+/// 可选字段：旧数据与 EPUB 都没有它，缺省即未知。
+struct PDFInfo: Codable, Equatable {
+    var pageCount: Int
+    var textPageCount: Int
+    /// 无文字且无画面的纯空白页（如纯白尾页）；旧数据/EPUB 为 nil。
+    var blankPageCount: Int? = nil
+
+    var hasTextPages: Bool { textPageCount > 0 }
+    var hasScannedPages: Bool { scannedPageCount > 0 }
+}
+
+/// PDF 后台检查进度：已完成页数 / 总页数（导入 UI 显示「正在检查这份 PDF…（X/Y）」）。
+struct PDFCheckProgress: Equatable, Sendable {
+    var completed: Int
+    var total: Int
+}
+
+extension PDFInfo {
+    /// 扫描页 = 无文字但有画面的页；纯空白页不计入扫描页，避免空白尾页误弹提示/常驻「?」。
+    var scannedPageCount: Int { max(0, pageCount - textPageCount - (blankPageCount ?? 0)) }
+    var isEntirelyScanned: Bool { textPageCount == 0 && scannedPageCount > 0 && (blankPageCount ?? 0) == 0 }
+
+    /// 导入提示卡标题；没有扫描页时返回 nil（静默导入，不打扰用户）。
+    var scannedPagesTitle: String? {
+        guard hasScannedPages else { return nil }
+        return isEntirelyScanned ? "这份 PDF 是扫描版" : "这份 PDF 有 \(scannedPageCount) 页是扫描图片"
+    }
+
+    /// 扫描页说明：导入提示卡与阅读器「?」共用同一段文案（ADR-0017：不出现技术词）。
+    var scannedPagesMessage: String {
+        isEntirelyScanned
+            ? "页面上的字是图片，目前还不能选字提问或高亮。阅读、缩放和加书签都可以正常使用。"
+            : "这些页目前还不能选字提问或高亮；其余页面正常。"
+    }
+}
+
+/// PDFKit 文本抽取统一走这条独立串行队列：PDFKit 不是线程安全的，
+/// 不能让它分散在 Swift 并发的随机线程上（导入检查与建索引可能同时发生）。
+enum PDFKitWorkQueue {
+    static let queue = DispatchQueue(label: "dev.shudeng.pdfkit.text", qos: .userInitiated)
+}
+
+/// 后台 PDF 抽取的取消标记：串行队列 block 里没有 Task 上下文，用锁标记跨线程取消。
+final class PDFWorkCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+}
+
+/// 判断无文字页是否真的有画面内容（扫描页）：低分辨率渲染后找非白像素。
+/// 纯白页（含纯白尾页）返回 false，避免被判成扫描页而弹提示/常驻「?」。
+private enum PDFPageInk {
+    static func hasInk(_ page: PDFPage) -> Bool {
+        let thumbnail = page.thumbnail(of: CGSize(width: 32, height: 44), for: .cropBox)
+        guard let image = thumbnail.cgImage, image.width > 0, image.height > 0 else { return true }
+        let width = image.width
+        let height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return true }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        for index in stride(from: 0, to: pixels.count, by: 4) {
+            let alpha = pixels[index + 3]
+            guard alpha > 16 else { continue }
+            if pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245 { return true }
+        }
+        return false
+    }
+
+    /// 对无文字页抽样做墨迹判定：优先最后 `tail` 页（识别纯白尾页），其余在剩余页里均匀抽样到 `limit` 页。
+    /// 大扫描文件不能逐页渲染（4000 页会 19× 慢）；未抽样的无文字页由调用方保守按扫描页计。
+    static func sampleNoTextPages(_ indices: [Int], limit: Int, tail: Int) -> [Int] {
+        guard !indices.isEmpty else { return [] }
+        guard indices.count > limit else { return indices }
+        let tailIndices = Array(indices.suffix(max(0, min(tail, indices.count))))
+        var selected = Set(tailIndices)
+        let remaining = indices.count - tailIndices.count
+        let extra = max(0, limit - tailIndices.count)
+        guard extra > 0, remaining > 0 else { return selected.sorted() }
+        let step = max(1, remaining / extra)
+        var cursor = 0
+        var picked = 0
+        while picked < extra, cursor < remaining {
+            selected.insert(indices[cursor])
+            cursor += step
+            picked += 1
+        }
+        return selected.sorted()
+    }
+}
+
 struct Book: Codable, Identifiable {
     let id: String
     let title: String
     let author: String
+    /// 可选以兼容旧目录；nil 语义等同 .epub。
+    var format: BookFormat?
+    /// 仅 PDF 书籍写入；EPUB 为 nil。
+    var pdfInfo: PDFInfo?
     var locatorJSON: String?
     var readingSettings: ReadingSettings?
     var bookmarks: [Bookmark]?
@@ -22,6 +152,9 @@ struct Book: Codable, Identifiable {
     var noteDrafts: [BookNote]?
     var recordIdentity: UUID?
     var removal: BookRemoval?
+
+    /// 旧目录没有 format；文件与阅读路径都按 EPUB 处理。
+    var resolvedFormat: BookFormat { format ?? .epub }
 }
 
 enum BookRemoval: String, Codable {
@@ -45,18 +178,36 @@ enum HighlightColor: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// PDF 页内归一化矩形：相对页面 cropBox，0...1，原点在左下（PDF 坐标）。
+struct PDFNormRect: Codable, Equatable {
+    var x: Double
+    var y: Double
+    var w: Double
+    var h: Double
+}
+
+/// PDF 标注几何：`page` 是 1-based 页号，`rects` 是该页内的多行归一化矩形。
+/// EPUB 与原旧笔记没有该字段（nil），Codable 兼容。
+struct PDFNoteGeometry: Codable, Equatable {
+    var page: Int
+    var rects: [PDFNormRect]
+}
+
 struct BookNote: Codable, Identifiable {
     let id: UUID
     let locatorJSON: String
     var body: String
     /// 可选以兼容旧 JSON/导出；nil 语义等同 .yellow。
     var color: HighlightColor?
+    /// PDF 标注几何；EPUB 与旧数据为 nil（不渲染 PDF 标注）。
+    var pdf: PDFNoteGeometry?
 
-    init(locator: Locator, body: String = "", color: HighlightColor? = nil) {
+    init(locator: Locator, body: String = "", color: HighlightColor? = nil, pdf: PDFNoteGeometry? = nil) {
         id = UUID()
         locatorJSON = locator.description
         self.body = body
         self.color = color
+        self.pdf = pdf
     }
 
     var highlightColor: HighlightColor { color ?? .yellow }
@@ -88,6 +239,69 @@ struct Bookmark: Codable, Identifiable {
             throw LibraryError.invalidLocation
         }
         return locator
+    }
+}
+
+extension PDFNoteGeometry {
+    /// 从 PDFKit 选区生成归一化几何 + 页级 locator（`pdf://page/N`）。
+    /// 只用选区第一页（模型只有单个 page 字段），多行选择转成多个 rect。
+    static func make(from selection: PDFKit.PDFSelection, document: PDFKit.PDFDocument) -> (geometry: PDFNoteGeometry, locator: Locator)? {
+        guard let page = selection.pages.first else { return nil }
+        let pageCount = document.pageCount
+        let pageIndex = document.index(for: page)
+        guard pageCount > 0, pageIndex >= 0, pageIndex < pageCount else { return nil }
+        let pageNumber = pageIndex + 1
+        let pageBounds = page.bounds(for: .cropBox)
+        guard pageBounds.width > 0, pageBounds.height > 0 else { return nil }
+        var rects: [PDFNormRect] = []
+        for line in selection.selectionsByLine() {
+            guard line.pages.contains(where: { $0 === page }) else { continue }
+            let bounds = line.bounds(for: page)
+            guard bounds.width > 0.1, bounds.height > 0.1 else { continue }
+            rects.append(PDFNormRect(
+                x: clamp01((bounds.minX - pageBounds.minX) / pageBounds.width),
+                y: clamp01((bounds.minY - pageBounds.minY) / pageBounds.height),
+                w: clamp01(bounds.width / pageBounds.width),
+                h: clamp01(bounds.height / pageBounds.height)
+            ))
+        }
+        guard !rects.isEmpty else { return nil }
+        let quote = (selection.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !quote.isEmpty else { return nil }
+        let context = pageContext(page: page, quote: quote)
+        // 与阅读器进度口径统一：首页 0，末页 1（单页 PDF 为 1）。
+        let progression = pageCount > 1 ? Double(pageNumber - 1) / Double(pageCount - 1) : 1
+        guard let href = AnyURL(string: "pdf://page/\(pageNumber)") else { return nil }
+        let locator = Locator(
+            href: href,
+            mediaType: .pdf,
+            title: "第 \(pageNumber) 页",
+            locations: .init(
+                fragments: ["page=\(pageNumber)"],
+                progression: progression,
+                totalProgression: progression,
+                position: pageNumber,
+                otherLocations: ["page": .integer(pageNumber)]
+            ),
+            text: .init(after: context.after, before: context.before, highlight: quote)
+        )
+        return (PDFNoteGeometry(page: pageNumber, rects: rects), locator)
+    }
+
+    private static func clamp01(_ value: Double) -> Double { max(0, min(1, value)) }
+
+    /// 页面文字里 quote 的前后各 80 字，作为页级 locator 的上下文（找不到时为空）。
+    private static func pageContext(page: PDFKit.PDFPage, quote: String) -> (before: String, after: String) {
+        guard let text = page.string, !text.isEmpty else { return ("", "") }
+        let source = text as NSString
+        let range = source.range(of: quote)
+        guard range.location != NSNotFound else { return ("", "") }
+        let beforeStart = max(0, range.location - 80)
+        let before = source.substring(with: NSRange(location: beforeStart, length: range.location - beforeStart))
+        let afterStart = NSMaxRange(range)
+        let afterLength = min(80, source.length - afterStart)
+        let after = afterLength > 0 ? source.substring(with: NSRange(location: afterStart, length: afterLength)) : ""
+        return (before, after)
     }
 }
 
@@ -157,7 +371,7 @@ enum LibraryError: LocalizedError {
     case unsupported, invalid, save, missing, invalidLocation, busy
     var errorDescription: String? {
         switch self {
-        case .unsupported: return "仅支持未加密的可重排 EPUB，暂不支持 PDF 或固定版式。"
+        case .unsupported: return "仅支持未加密的可重排 EPUB 与 PDF，暂不支持固定版式 EPUB。"
         case .invalid: return "文件损坏或内容无法读取，未加入书架。"
         case .save: return "保存失败，请检查设备储存空间后重试。"
         case .missing: return "原文文件不可用，请重新导入相同文件。"
@@ -204,24 +418,48 @@ final class LibraryStore {
         questions.canGenerate = { [weak self] id in self?.sourceAvailable(for: id) == true }
     }
 
-    func importBook(from source: URL) async throws -> ImportedBook {
-        guard source.pathExtension.lowercased() == "epub" else { throw LibraryError.unsupported }
+    func importBook(
+        from source: URL,
+        pdfProgress: (@MainActor (PDFCheckProgress) -> Void)? = nil,
+        confirmPDFInfo: (@MainActor (PDFInfo) async -> Bool)? = nil
+    ) async throws -> ImportedBook {
+        guard let format = BookFormat(fileExtension: source.pathExtension) else { throw LibraryError.unsupported }
         let scoped = source.startAccessingSecurityScopedResource()
         defer { if scoped { source.stopAccessingSecurityScopedResource() } }
-        let staged = root.appendingPathComponent(UUID().uuidString + ".epub")
+        let staged = root.appendingPathComponent(UUID().uuidString + "." + format.fileExtension)
         defer { try? fileManager.removeItem(at: staged) }
         // The picker hands us a coordinated local copy; staging keeps validation and
         // identity tied to exactly the bytes we will retain, even for file providers.
         do { try fileManager.copyItem(at: source, to: staged) }
         catch { throw LibraryError.save }
-        let id = try Self.digest(staged)
+        let id = try await Self.digest(staged)
         guard !operations.contains(id), books.first(where: { $0.id == id })?.removal?.pending != true else { throw LibraryError.busy }
         operations.insert(id)
         defer { operations.remove(id) }
-        let publication = try await validatedPublication(at: staged)
         let existing = books.first { $0.id == id }
-        var book = existing ?? Book(id: id, title: publication.metadata.title ?? source.deletingPathExtension().lastPathComponent,
-                                   author: publication.metadata.authors.map { $0.name }.joined(separator: "、"))
+        // Each format validates exactly the staged bytes with its own parser.
+        let imported: (title: String, author: String, pdfInfo: PDFInfo?)
+        switch format {
+        case .epub:
+            let publication = try await validatedPublication(at: staged)
+            imported = (publication.metadata.title ?? source.deletingPathExtension().lastPathComponent,
+                        publication.metadata.authors.map { $0.name }.joined(separator: "、"),
+                        nil)
+        case .pdf:
+            // 逐页文字检查在后台执行（ADR-0017）；有扫描页时先由 App 弹提示卡确认，
+            // 用户取消则不落库、不写目录。
+            let info = try await Self.checkPDF(at: staged) { progress in
+                pdfProgress?(progress)
+            }
+            try Task.checkCancellation()
+            if info.hasScannedPages, let confirmPDFInfo, await confirmPDFInfo(info) == false {
+                throw CancellationError()
+            }
+            imported = (source.deletingPathExtension().lastPathComponent, "", info)
+        }
+        var book = existing ?? Book(id: id, title: imported.title, author: imported.author)
+        book.format = format
+        book.pdfInfo = imported.pdfInfo
         if existing == nil { book.recordIdentity = UUID() }
         book.removal = nil
         let destination = fileURL(for: book)
@@ -299,9 +537,13 @@ final class LibraryStore {
         try commit(updated)
     }
 
-    func fileURL(for book: Book) -> URL { files.appendingPathComponent(book.id + ".epub") }
+    func fileURL(for book: Book) -> URL {
+        files.appendingPathComponent(book.id + "." + book.resolvedFormat.fileExtension)
+    }
 
     func open(_ book: Book) async throws -> Publication {
+        // PDF 不经过 Readium 的 Publication 管线；阅读由 PDFReaderController 用 PDFKit 完成。
+        guard book.resolvedFormat == .epub else { throw LibraryError.unsupported }
         let revision = revision(for: book.id)
         guard sourceAvailable(for: book.id), books.first(where: { $0.id == book.id })?.recordIdentity == book.recordIdentity else { throw LibraryError.missing }
         let publication = try await validatedPublication(at: fileURL(for: book))
@@ -366,7 +608,11 @@ final class LibraryStore {
         // In particular it must never consume a newer saved editing draft.
         if highlightOnly, books[index].notes?.contains(where: { $0.id == note.id }) == true { return }
         let locator = try note.location()
-        guard locator.locations.domRange != nil, !(locator.text.highlight ?? "").isEmpty else { throw LibraryError.invalidLocation }
+        guard !(locator.text.highlight ?? "").isEmpty else { throw LibraryError.invalidLocation }
+        // PDF 标注用页内归一化几何定位（无 DOM）；EPUB 仍要求 domRange 与原文映射。
+        if note.pdf == nil {
+            guard locator.locations.domRange != nil else { throw LibraryError.invalidLocation }
+        }
         var updated = books
         if draft {
             var drafts = updated[index].noteDrafts ?? []
@@ -460,11 +706,86 @@ final class LibraryStore {
         catch { throw LibraryError.invalid }
     }
 
-    private static func digest(_ url: URL) throws -> String {
+    /// 后台检查 PDF：统计文字页 / 扫描页（无文字但有画面）/ 纯空白页。
+    ///
+    /// 所有 PDFDocument 访问都在独立串行队列上（PDFKit 非线程安全），每页 autoreleasepool；
+    /// 进度每 1%（至少 1 页）节流回主线程；取消标记由 Task 取消处理器置位。
+    private nonisolated static func checkPDF(
+        at url: URL,
+        progress: @escaping @MainActor (PDFCheckProgress) -> Void
+    ) async throws -> PDFInfo {
+        let cancellation = PDFWorkCancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                PDFKitWorkQueue.queue.async {
+                    do {
+                        let info: PDFInfo = try autoreleasepool {
+                            guard let document = PDFKit.PDFDocument(url: url) else { throw LibraryError.invalid }
+                            guard !document.isLocked else { throw LibraryError.unsupported }
+                            let total = document.pageCount
+                            guard total > 0 else { throw LibraryError.invalid }
+                            var textPages = 0
+                            var noTextIndices: [Int] = []
+                            let step = max(1, total / 100)
+                            // 第一遍只读文字层（基线 ~3.5s）：不在这里渲染任何缩略图。
+                            for index in 0..<total {
+                                if cancellation.isCancelled { throw CancellationError() }
+                                let hasText = autoreleasepool { () -> Bool in
+                                    document.page(at: index)?.string?
+                                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                                }
+                                if hasText { textPages += 1 } else { noTextIndices.append(index) }
+                                let completed = index + 1
+                                if completed == 1 || completed % step == 0 || completed == total {
+                                    let value = PDFCheckProgress(completed: completed, total: total)
+                                    Task { @MainActor in progress(value) }
+                                }
+                            }
+                            var scannedPages = 0
+                            var blankPages = 0
+                            if textPages == 0 {
+                                // 整本扫描：直接按扫描页处理，跳过逐页墨迹渲染（4000 页性能关键）。
+                                scannedPages = total
+                            } else if !noTextIndices.isEmpty {
+                                // 有文字页的混合文档：只抽样最多 40 个无文字页做墨迹判定（优先尾部 10 页），
+                                // 其余未抽样的无文字页保守按扫描页计（不漏提示），避免全量渲染。
+                                let sampled = PDFPageInk.sampleNoTextPages(noTextIndices, limit: 40, tail: 10)
+                                for index in sampled {
+                                    if cancellation.isCancelled { throw CancellationError() }
+                                    let hasInk = autoreleasepool { () -> Bool in
+                                        guard let page = document.page(at: index) else { return false }
+                                        return PDFPageInk.hasInk(page)
+                                    }
+                                    if hasInk { scannedPages += 1 } else { blankPages += 1 }
+                                }
+                                scannedPages += noTextIndices.count - sampled.count
+                            }
+                            return PDFInfo(
+                                pageCount: total,
+                                textPageCount: textPages,
+                                blankPageCount: blankPages > 0 ? blankPages : nil
+                            )
+                        }
+                        continuation.resume(returning: info)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    /// 内容指纹用于去重。nonisolated async：大文件哈希离开主线程执行，可被取消。
+    private nonisolated static func digest(_ url: URL) async throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hash = SHA256()
-        while let data = try handle.read(upToCount: 1024 * 1024), !data.isEmpty { hash.update(data: data) }
+        while let data = try handle.read(upToCount: 1024 * 1024), !data.isEmpty {
+            try Task.checkCancellation()
+            hash.update(data: data)
+        }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

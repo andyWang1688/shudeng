@@ -9,6 +9,11 @@ private struct NoteRecord {
     var quote: String { note.quote }
     var body: String { note.body }
     var chapter: String { (try? note.location().title) ?? "阅读位置" }
+    /// PDF 页级标注的页码（BookNote.pdf 几何优先，其次 locator.position）。
+    var pdfPage: Int? {
+        if let page = note.pdf?.page { return page }
+        return (try? note.location())?.locations.position
+    }
     var hasBody: Bool { !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var accessibilityIdentifier: String { "annotation-\(note.id.uuidString)" }
 
@@ -470,6 +475,14 @@ final class NotesController: UIViewController, UICollectionViewDelegate, UISearc
         return nil
     }
 
+    /// PDF 笔记显示页号（「第 N 页」），EPUB 继续使用 locator 章节标题。
+    private func chapterText(for record: NoteRecord, book: Book) -> String {
+        if book.resolvedFormat == .pdf, let page = record.pdfPage {
+            return "第 \(page) 页"
+        }
+        return record.chapter.isEmpty ? "阅读位置" : record.chapter
+    }
+
     private func configure(header cell: UICollectionViewListCell, bookID: String) {
         guard let section = sections.first(where: { $0.book.id == bookID }) else { return }
         let countText = "\(section.records.count) 条笔记"
@@ -508,7 +521,7 @@ final class NotesController: UIViewController, UICollectionViewDelegate, UISearc
               let record = sections[indexPath.section].records.first(where: { $0.id == recordID }) else { return }
         let book = sections[indexPath.section].book
         let timestamp = library.recordTimestamp(kind: .note, bookID: book.id, recordID: record.id)
-        let chapter = record.chapter.isEmpty ? "阅读位置" : record.chapter
+        let chapter = chapterText(for: record, book: book)
         let dateText = timestamp.map(BookDateFormat.recordTime) ?? "时间未记录"
         cell.contentConfiguration = NotesRowContentConfiguration(
             quote: record.quote,
@@ -610,6 +623,10 @@ final class NotesController: UIViewController, UICollectionViewDelegate, UISearc
     }
 
     private func open(_ book: Book, record: NoteRecord) {
+        if book.resolvedFormat == .pdf {
+            openPDF(book, record: record)
+            return
+        }
         Task {
             do {
                 let locator = try record.location()
@@ -635,10 +652,32 @@ final class NotesController: UIViewController, UICollectionViewDelegate, UISearc
         }
     }
 
+    /// PDF 笔记：把笔记 locator 作为 target 直接交给 PDFReaderController（由其恢复进度时跳到第 N 页）。
+    /// 不再预写 saveReadingState，打开失败不会改动原阅读进度。
+    private func openPDF(_ book: Book, record: NoteRecord) {
+        Task {
+            do {
+                let locator = try record.location()
+                let current = library.books.first { $0.id == book.id } ?? book
+                let reader = try PDFReaderController(book: current, library: library, target: locator)
+                reader.modalPresentationStyle = .fullScreen
+                present(reader, animated: true)
+            } catch {
+                let alert = BookAlertController(
+                    title: "无法返回原文",
+                    message: error.localizedDescription,
+                    preferredStyle: .alert
+                )
+                alert.addAction(BookAlertAction(title: "知道了", style: .default))
+                present(alert, animated: true)
+            }
+        }
+    }
+
     @objc private func exportNotes() {
         let lines = sections.flatMap { section in
             section.records.map { record in
-                var values = ["《\(section.book.title)》", record.chapter]
+                var values = ["《\(section.book.title)》", chapterText(for: record, book: section.book)]
                 if !record.quote.isEmpty { values.append("原文：\(record.quote)") }
                 if !record.body.isEmpty { values.append("想法：\(record.body)") }
                 return values.joined(separator: "\n")

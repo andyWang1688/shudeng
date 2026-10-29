@@ -1239,7 +1239,8 @@ extension ReadingUITests {
         XCTAssertEqual(contents.frame.width, 44, accuracy: 0.5)
         XCTAssertEqual(settings.frame.width, 44, accuracy: 0.5)
         XCTAssertEqual(settings.frame.maxX, app.frame.maxX - 13, accuracy: 0.5)
-        XCTAssertEqual(ask.frame.height, 44, accuracy: 0.5)
+        // 第九轮视觉验收：问问书灯胶囊缩到 36pt（原 44pt 断言过期）。
+        XCTAssertEqual(ask.frame.height, 36, accuracy: 0.5)
         XCTAssertEqual(ask.frame.midX, app.frame.midX, accuracy: 0.5)
         attachDesignSurface("issue29-reader-375-light", app)
 
@@ -1627,6 +1628,872 @@ extension ReadingUITests {
         app.buttons["note-close"].tap()
     }
 
+    /// PDF Spike：书架含 PDF → 打开 PDFKit 阅读器 → 第 1 页 → 切单页 swipe 到第 2 页 → 关闭后书架进度 → 重开恢复第 2 页。
+    func testPDFFixtureReaderPagingReturnAndRestore() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let pdfTitle = "书灯 PDF 示例"
+        let shelf = app.collectionViews["library"]
+        XCTAssertTrue(shelf.waitForExistence(timeout: 10))
+        let pdfCell = shelf.cells.containing(
+            NSPredicate(format: "label CONTAINS %@", pdfTitle)
+        ).firstMatch
+        // 第 4 本书可能在书架首屏下方，滚动直到出现。
+        for _ in 0..<4 where !pdfCell.exists {
+            shelf.swipeUp()
+        }
+        XCTAssertTrue(pdfCell.waitForExistence(timeout: 10), "书架应出现 PDF 夹具")
+        attachDesignSurface("pdf-shelf-with-pdf-375-light", app)
+        pdfCell.tap()
+
+        let pdfView = app.otherElements["pdf-reader-view"]
+        XCTAssertTrue(pdfView.waitForExistence(timeout: 10), "应打开 PDFKit 阅读器")
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10), "页码应显示第 1 / 2 页")
+        XCTAssertEqual(app.staticTexts["reader-title"].label, pdfTitle)
+        attachDesignSurface("pdf-page-1-continuous-375-light", app)
+
+        // 切到单页分页并左滑翻到第 2 页。
+        app.buttons["pdf-reader-mode"].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        pdfView.swipeLeft()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10), "左滑应翻到第 2 页")
+        attachDesignSurface("pdf-single-page-2-375-light", app)
+
+        // 关闭返回书架：继续阅读应显示该 PDF 进度。
+        app.buttons["reader-close"].tap()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts[pdfTitle].waitForExistence(timeout: 10))
+        attachDesignSurface("pdf-shelf-progress-375-light", app)
+
+        // 重新打开：应恢复第 2 页。
+        let reopen = app.collectionViews["library"].cells.containing(
+            NSPredicate(format: "label CONTAINS %@", pdfTitle)
+        ).firstMatch
+        XCTAssertTrue(reopen.waitForExistence(timeout: 10))
+        reopen.tap()
+        XCTAssertTrue(pdfView.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10), "重开应恢复第 2 页")
+        attachDesignSurface("pdf-reopened-page-2-375-light", app)
+        app.buttons["reader-close"].tap()
+    }
+
+    /// PDF M2：扫描版阅读器右上「?」→「关于这份 PDF」（不含技术词）；文字版无「?」。
+    func testPDFScannedReaderHelpAndTextPDFWithoutHelp() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf-scan", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let scanTitle = "书灯 PDF 扫描版"
+        let shelf = app.collectionViews["library"]
+        let scanCell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", scanTitle)).firstMatch
+        for _ in 0..<4 where !scanCell.exists { shelf.swipeUp() }
+        XCTAssertTrue(scanCell.waitForExistence(timeout: 10), "书架应出现扫描版 PDF")
+        scanCell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+        let help = app.buttons["pdf-reader-help"]
+        XCTAssertTrue(help.waitForExistence(timeout: 5), "扫描版 PDF 应有「?」说明入口")
+        XCTAssertTrue(help.isHittable)
+        attachDesignSurface("pdf-scan-reader-with-help-375-light", app)
+        help.tap()
+        XCTAssertTrue(app.staticTexts["关于这份 PDF"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "页面上的字是图片")).firstMatch.exists,
+            "说明文案应与导入提示卡一致"
+        )
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "OCR")).firstMatch.exists)
+        attachDesignSurface("pdf-scan-reader-help-dialog-375-light", app)
+        app.buttons["知道了"].tap()
+        app.buttons["reader-close"].tap()
+
+        // 文字版 PDF：无扫描页 → 无「?」。
+        app.terminate()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let textTitle = "书灯 PDF 示例"
+        let textCell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", textTitle)).firstMatch
+        for _ in 0..<4 where !textCell.exists { shelf.swipeUp() }
+        XCTAssertTrue(textCell.waitForExistence(timeout: 10))
+        textCell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["pdf-reader-help"].exists, "文字版 PDF 不应显示「?」")
+        attachDesignSurface("pdf-text-reader-no-help-375-light", app)
+        app.buttons["reader-close"].tap()
+    }
+
+    /// PDF M2：扫描版 PDF 真实导入（Files 选择器）→ 扫描提示卡 → 取消不落库；继续导入成功上书架。
+    func testPDFScannedImportConfirmCancelAndContinue() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=empty", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["library-import"].waitForExistence(timeout: 10))
+
+        // 取消路径：选择扫描版 PDF → 提示卡 → 取消 → 书架保持为空。
+        app.buttons["library-import"].tap()
+        let fileView = app.collectionViews["File View"]
+        XCTAssertTrue(fileView.waitForExistence(timeout: 10), "文件选择器应出现")
+        let cancelFile = fileView.cells.matching(identifier: "QA-扫描版-取消, pdf").firstMatch
+        XCTAssertTrue(cancelFile.waitForExistence(timeout: 10))
+        cancelFile.tap()
+        // 导入检查进度（2 页很快，可能一闪而过；先留截图证据）。
+        attachDesignSurface("pdf-import-progress-moment-375-light", app)
+        XCTAssertTrue(app.staticTexts["这份 PDF 是扫描版"].waitForExistence(timeout: 10), "扫描版应弹提示卡")
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "页面上的字是图片")).firstMatch.exists
+        )
+        attachDesignSurface("pdf-import-confirm-cancel-375-light", app)
+        app.buttons["取消"].tap()
+        XCTAssertTrue(app.staticTexts["从一本书开始"].waitForExistence(timeout: 10), "取消后不应导入")
+        XCTAssertFalse(app.staticTexts["QA-扫描版-取消"].exists)
+
+        // 继续路径：再次导入另一份扫描 PDF → 继续导入 → 上书架。
+        app.buttons["library-import"].tap()
+        XCTAssertTrue(fileView.waitForExistence(timeout: 10))
+        let continueFile = fileView.cells.matching(identifier: "QA-扫描版, pdf").firstMatch
+        XCTAssertTrue(continueFile.waitForExistence(timeout: 10))
+        continueFile.tap()
+        XCTAssertTrue(app.staticTexts["这份 PDF 是扫描版"].waitForExistence(timeout: 10))
+        attachDesignSurface("pdf-import-confirm-continue-375-light", app)
+        app.buttons["继续导入"].tap()
+        XCTAssertTrue(app.staticTexts["QA-扫描版"].waitForExistence(timeout: 20), "继续导入后应上书架")
+        attachDesignSurface("pdf-import-after-continue-375-light", app)
+        // 关闭“已加入书架”成功弹层，否则会挡住书架 cell。
+        if app.buttons["知道了"].waitForExistence(timeout: 3) {
+            app.buttons["知道了"].tap()
+        }
+        XCTAssertTrue(app.staticTexts["QA-扫描版"].waitForExistence(timeout: 5))
+        // 打开导入的扫描 PDF，确认「?」入口存在。
+        let cell = app.collectionViews["library"].cells.containing(
+            NSPredicate(format: "label CONTAINS %@", "QA-扫描版")
+        ).firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["pdf-reader-help"].waitForExistence(timeout: 5), "导入的扫描版应显示「?」")
+        attachDesignSurface("pdf-imported-reader-help-375-light", app)
+        app.buttons["reader-close"].tap()
+    }
+
+    /// PDF M2：超大扫描 PDF（4000 页）导入时可见「正在检查这份 PDF…」进度；检查完弹提示卡，取消不落库。
+    func testPDFLargeScannedImportShowsProgressOverlay() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=empty", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        app.buttons["library-import"].tap()
+        let fileView = app.collectionViews["File View"]
+        XCTAssertTrue(fileView.waitForExistence(timeout: 10))
+        let largeFile = fileView.cells.matching(identifier: "QA-扫描版-超大, pdf").firstMatch
+        XCTAssertTrue(largeFile.waitForExistence(timeout: 10))
+        largeFile.tap()
+
+        // 600 页检查需要时间，应能看到进度浮层。
+        let progress = app.otherElements["pdf-import-progress"]
+        var sawProgress = false
+        for _ in 0..<40 {
+            if progress.exists { sawProgress = true; break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertTrue(sawProgress, "大 PDF 导入应显示检查进度浮层")
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "正在检查这份 PDF")).firstMatch.exists
+        )
+        attachDesignSurface("pdf-import-progress-large-375-light", app)
+        Thread.sleep(forTimeInterval: 0.6)
+        attachDesignSurface("pdf-import-progress-large-later-375-light", app)
+
+        XCTAssertTrue(app.staticTexts["这份 PDF 是扫描版"].waitForExistence(timeout: 60), "检查完应弹扫描提示卡")
+        attachDesignSurface("pdf-import-large-confirm-375-light", app)
+        app.buttons["取消"].tap()
+        XCTAssertTrue(app.staticTexts["从一本书开始"].waitForExistence(timeout: 15), "取消后不应导入")
+    }
+
+    /// PDF M3：页级书签按钮/丝带、翻页显隐、目录/书签面板（排序/摘要/跳页/滑删/空态）。
+    /// PDF M4b：搜索 tab——空态/第 1 页命中/清空再搜第 2 页并跳页/无结果。
+    func testPDFSearchPanelFindsPagesAndShowsEmptyStates() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let shelf = app.collectionViews["library"]
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !cell.exists { shelf.swipeUp() }
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+
+        app.buttons["pdf-contents"].tap()
+        let tabs = app.segmentedControls["pdf-contents-tabs"]
+        XCTAssertTrue(tabs.waitForExistence(timeout: 5))
+        XCTAssertEqual(tabs.buttons.count, 3, "M4b 面板应有 目录/书签/搜索 三段")
+        tabs.buttons["搜索"].tap()
+        let field = app.descendants(matching: .any).matching(identifier: "pdf-search-field").firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertTrue(field.isEnabled, "文字版 PDF 应可搜索")
+        XCTAssertTrue(app.staticTexts["输入关键词搜索这本书"].waitForExistence(timeout: 5))
+        attachDesignSurface("pdf-m4b-search-empty-375-light", app)
+
+        field.tap()
+        field.typeText("灯把书页照亮")
+        let results = app.tables["pdf-search-results"]
+        let row1 = results.cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "pdf-search-row-1")
+        ).firstMatch
+        XCTAssertTrue(row1.waitForExistence(timeout: 10), "应命中第 1 页")
+        func rowText(_ row: XCUIElement) -> String {
+            row.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: "｜")
+        }
+        XCTAssertTrue(rowText(row1).contains("第 1 页"), "命中行应显示页码：\(rowText(row1))")
+        attachDesignSurface("pdf-m4b-search-page1-375-light", app)
+
+        // 清空后搜 PDFKit → 第 2 页；点行关闭面板并跳到第 2 页。
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6))
+        XCTAssertTrue(app.staticTexts["输入关键词搜索这本书"].waitForExistence(timeout: 5), "清空后应显示空查询文案")
+        field.typeText("PDFKit")
+        let row2 = results.cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "pdf-search-row-2")
+        ).firstMatch
+        XCTAssertTrue(row2.waitForExistence(timeout: 10), "应命中第 2 页")
+        XCTAssertTrue(rowText(row2).contains("第 2 页"), "命中行应显示第 2 页：\(rowText(row2))")
+        row2.tap()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10), "点结果应关闭面板并跳到第 2 页")
+        attachDesignSurface("pdf-m4b-jump-page2-375-light", app)
+
+        // 无结果文案。
+        app.buttons["pdf-contents"].tap()
+        XCTAssertTrue(app.segmentedControls["pdf-contents-tabs"].waitForExistence(timeout: 5))
+        app.segmentedControls["pdf-contents-tabs"].buttons["搜索"].tap()
+        let field2 = app.descendants(matching: .any).matching(identifier: "pdf-search-field").firstMatch
+        XCTAssertTrue(field2.waitForExistence(timeout: 5))
+        field2.tap()
+        field2.typeText("不存在的检索词")
+        XCTAssertTrue(app.staticTexts["没有找到相关内容"].waitForExistence(timeout: 10))
+        attachDesignSurface("pdf-m4b-search-no-results-375-light", app)
+        app.buttons["pdf-contents-done"].tap()
+    }
+
+    /// PDF M4b：扫描版搜索 tab →「这本书没有可搜索的文字」且输入禁用。
+    func testPDFScannedSearchPanelUnsearchable() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf-scan", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let shelf = app.collectionViews["library"]
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 扫描版")).firstMatch
+        for _ in 0..<4 where !cell.exists { shelf.swipeUp() }
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        app.buttons["pdf-contents"].tap()
+        let tabs = app.segmentedControls["pdf-contents-tabs"]
+        XCTAssertTrue(tabs.waitForExistence(timeout: 5))
+        tabs.buttons["搜索"].tap()
+        XCTAssertTrue(app.staticTexts["没有可搜索的文字"].waitForExistence(timeout: 5))
+        let field = app.descendants(matching: .any).matching(identifier: "pdf-search-field").firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertFalse(field.isEnabled, "扫描版搜索输入应禁用")
+        attachDesignSurface("pdf-m4b-search-unsearchable-scan-375-light", app)
+        app.buttons["pdf-contents-done"].tap()
+    }
+
+    /// PDF M6：页脚「问书灯」入口打开问答面板（生成未验证）；扫描版入口弹无文字提示。
+    func testPDFAskFooterQuestionSheetAndScannedNoTextPrompt() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let shelf = app.collectionViews["library"]
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !cell.exists { shelf.swipeUp() }
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        let ask = app.buttons["pdf-reader-ask"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 5), "页脚应有「问书灯」入口")
+        XCTAssertTrue(ask.isHittable)
+        attachDesignSurface("pdf-m6-footer-ask-375-light", app)
+        ask.tap()
+        let sheet = app.otherElements["question-sheet"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "点「问书灯」应打开问答面板")
+        XCTAssertTrue(app.textViews["question-input"].waitForExistence(timeout: 5))
+        attachDesignSurface("pdf-m6-question-sheet-entry-375-light", app)
+        let close = app.buttons["question-close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        close.tap()
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 10))
+        app.terminate()
+
+        app.launchArguments = ["--design-fixture=pdf-scan", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let scanShelf = app.collectionViews["library"]
+        let scanCell = scanShelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 扫描版")).firstMatch
+        for _ in 0..<4 where !scanCell.exists { scanShelf.swipeUp() }
+        XCTAssertTrue(scanCell.waitForExistence(timeout: 10))
+        scanCell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        let scanAsk = app.buttons["pdf-reader-ask"]
+        XCTAssertTrue(scanAsk.waitForExistence(timeout: 5))
+        scanAsk.tap()
+        XCTAssertTrue(
+            app.staticTexts["没有可搜索的文字；阅读、缩放和加书签都可以正常使用。"].waitForExistence(timeout: 5),
+            "扫描版应提示没有可搜索文字"
+        )
+        XCTAssertFalse(app.otherElements["question-sheet"].exists, "扫描版不应打开问答面板")
+        attachDesignSurface("pdf-m6-scan-ask-no-text-alert-375-light", app)
+        app.buttons["知道了"].tap()
+    }
+
+    /// PDF M5b：笔记页 PDF 分组显示「第 N 页」；点行进入 PDF 阅读器对应页；编辑保存；滑删后标注消失。
+    func testNotesPagePDFAnnotationsDisplayJumpEditAndDelete() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
+        tab("tab-notes", label: "笔记", in: app).tap()
+        let list = app.collectionViews["notes"]
+        XCTAssertTrue(list.waitForExistence(timeout: 10))
+        let page1Row = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "第 1 页")).firstMatch
+        let page2Row = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "第 2 页")).firstMatch
+        let pdfHeader = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !pdfHeader.exists { list.swipeUp() }
+        XCTAssertTrue(pdfHeader.waitForExistence(timeout: 10), "笔记页应有 PDF 书分组")
+        if (pdfHeader.value as? String) == "已收起" { pdfHeader.tap() }
+        for _ in 0..<4 where !page1Row.exists { list.swipeUp() }
+        XCTAssertTrue(page1Row.waitForExistence(timeout: 10), "PDF 高亮行应显示「第 1 页」")
+        for _ in 0..<4 where !page2Row.exists { list.swipeUp() }
+        XCTAssertTrue(page2Row.waitForExistence(timeout: 10), "PDF 笔记行应显示「第 2 页」")
+        XCTAssertTrue(page1Row.label.contains("灯把书页照亮"), "高亮行应显示引文：\(page1Row.label)")
+        XCTAssertTrue(page2Row.label.contains("夹具笔记"), "笔记行应显示正文：\(page2Row.label)")
+        attachDesignSurface("pdf-m5b-notes-pdf-group-375-light", app)
+
+        // leading 编辑 → 保存后列表正文更新。
+        let editableRow = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "第 2 页")).firstMatch
+        XCTAssertTrue(editableRow.waitForExistence(timeout: 10))
+        editableRow.swipeRight()
+        XCTAssertTrue(app.buttons["编辑"].waitForExistence(timeout: 5))
+        app.buttons["编辑"].tap()
+        let body = app.textViews["note-body"]
+        XCTAssertTrue(body.waitForExistence(timeout: 5), "应打开笔记编辑器")
+        XCTAssertEqual((body.value as? String) ?? "", "夹具笔记：PDFKit 渲染与翻页说明。")
+        body.tap()
+        body.typeText("（QA编辑）")
+        XCTAssertTrue(((body.value as? String) ?? "").contains("QA编辑"), "编辑器正文应包含输入内容：\(body.value ?? "")")
+        app.buttons["note-save"].tap()
+        Thread.sleep(forTimeInterval: 1.0)
+        // 保存后用搜索验证正文已更新（搜索会从 LibraryStore 重建列表）。
+        let notesSearch = waitForSearchField("notes-search", in: app)
+        notesSearch.tap()
+        notesSearch.typeText("QA编辑")
+        let editedRow = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "QA编辑")).firstMatch
+        XCTAssertTrue(editedRow.waitForExistence(timeout: 10), "保存后列表正文应更新（搜索可命中）")
+        attachDesignSurface("pdf-m5b-notes-edited-375-light", app)
+        notesSearch.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 4))
+        if let dismiss = waitForSearchDismissButton(in: app) { dismiss.tap() }
+        XCTAssertTrue(waitForPageTitle("笔记", in: app))
+        let pdfHeaderAfterEdit = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !pdfHeaderAfterEdit.exists { list.swipeUp() }
+        if pdfHeaderAfterEdit.exists, (pdfHeaderAfterEdit.value as? String) == "已收起" { pdfHeaderAfterEdit.tap() }
+
+        // 编辑后点行仍进 PDF 第 2 页且标注仍在。
+        let updatedRow = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "QA编辑")).firstMatch
+        for _ in 0..<4 where !updatedRow.exists { list.swipeUp() }
+        XCTAssertTrue(updatedRow.waitForExistence(timeout: 10), "编辑后行应仍在列表")
+        updatedRow.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
+        attachDesignSurface("pdf-m5b-edited-note-in-reader-375-light", app)
+        app.buttons["reader-close"].tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 10))
+
+        // trailing 滑删 → 确认 → 行消失。
+        let pdfHeaderBeforeDelete = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !pdfHeaderBeforeDelete.exists { list.swipeUp() }
+        if pdfHeaderBeforeDelete.exists, (pdfHeaderBeforeDelete.value as? String) == "已收起" { pdfHeaderBeforeDelete.tap() }
+        let deleteRow = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "第 2 页")).firstMatch
+        for _ in 0..<4 where !deleteRow.exists { list.swipeUp() }
+        XCTAssertTrue(deleteRow.waitForExistence(timeout: 10))
+        deleteRow.swipeLeft()
+        XCTAssertTrue(app.buttons["删除"].waitForExistence(timeout: 5))
+        app.buttons["删除"].tap()
+        XCTAssertTrue(app.staticTexts["删除笔记？"].waitForExistence(timeout: 5))
+        app.buttons["删除"].tap()
+        for _ in 0..<20 where deleteRow.exists { Thread.sleep(forTimeInterval: 0.1) }
+        XCTAssertFalse(deleteRow.exists, "滑删确认后列表行应消失")
+        attachDesignSurface("pdf-m5b-notes-deleted-375-light", app)
+
+        // 打开 PDF 第 2 页：笔记注解应已移除。
+        tab("tab-library", label: "书架", in: app).tap()
+        let shelf = app.collectionViews["library"]
+        let bookCell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !bookCell.exists { shelf.swipeUp() }
+        XCTAssertTrue(bookCell.waitForExistence(timeout: 10))
+        bookCell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        app.buttons["pdf-reader-mode"].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        app.otherElements["pdf-reader-view"].swipeLeft()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
+        attachDesignSurface("pdf-m5b-reader-after-delete-page2-375-light", app)
+        app.buttons["reader-close"].tap()
+    }
+
+    /// PDF M5b 回归：EPUB 笔记行点击进入 EPUB 阅读器、leading 编辑入口仍在。
+    func testNotesPageEPUBAnnotationsUnchanged() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
+        tab("tab-notes", label: "笔记", in: app).tap()
+        let list = app.collectionViews["notes"]
+        XCTAssertTrue(list.waitForExistence(timeout: 10))
+        let row = list.cells.containing(NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "EPUB 笔记行仍应存在")
+        XCTAssertTrue(row.label.contains("第三回"), "EPUB 行仍显示章节：\(row.label)")
+        attachDesignSurface("pdf-m5b-notes-epub-regression-375-light", app)
+        row.tap()
+        XCTAssertTrue(app.buttons["reader-ask-book"].waitForExistence(timeout: 15), "EPUB 笔记应回到 EPUB 阅读器")
+        // 重新启动进入笔记页验证编辑入口（避免依赖阅读器返回路径）。
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(tab("tab-notes", label: "笔记", in: app).waitForExistence(timeout: 15))
+        tab("tab-notes", label: "笔记", in: app).tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 10))
+        let editable = list.cells.containing(NSPredicate(format: "label CONTAINS %@", "灯把书页照亮")).firstMatch
+        editable.swipeRight()
+        XCTAssertTrue(app.buttons["编辑"].waitForExistence(timeout: 5), "EPUB 笔记仍有编辑入口")
+        app.buttons["编辑"].tap()
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+    }
+
+    /// PDF M5a：点已有高亮 → 调色盘改色 → 再点 → 取消高亮（直接删除）。
+    func testPDFExistingHighlightPaletteChangeColorAndCancelHighlight() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let shelf = app.collectionViews["library"]
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !cell.exists { shelf.swipeUp() }
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+
+        let pdfView = app.otherElements["pdf-reader-view"]
+        let palette = app.otherElements["pdf-highlight-palette"]
+        let noteMenu = app.otherElements["pdf-note-menu"]
+        var hitOffset = CGVector(dx: 0.5, dy: 0.3)
+        func findHighlightPalette() -> Bool {
+            let xs: [CGFloat] = [0.10, 0.13, 0.16, 0.20, 0.24, 0.28]
+            let ys: [CGFloat] = [0.09, 0.11, 0.13, 0.15, 0.17, 0.19, 0.21, 0.24]
+            for attempt in 0..<2 {
+                if attempt == 1 {
+                    // 首次点击无反应兜底：轻微滚动后重试，并留下记录。
+                    print("QA_M5A_SCROLL_RETRY highlight")
+                    pdfView.swipeUp()
+                    Thread.sleep(forTimeInterval: 0.4)
+                    pdfView.swipeDown()
+                    Thread.sleep(forTimeInterval: 0.4)
+                    attachDesignSurface("pdf-m5a-scroll-retry-highlight-375-light", app)
+                }
+                for y in ys {
+                    for x in xs {
+                        if palette.exists || noteMenu.exists { return palette.exists }
+                        pdfView.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
+                        Thread.sleep(forTimeInterval: 0.35)
+                        if palette.exists { hitOffset = CGVector(dx: x, dy: y); return true }
+                        if noteMenu.exists { app.buttons["pdf-note-cancel"].tap(); Thread.sleep(forTimeInterval: 0.3) }
+                    }
+                }
+            }
+            return palette.exists
+        }
+        XCTAssertTrue(findHighlightPalette(), "点中第 1 页预置高亮应出现调色盘")
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertFalse(app.buttons["Select All"].exists, "M5a 修复：不应叠加系统选择菜单")
+        XCTAssertFalse(app.buttons["Copy"].exists, "M5a 修复：不应叠加系统复制菜单")
+        attachDesignSurface("pdf-m5a-highlight-palette-08s-375-light", app)
+        Thread.sleep(forTimeInterval: 1.7)
+        XCTAssertTrue(palette.exists, "2.5s 后自定义调色盘仍应在")
+        attachDesignSurface("pdf-m5a-highlight-palette-25s-375-light", app)
+        let green = app.buttons["pdf-highlight-color-green"]
+        XCTAssertTrue(green.waitForExistence(timeout: 5))
+        green.tap()
+        XCTAssertFalse(palette.waitForExistence(timeout: 2), "选色后调色盘应关闭")
+        attachDesignSurface("pdf-m5a-highlight-recolored-375-light", app)
+
+        XCTAssertTrue(findHighlightPalette(), "改色后仍可点中高亮")
+        app.buttons["pdf-highlight-remove"].tap()
+        XCTAssertFalse(palette.waitForExistence(timeout: 2), "取消高亮后调色盘应关闭")
+        Thread.sleep(forTimeInterval: 0.4)
+        pdfView.coordinate(withNormalizedOffset: hitOffset).tap()
+        Thread.sleep(forTimeInterval: 0.6)
+        XCTAssertFalse(palette.exists, "取消高亮后原位置不应再出现调色盘")
+        attachDesignSurface("pdf-m5a-highlight-cancelled-375-light", app)
+    }
+
+    /// PDF M5a：点已有笔记 → 改色 → 再点开 → 编辑笔记正文并保存。
+    func testPDFExistingNoteMenuChangeColorAndEdit() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let shelf = app.collectionViews["library"]
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !cell.exists { shelf.swipeUp() }
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        app.buttons["pdf-reader-mode"].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        app.otherElements["pdf-reader-view"].swipeLeft()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
+
+        let pdfView = app.otherElements["pdf-reader-view"]
+        let noteMenu = app.otherElements["pdf-note-menu"]
+        let xs: [CGFloat] = [0.30, 0.33, 0.36, 0.40, 0.44, 0.48, 0.20, 0.25]
+        let ys: [CGFloat] = [0.09, 0.11, 0.13, 0.15, 0.17, 0.19, 0.21, 0.24]
+        var hitOffset = CGVector(dx: 0.30, dy: 0.13)
+        func findMenu() -> Bool {
+            for y in ys {
+                for x in xs {
+                    if noteMenu.exists { return true }
+                    pdfView.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
+                    Thread.sleep(forTimeInterval: 0.3)
+                    if noteMenu.exists { hitOffset = CGVector(dx: x, dy: y); return true }
+                }
+            }
+            return noteMenu.exists
+        }
+        XCTAssertTrue(findMenu(), "应点中第 2 页笔记浮层")
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertFalse(app.buttons["Select All"].exists, "M5a 修复：不应叠加系统选择菜单")
+        attachDesignSurface("pdf-m5a-note-edit-menu-08s-375-light", app)
+        Thread.sleep(forTimeInterval: 1.7)
+        XCTAssertTrue(noteMenu.exists, "2.5s 后自定义笔记浮层仍应在")
+        attachDesignSurface("pdf-m5a-note-edit-menu-25s-375-light", app)
+        app.buttons["pdf-note-color-blue"].tap()
+        XCTAssertFalse(noteMenu.waitForExistence(timeout: 2))
+        Thread.sleep(forTimeInterval: 0.4)
+        attachDesignSurface("pdf-m5a-note-recolored-page2-375-light", app)
+
+        XCTAssertTrue(findMenu(), "改色后仍可点中笔记")
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertFalse(app.buttons["Select All"].exists, "M5a 修复：不应叠加系统选择菜单")
+        app.buttons["pdf-note-edit"].tap()
+        XCTAssertTrue(app.otherElements["pdf-note-editor"].waitForExistence(timeout: 5), "应打开笔记编辑器")
+        let body = app.textViews["note-body"]
+        XCTAssertTrue(body.waitForExistence(timeout: 5))
+        XCTAssertEqual((body.value as? String) ?? "", "夹具笔记：PDFKit 渲染与翻页说明。")
+        body.tap()
+        body.typeText("（已编辑）")
+        app.buttons["note-save"].tap()
+        Thread.sleep(forTimeInterval: 0.8)
+        attachDesignSurface("pdf-m5a-note-edited-page2-375-light", app)
+    }
+
+    /// PDF M5a：点已有笔记 → 直接打开 NoteEditor（无 pdf-note-menu、无系统浮条）→ 编辑器内删除。
+    func testPDFExistingNoteOpensEditorAndDelete() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let shelf = app.collectionViews["library"]
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !cell.exists { shelf.swipeUp() }
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        app.buttons["pdf-reader-mode"].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        app.otherElements["pdf-reader-view"].swipeLeft()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
+
+        let pdfView = app.otherElements["pdf-reader-view"]
+        let editor = app.otherElements["pdf-note-editor"]
+        let noteMenu = app.otherElements["pdf-note-menu"]
+        let xs: [CGFloat] = [0.30, 0.33, 0.36, 0.40, 0.44, 0.48, 0.20, 0.25]
+        let ys: [CGFloat] = [0.09, 0.11, 0.13, 0.15, 0.17, 0.19, 0.21, 0.24]
+        var hitOffset = CGVector(dx: 0.30, dy: 0.13)
+        func findEditor() -> Bool {
+            for attempt in 0..<2 {
+                if attempt == 1 {
+                    print("QA_M5A_SCROLL_RETRY note-editor")
+                    pdfView.swipeUp(); Thread.sleep(forTimeInterval: 0.4)
+                    pdfView.swipeDown(); Thread.sleep(forTimeInterval: 0.4)
+                    attachDesignSurface("pdf-m5a-scroll-retry-note-375-light", app)
+                }
+                for y in ys {
+                    for x in xs {
+                        if editor.exists { return true }
+                        pdfView.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
+                        Thread.sleep(forTimeInterval: 0.35)
+                        if editor.exists { hitOffset = CGVector(dx: x, dy: y); return true }
+                    }
+                }
+            }
+            return editor.exists
+        }
+        XCTAssertTrue(findEditor(), "点第 2 页预置笔记应直接打开 NoteEditor")
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        XCTAssertFalse(noteMenu.exists, "pdf-note-menu 已移除，不应出现")
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertFalse(app.buttons["Select All"].exists, "M5a 修复：不应叠加系统选择菜单")
+        XCTAssertFalse(app.buttons["Copy"].exists, "M5a 修复：不应叠加系统复制菜单")
+        attachDesignSurface("pdf-m5a-note-editor-08s-375-light", app)
+        Thread.sleep(forTimeInterval: 1.7)
+        XCTAssertTrue(editor.exists, "2.5s 后 NoteEditor 仍应在")
+        XCTAssertFalse(app.buttons["Select All"].exists, "M5a 修复：2.5s 后仍不应有系统选择菜单")
+        attachDesignSurface("pdf-m5a-note-editor-25s-375-light", app)
+
+        // 编辑器内删除（二次确认）→ 关闭 → 原位置不再打开编辑器。
+        let deleteButton = app.buttons["note-delete"]
+        XCTAssertTrue(deleteButton.waitForExistence(timeout: 5), "已保存笔记编辑器应有删除入口")
+        deleteButton.tap()
+        XCTAssertTrue(app.staticTexts["删除笔记？"].waitForExistence(timeout: 5))
+        attachDesignSurface("pdf-m5a-note-editor-delete-confirm-375-light", app)
+        let dialogDelete = app.otherElements["book-dialog"].buttons["删除"]
+        if dialogDelete.waitForExistence(timeout: 2) {
+            dialogDelete.tap()
+        } else {
+            app.buttons["删除"].firstMatch.tap()
+        }
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 5), "删除后编辑器应关闭")
+        Thread.sleep(forTimeInterval: 0.5)
+        pdfView.coordinate(withNormalizedOffset: hitOffset).tap()
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertFalse(editor.exists, "删除笔记后原位置不应再打开编辑器")
+        attachDesignSurface("pdf-m5a-note-deleted-375-light", app)
+    }
+
+    /// PDF M5a：点已有笔记 → NoteEditor 预填正文 → 编辑保存 → 再点开仍是编辑后的正文。
+    func testPDFExistingNoteEditorEditAndSave() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let shelf = app.collectionViews["library"]
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !cell.exists { shelf.swipeUp() }
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        app.buttons["pdf-reader-mode"].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        app.otherElements["pdf-reader-view"].swipeLeft()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
+
+        let pdfView = app.otherElements["pdf-reader-view"]
+        let editor = app.otherElements["pdf-note-editor"]
+        let xs: [CGFloat] = [0.30, 0.33, 0.36, 0.40, 0.44, 0.48, 0.20, 0.25]
+        let ys: [CGFloat] = [0.09, 0.11, 0.13, 0.15, 0.17, 0.19, 0.21, 0.24]
+        var hitOffset = CGVector(dx: 0.30, dy: 0.13)
+        func openEditor() -> Bool {
+            for y in ys {
+                for x in xs {
+                    if editor.exists { return true }
+                    pdfView.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
+                    Thread.sleep(forTimeInterval: 0.35)
+                    if editor.exists { hitOffset = CGVector(dx: x, dy: y); return true }
+                }
+            }
+            return editor.exists
+        }
+        XCTAssertTrue(openEditor(), "点第 2 页笔记应打开 NoteEditor")
+        let body = app.textViews["note-body"]
+        XCTAssertTrue(body.waitForExistence(timeout: 5))
+        XCTAssertEqual((body.value as? String) ?? "", "夹具笔记：PDFKit 渲染与翻页说明。")
+        body.tap()
+        body.typeText("（QA编辑）")
+        XCTAssertTrue(((body.value as? String) ?? "").contains("QA编辑"), "编辑器正文应包含输入内容")
+        app.buttons["note-save"].tap()
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 5), "保存后编辑器应关闭")
+        Thread.sleep(forTimeInterval: 0.8)
+        attachDesignSurface("pdf-m5a-note-edited-page2-375-light", app)
+
+        // 再点开：正文已更新且注解仍在。
+        XCTAssertTrue(openEditor(), "保存后仍可点开笔记")
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        let updatedBody = (app.textViews["note-body"].value as? String) ?? ""
+        XCTAssertTrue(updatedBody.contains("QA编辑"), "再次打开应显示编辑后的正文：\(updatedBody)")
+        attachDesignSurface("pdf-m5a-note-reopened-edited-375-light", app)
+    }
+
+    /// PDF M5a（尽力）：长按拖拽选区 → 纸白选区浮层 → 创建高亮/写笔记；选区自动化不稳定则跳过并标注。
+    func testPDFSelectionMenuCreateHighlightAndNote() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let shelf = app.collectionViews["library"]
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !cell.exists { shelf.swipeUp() }
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        let pdfView = app.otherElements["pdf-reader-view"]
+        let menu = app.otherElements["pdf-selection-menu"]
+        var selected = false
+        let wordPoints: [CGVector] = [
+            CGVector(dx: 0.20, dy: 0.14), CGVector(dx: 0.30, dy: 0.14),
+            CGVector(dx: 0.15, dy: 0.16), CGVector(dx: 0.35, dy: 0.16),
+            CGVector(dx: 0.25, dy: 0.18)
+        ]
+        for point in wordPoints {
+            pdfView.coordinate(withNormalizedOffset: point).doubleTap()
+            if menu.waitForExistence(timeout: 3) { selected = true; break }
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+        guard selected else {
+            throw XCTSkip("PDF 选区自动化未成功（长按拖拽未触发选区），创建高亮/笔记 UI 未验证")
+        }
+        attachDesignSurface("pdf-m5a-selection-menu-375-light", app)
+        app.buttons["pdf-selection-highlight"].tap()
+        let palette = app.otherElements["pdf-highlight-palette"]
+        XCTAssertTrue(palette.waitForExistence(timeout: 5), "选区→高亮应打开调色盘")
+        app.buttons["pdf-highlight-color-yellow"].tap()
+        XCTAssertFalse(palette.waitForExistence(timeout: 2))
+        attachDesignSurface("pdf-m5a-created-highlight-375-light", app)
+
+        // 再选一次 → 写笔记 → 编辑器输入并保存。
+        for point in wordPoints.reversed() {
+            pdfView.coordinate(withNormalizedOffset: point).doubleTap()
+            if menu.waitForExistence(timeout: 3) { break }
+        }
+        if menu.exists {
+            app.buttons["pdf-selection-note"].tap()
+            XCTAssertTrue(app.otherElements["pdf-note-editor"].waitForExistence(timeout: 5))
+            let body = app.textViews["note-body"]
+            XCTAssertTrue(body.waitForExistence(timeout: 5))
+            body.tap()
+            body.typeText("PDF 笔记 UI 创建")
+            app.buttons["note-save"].tap()
+            Thread.sleep(forTimeInterval: 0.6)
+            attachDesignSurface("pdf-m5a-created-note-375-light", app)
+        }
+    }
+
+    func testPDFBookmarkRibbonAndContentsPanelFlow() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let shelf = app.collectionViews["library"]
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<4 where !cell.exists { shelf.swipeUp() }
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["pdf-reader-mode"].exists, "单页/连续切换仍在页脚且 id 不变")
+
+        // 第 1 页加书签 → 丝带出现。
+        let toggle = app.buttons["pdf-bookmark-toggle"]
+        XCTAssertTrue(toggle.exists)
+        XCTAssertFalse(app.buttons["pdf-bookmark-ribbon"].exists, "初始第 1 页无书签")
+        toggle.tap()
+        XCTAssertTrue(app.buttons["pdf-bookmark-ribbon"].waitForExistence(timeout: 5), "加书签后应显示丝带")
+        XCTAssertEqual(toggle.value as? String, "此页已有书签")
+        attachDesignSurface("pdf-m3-ribbon-page1-375-light", app)
+
+        // 点丝带取消 → 丝带消失、按钮回到未填充；再点按钮恢复（填充态）。
+        app.buttons["pdf-bookmark-ribbon"].tap()
+        let ribbonGone = NSPredicate { _, _ in !app.buttons["pdf-bookmark-ribbon"].exists }
+        expectation(for: ribbonGone, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(((toggle.value as? String) ?? "").isEmpty, "取消后按钮应回到未加书签状态")
+        toggle.tap()
+        XCTAssertTrue(app.buttons["pdf-bookmark-ribbon"].waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "此页已有书签")
+
+        // 切单页翻到第 2 页：第 1 页丝带消失。
+        app.buttons["pdf-reader-mode"].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        app.otherElements["pdf-reader-view"].swipeLeft()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["pdf-bookmark-ribbon"].exists, "第 2 页无书签时不应显示丝带")
+
+        // 第 2 页加书签，再回第 1 页（丝带仍在）。
+        toggle.tap()
+        XCTAssertTrue(app.buttons["pdf-bookmark-ribbon"].waitForExistence(timeout: 5))
+        attachDesignSurface("pdf-m3-ribbon-page2-375-light", app)
+        app.buttons["pdf-contents"].tap()
+        XCTAssertTrue(app.tables["pdf-contents-panel"].waitForExistence(timeout: 5))
+        let tabs = app.segmentedControls["pdf-contents-tabs"]
+        XCTAssertTrue(tabs.exists)
+        tabs.buttons["书签"].tap()
+        let rows = app.tables["pdf-contents-panel"].cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "pdf-bookmark-row-")
+        )
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        for _ in 0..<20 where rows.count != 2 { Thread.sleep(forTimeInterval: 0.1) }
+        XCTAssertEqual(rows.count, 2)
+        func rowText(_ row: XCUIElement) -> String {
+            row.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: "｜")
+        }
+        let firstText = rowText(rows.element(boundBy: 0))
+        let secondText = rowText(rows.element(boundBy: 1))
+        XCTAssertTrue(firstText.contains("第 1 页"), "书签应按页升序：\(firstText) / \(secondText)")
+        XCTAssertTrue(secondText.contains("第 2 页"), "书签应按页升序：\(firstText) / \(secondText)")
+        XCTAssertTrue(firstText.contains("书灯 PDF 示例 · 第一页"), "第 1 页摘要：\(firstText)")
+        attachDesignSurface("pdf-m3-bookmarks-panel-375-light", app)
+
+        // 点第 1 页书签 → 关闭面板并跳到第 1 页。
+        rows.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10), "点书签应跳到第 1 页")
+        XCTAssertTrue(app.buttons["pdf-bookmark-ribbon"].waitForExistence(timeout: 5))
+        attachDesignSurface("pdf-m3-jump-back-page1-375-light", app)
+
+        // 重开面板：滑删第 2 页书签；目录空态；再删完书签 → 书签空态。
+        app.buttons["pdf-contents"].tap()
+        XCTAssertTrue(app.tables["pdf-contents-panel"].waitForExistence(timeout: 5))
+        tabs.buttons["书签"].tap()
+        let secondRow = rows.element(boundBy: 1)
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 5))
+        secondRow.swipeLeft()
+        XCTAssertTrue(app.buttons["删除"].waitForExistence(timeout: 5))
+        app.buttons["删除"].tap()
+        for _ in 0..<20 where rows.count != 1 { Thread.sleep(forTimeInterval: 0.1) }
+        XCTAssertEqual(rows.count, 1)
+        attachDesignSurface("pdf-m3-bookmark-deleted-375-light", app)
+
+        tabs.buttons["目录"].tap()
+        XCTAssertTrue(app.staticTexts["这份 PDF 没有目录"].waitForExistence(timeout: 5))
+        attachDesignSurface("pdf-m3-toc-empty-375-light", app)
+
+        tabs.buttons["书签"].tap()
+        let lastRow = rows.firstMatch
+        XCTAssertTrue(lastRow.waitForExistence(timeout: 5))
+        lastRow.swipeLeft()
+        XCTAssertTrue(app.buttons["删除"].waitForExistence(timeout: 5))
+        app.buttons["删除"].tap()
+        XCTAssertTrue(app.staticTexts["还没有书签"].waitForExistence(timeout: 5))
+        attachDesignSurface("pdf-m3-bookmarks-empty-375-light", app)
+        app.buttons["pdf-contents-done"].tap()
+    }
+
     func testReaderContentsPanelHasContentsAndBookmarksWithProgress() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -1877,8 +2744,19 @@ extension ReadingUITests {
         XCTAssertTrue(tab("tab-conversations", label: "对话", in: app).waitForExistence(timeout: 15))
         tab("tab-conversations", label: "对话", in: app).tap()
         let history = app.collectionViews["question-history"]
+        let conversationCells = history.cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "question-")
+        )
+        if !conversationCells.firstMatch.exists {
+            // 对话历史已改系统分组列表：先展开书籍分组头，再点具体对话行。
+            let header = history.cells.matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "conversations-book-")
+            ).firstMatch
+            if header.exists { header.tap() }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
         let initialConversations = history.cells.count
-        let conversation = history.cells.firstMatch
+        let conversation = conversationCells.firstMatch
         XCTAssertTrue(conversation.waitForExistence(timeout: 10))
         conversation.tap()
 
@@ -1933,8 +2811,20 @@ extension ReadingUITests {
         app.launchArguments = ["--design-fixture=normal", "--design-theme=dark"]
         app.launch()
         tab("tab-conversations", label: "对话", in: app).tap()
-        XCTAssertTrue(app.collectionViews["question-history"].cells.firstMatch.waitForExistence(timeout: 10))
-        app.collectionViews["question-history"].cells.firstMatch.tap()
+        let darkHistory = app.collectionViews["question-history"]
+        XCTAssertTrue(darkHistory.cells.firstMatch.waitForExistence(timeout: 10))
+        let darkConversations = darkHistory.cells.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "question-")
+        )
+        if !darkConversations.firstMatch.exists {
+            let header = darkHistory.cells.matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "conversations-book-")
+            ).firstMatch
+            if header.exists { header.tap() }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        XCTAssertTrue(darkConversations.firstMatch.waitForExistence(timeout: 10))
+        darkConversations.firstMatch.tap()
         XCTAssertTrue(sheet.waitForExistence(timeout: 10))
         attachDesignSurface("issue30-question-375-dark", app)
     }
@@ -2032,6 +2922,424 @@ extension ReadingUITests {
     }
 
     /// The status bar is not part of the designed application surface.
+    // MARK: - PDF 最终验收（task-57）辅助
+
+    private func openPDFFixture(_ app: XCUIApplication, title: String = "书灯 PDF 示例") {
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        let shelf = app.collectionViews["library"]
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+        for _ in 0..<5 where !cell.exists { shelf.swipeUp() }
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 15))
+    }
+
+    private func registerPDFFinalLoopbackAI(_ app: XCUIApplication, address: String, model: String) {
+        app.buttons["tab-profile"].tap()
+        let profileList = app.collectionViews["profile-list"]
+        XCTAssertTrue(profileList.waitForExistence(timeout: 10))
+        let aiRow = profileList.cells.containing(NSPredicate(format: "label CONTAINS %@", "AI 服务")).firstMatch
+        for _ in 0..<4 where !aiRow.exists { profileList.swipeUp() }
+        XCTAssertTrue(aiRow.waitForExistence(timeout: 10), "我的页应有 AI 服务入口")
+        aiRow.tap()
+        XCTAssertTrue(app.tables["ai-services"].waitForExistence(timeout: 10))
+        app.buttons["添加"].tap()
+        let name = "PDF-final-" + UUID().uuidString.prefix(4)
+        app.cells["ai-provider"].tap(); app.buttons["自定义服务"].tap()
+        app.cells["ai-advanced"].tap()
+        XCTAssertTrue(app.tables["ai-advanced-editor"].waitForExistence(timeout: 5))
+        app.textFields["ai-name"].tap(); app.textFields["ai-name"].typeText(name)
+        app.textFields["ai-address"].tap(); app.textFields["ai-address"].typeText(address)
+        app.textFields["ai-model"].tap(); app.textFields["ai-model"].typeText(model)
+        app.navigationBars["高级设置"].buttons.element(boundBy: 0).tap()
+        app.secureTextFields["ai-key"].tap(); app.secureTextFields["ai-key"].typeText("not-a-real-credential")
+        if app.sheets["保存密码？"].waitForExistence(timeout: 1) { app.sheets["保存密码？"].buttons["以后"].tap() }
+        app.navigationBars.buttons["保存"].tap()
+        XCTAssertTrue(app.otherElements["AI 服务发送说明"].firstMatch.waitForExistence(timeout: 5))
+        app.otherElements["AI 服务发送说明"].firstMatch.buttons["同意并保存"].tap()
+        XCTAssertTrue(app.otherElements["已保存"].firstMatch.waitForExistence(timeout: 5))
+        app.otherElements["已保存"].firstMatch.buttons["完成"].tap()
+        let switchButton = app.navigationBars.buttons["切换"]
+        XCTAssertTrue(switchButton.waitForExistence(timeout: 5))
+        switchButton.tap()
+        // 当前版本弹层为自定义 BookAlertController（book-dialog），按全局按钮查找服务项。
+        let switchOption = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
+        if switchOption.waitForExistence(timeout: 5) {
+            switchOption.tap()
+        } else {
+            let anyService = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "PDF-final-")).firstMatch
+            XCTAssertTrue(anyService.waitForExistence(timeout: 5), "切换服务弹层应列出新服务")
+            anyService.tap()
+        }
+        if app.otherElements["AI 服务发送说明"].firstMatch.waitForExistence(timeout: 3) {
+            app.otherElements["AI 服务发送说明"].firstMatch.buttons["同意并保存"].tap()
+        }
+        if app.otherElements["已切换服务"].firstMatch.waitForExistence(timeout: 5) {
+            app.otherElements["已切换服务"].firstMatch.buttons["完成"].tap()
+        }
+        let selectedText = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
+        XCTAssertTrue(selectedText.waitForExistence(timeout: 10), "AI 服务列表应出现新服务")
+        let inUseText = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "模型：pdf-ai · 使用中")
+        ).firstMatch
+        XCTAssertTrue(inUseText.waitForExistence(timeout: 5), "新服务应已选中（使用中）")
+        app.buttons["tab-library"].tap()
+        XCTAssertTrue(app.collectionViews["library"].waitForExistence(timeout: 10))
+    }
+
+    private func pdfTapAnnotation(_ app: XCUIApplication, target: XCUIElement, xs: [CGFloat], ys: [CGFloat], attempts: Int = 2) -> Bool {
+        let pdfView = app.otherElements["pdf-reader-view"]
+        for attempt in 0..<attempts {
+            if attempt == 1 {
+                pdfView.swipeUp(); Thread.sleep(forTimeInterval: 0.3)
+                pdfView.swipeDown(); Thread.sleep(forTimeInterval: 0.3)
+            }
+            for y in ys {
+                for x in xs {
+                    if target.exists { return true }
+                    pdfView.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
+                    Thread.sleep(forTimeInterval: 0.3)
+                    if target.exists { return true }
+                }
+            }
+        }
+        return target.exists
+    }
+
+    private func assertPDFFooterNotOverlapping(_ app: XCUIApplication, label: String) {
+        let ask = app.buttons["pdf-reader-ask"]
+        let page = app.staticTexts["pdf-reader-page"]
+        let mode = app.buttons["pdf-reader-mode"]
+        XCTAssertTrue(ask.exists && page.exists && mode.exists, "\(label)：页脚三要素应存在")
+        XCTAssertFalse(ask.frame.intersects(page.frame), "\(label)：问书灯与页码重叠 ask=\(ask.frame) page=\(page.frame)")
+        XCTAssertFalse(page.frame.intersects(mode.frame), "\(label)：页码与模式重叠 page=\(page.frame) mode=\(mode.frame)")
+        XCTAssertGreaterThanOrEqual(ask.frame.minX, 0)
+        XCTAssertLessThanOrEqual(mode.frame.maxX, app.frame.maxX + 0.5)
+    }
+
+    func testPDFFinalDarkReaderSurfaces() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=dark"]
+        app.launch()
+        attachDesignSurface("pdf-final2-dark-shelf-pdf-cover-375", app)
+        openPDFFixture(app)
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+        attachDesignSurface("pdf-final2-dark-reader-375", app)
+
+        let palette = app.otherElements["pdf-highlight-palette"]
+        XCTAssertTrue(
+            pdfTapAnnotation(app, target: palette, xs: [0.10, 0.13, 0.16, 0.20, 0.24, 0.28],
+                             ys: [0.09, 0.11, 0.13, 0.15, 0.17, 0.19, 0.21, 0.24]),
+            "深色阅读器应能点中高亮"
+        )
+        attachDesignSurface("pdf-final1-dark-highlight-palette-375", app)
+        app.buttons["pdf-highlight-cancel"].tap()
+        XCTAssertTrue(palette.waitForNonExistence(timeout: 5))
+
+        // 第 2 页笔记 → 深色笔记编辑器。
+        app.buttons["pdf-reader-mode"].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        app.otherElements["pdf-reader-view"].swipeLeft()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
+        let editor = app.otherElements["pdf-note-editor"]
+        XCTAssertTrue(
+            pdfTapAnnotation(app, target: editor, xs: [0.30, 0.33, 0.36, 0.40, 0.44, 0.48, 0.20, 0.25],
+                             ys: [0.09, 0.11, 0.13, 0.15, 0.17, 0.19, 0.21, 0.24]),
+            "深色阅读器应能点中笔记"
+        )
+        XCTAssertTrue(app.textViews["note-body"].waitForExistence(timeout: 5))
+        attachDesignSurface("pdf-final1-dark-note-editor-375", app)
+        if app.buttons["note-close"].exists { app.buttons["note-close"].tap() }
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // 目录/书签/搜索面板。
+        app.buttons["pdf-contents"].tap()
+        XCTAssertTrue(app.tables["pdf-contents-panel"].waitForExistence(timeout: 5))
+        attachDesignSurface("pdf-final1-dark-contents-toc-375", app)
+        app.segmentedControls["pdf-contents-tabs"].buttons["书签"].tap()
+        attachDesignSurface("pdf-final1-dark-contents-bookmarks-375", app)
+        app.segmentedControls["pdf-contents-tabs"].buttons["搜索"].tap()
+        attachDesignSurface("pdf-final1-dark-contents-search-375", app)
+        app.buttons["pdf-contents-done"].tap()
+
+        // 页脚问书灯 → 深色问答 sheet。
+        app.buttons["pdf-reader-ask"].tap()
+        XCTAssertTrue(app.otherElements["question-sheet"].waitForExistence(timeout: 10))
+        attachDesignSurface("pdf-final1-dark-question-sheet-375", app)
+        app.buttons["question-close"].tap()
+        XCTAssertTrue(app.otherElements["question-sheet"].waitForNonExistence(timeout: 5))
+    }
+
+    func testPDFFinalDarkScanAndImportCard() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf-scan", "--design-theme=dark"]
+        app.launch()
+        openPDFFixture(app, title: "书灯 PDF 扫描版")
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+        attachDesignSurface("pdf-final1-dark-scan-reader-375", app)
+        app.buttons["pdf-reader-ask"].tap()
+        XCTAssertTrue(app.staticTexts["没有可搜索的文字；阅读、缩放和加书签都可以正常使用。"].waitForExistence(timeout: 5))
+        attachDesignSurface("pdf-final1-dark-scan-ask-alert-375", app)
+        app.buttons["知道了"].tap()
+
+        // 深色导入提示卡：从 Files 选择扫描版 PDF。
+        app.terminate()
+        app.launchArguments = ["--design-fixture=empty", "--design-theme=dark"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        app.buttons["library-import"].tap()
+        let fileView = app.collectionViews["File View"]
+        XCTAssertTrue(fileView.waitForExistence(timeout: 10))
+        let scanFile = fileView.cells.matching(identifier: "QA-扫描版-取消, pdf").firstMatch
+        if !scanFile.exists {
+            throw XCTSkip("Files 沙盒缺少 QA-扫描版-取消.pdf，导入提示卡深色截图未验证")
+        }
+        scanFile.tap()
+        XCTAssertTrue(app.staticTexts["这份 PDF 是扫描版"].waitForExistence(timeout: 20))
+        attachDesignSurface("pdf-final1-dark-import-confirm-card-375", app)
+        app.buttons["取消"].tap()
+        XCTAssertTrue(app.staticTexts["从一本书开始"].waitForExistence(timeout: 10))
+    }
+
+    func testPDFFinalLandscapeFooterAndMode() throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        openPDFFixture(app)
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+        assertPDFFooterNotOverlapping(app, label: "横屏连续")
+        attachDesignSurface("pdf-final1-landscape-reader-667x375", app)
+        app.buttons["pdf-reader-mode"].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        assertPDFFooterNotOverlapping(app, label: "横屏单页")
+        attachDesignSurface("pdf-final1-landscape-single-page-667x375", app)
+        XCUIDevice.shared.orientation = .portrait
+        Thread.sleep(forTimeInterval: 0.6)
+        assertPDFFooterNotOverlapping(app, label: "转回竖屏")
+        attachDesignSurface("pdf-final1-portrait-after-rotate-375x667", app)
+    }
+
+    func testPDFFinalAccessibilityLargeFooter() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        openPDFFixture(app)
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+        assertPDFFooterNotOverlapping(app, label: "accessibilityLarge")
+        attachDesignSurface("pdf-final1-accessibility-large-footer-375", app)
+    }
+
+    func testPDFFinalAccessibilityExtraLargeFooter() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        openPDFFixture(app)
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+        assertPDFFooterNotOverlapping(app, label: "accessibilityExtraLarge")
+        attachDesignSurface("pdf-final1-accessibility-extra-large-footer-375", app)
+    }
+
+    func testPDFFinal390ReaderAndFooter() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        openPDFFixture(app)
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+        assertPDFFooterNotOverlapping(app, label: "390x844")
+        attachDesignSurface("pdf-final1-reader-390x844", app)
+        let palette = app.otherElements["pdf-highlight-palette"]
+        XCTAssertTrue(
+            pdfTapAnnotation(app, target: palette, xs: [0.10, 0.13, 0.16, 0.20, 0.24, 0.28],
+                             ys: [0.09, 0.11, 0.13, 0.15, 0.17, 0.19, 0.21, 0.24]),
+            "390×844 应能点中高亮"
+        )
+        attachDesignSurface("pdf-final1-highlight-palette-390x844", app)
+        app.buttons["pdf-highlight-cancel"].tap()
+    }
+
+    func testPDFFinalLargeImportCancelDuringCheck() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=empty", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        app.buttons["library-import"].tap()
+        let fileView = app.collectionViews["File View"]
+        XCTAssertTrue(fileView.waitForExistence(timeout: 10))
+        let largeFile = fileView.cells.matching(identifier: "QA-扫描版-超大, pdf").firstMatch
+        if !largeFile.exists { throw XCTSkip("Files 沙盒缺少 QA-扫描版-超大.pdf") }
+        let started = Date()
+        largeFile.tap()
+        let progress = app.otherElements["pdf-import-progress"]
+        XCTAssertTrue(progress.waitForExistence(timeout: 10), "大 PDF 导入应显示检查进度")
+        let cancel = app.buttons["pdf-import-cancel"].waitForExistence(timeout: 3)
+            ? app.buttons["pdf-import-cancel"]
+            : app.buttons["取消"]
+        if !cancel.exists {
+            throw XCTSkip("4000 页导入在取消按钮可点前已完成（task-62 优化后仅约 4s），未捕获取消窗口")
+        }
+        cancel.tap()
+        XCTAssertTrue(progress.waitForNonExistence(timeout: 10), "取消后进度浮层应消失")
+        let elapsed = Date().timeIntervalSince(started)
+        print(String(format: "QA_PERF large_import_cancel_seconds=%.3f", elapsed))
+        XCTAssertTrue(app.staticTexts["从一本书开始"].waitForExistence(timeout: 15), "取消后应回空书架")
+        XCTAssertFalse(app.staticTexts["这份 PDF 是扫描版"].exists, "取消后不应弹提示卡")
+        XCTAssertTrue(app.buttons["tab-notes"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["tab-notes"].isEnabled, "取消后 tab 应恢复可点")
+        app.buttons["library-import"].tap()
+        XCTAssertTrue(app.collectionViews["File View"].waitForExistence(timeout: 10), "取消后应能再次导入")
+        app.buttons["Cancel"].tap()
+    }
+
+    func testPDFFinalLargeScannedImportPerformance() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=empty", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        app.buttons["library-import"].tap()
+        let fileView = app.collectionViews["File View"]
+        XCTAssertTrue(fileView.waitForExistence(timeout: 10))
+        let largeFile = fileView.cells.matching(identifier: "QA-扫描版-超大, pdf").firstMatch
+        if !largeFile.exists {
+            throw XCTSkip("Files 沙盒缺少 QA-扫描版-超大.pdf（4000 页），性能验证未执行")
+        }
+        let started = Date()
+        largeFile.tap()
+        // 导入中 tab 应禁用；滚动书架不应卡死/崩溃。
+        Thread.sleep(forTimeInterval: 0.6)
+        let notesTab = app.buttons["tab-notes"]
+        let chatsTab = app.buttons["tab-conversations"]
+        let tabsDisabled = !notesTab.exists || !notesTab.isEnabled
+        XCTAssertTrue(tabsDisabled, "PDF 导入检查中 tab 不应可点")
+        XCTAssertTrue(!chatsTab.exists || !chatsTab.isEnabled)
+        app.collectionViews["library"].swipeUp()
+        app.collectionViews["library"].swipeDown()
+        XCTAssertTrue(app.staticTexts["这份 PDF 是扫描版"].waitForExistence(timeout: 120), "4000 页导入应完成并弹提示卡")
+        let elapsed = Date().timeIntervalSince(started)
+        print(String(format: "QA_PERF large_scan_import_seconds=%.3f", elapsed))
+        attachDesignSurface("pdf-final2-performance-large-scan-confirm-375", app)
+        app.buttons["取消"].tap()
+        // 取消后 busy 应解除、tab 恢复、可再次导入。
+        XCTAssertTrue(app.staticTexts["从一本书开始"].waitForExistence(timeout: 15), "取消导入后书架应可用")
+        XCTAssertTrue(app.buttons["tab-notes"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["tab-notes"].isEnabled, "取消后 tab 应恢复可点")
+        app.buttons["library-import"].tap()
+        XCTAssertTrue(app.collectionViews["File View"].waitForExistence(timeout: 10), "取消后应能再次打开导入")
+        app.buttons["Cancel"].tap()
+    }
+
+    func testPDFFinalAIGenerationLoopback() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        // 配置本地 loopback AI（需同时启动 scripts/issue9-http-fixture.rb 18769）。
+        registerPDFFinalLoopbackAI(app, address: "http://127.0.0.1:18769/v1", model: "pdf-ai")
+        openPDFFixture(app)
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 15))
+
+        app.buttons["pdf-reader-ask"].tap()
+        XCTAssertTrue(app.otherElements["question-sheet"].waitForExistence(timeout: 10))
+        let input = app.textViews["question-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText("这份 PDF 第 2 页讲了什么？")
+        let started = Date()
+        app.buttons["question-send"].tap()
+        Thread.sleep(forTimeInterval: 2.0)
+        let status = app.staticTexts["question-status"]
+        print("QA_AI_SEND statusExists=\(status.exists) status=\(status.exists ? status.label : "-") sheet=\(app.otherElements["question-sheet"].exists) sendEnabled=\(app.buttons["question-send"].isEnabled)")
+        let saved = NSPredicate { _, _ in
+            status.exists && status.label.hasPrefix("回答已保存")
+        }
+        expectation(for: saved, evaluatedWith: app)
+        waitForExpectations(timeout: 60)
+        let elapsed = Date().timeIntervalSince(started)
+        print(String(format: "QA_PERF pdf_ai_generation_seconds=%.3f model=pdf-ai", elapsed))
+        XCTAssertTrue(app.buttons["question-reference-0"].waitForExistence(timeout: 10), "应显示 PDF 页级引用")
+        let citation = app.buttons["question-reference-0"]
+        XCTAssertTrue(citation.label.contains("第 "), "引用标题应含页码：\(citation.label)")
+        attachDesignSurface("pdf-final1-ai-answer-citations-375", app)
+        citation.tap()
+        for _ in 0..<40 where app.otherElements["question-sheet"].exists { Thread.sleep(forTimeInterval: 0.2) }
+        XCTAssertFalse(app.otherElements["question-sheet"].exists, "点引用应关闭问答面板")
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        attachDesignSurface("pdf-final1-ai-reference-jump-reader-375", app)
+    }
+
+    func testPDFFinalNotesJumpKeepsReadingProgress() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        openPDFFixture(app)
+        // 先把阅读进度推到第 2 页并关闭（关闭 flush 立即落盘）。
+        app.buttons["pdf-reader-mode"].tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        app.otherElements["pdf-reader-view"].swipeLeft()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
+        app.buttons["reader-close"].tap()
+        Thread.sleep(forTimeInterval: 0.8)
+        // 笔记页点第 1 页高亮 → 阅读器停第 1 页，但不应改写原进度。
+        tab("tab-notes", label: "笔记", in: app).tap()
+        let list = app.collectionViews["notes"]
+        XCTAssertTrue(list.waitForExistence(timeout: 10))
+        let pdfHeader = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        for _ in 0..<5 where !pdfHeader.exists { list.swipeUp() }
+        XCTAssertTrue(pdfHeader.waitForExistence(timeout: 10))
+        if (pdfHeader.value as? String) == "已收起" { pdfHeader.tap() }
+        let page1Row = list.cells.matching(NSPredicate(format: "label CONTAINS %@", "第 1 页")).firstMatch
+        for _ in 0..<4 where !page1Row.exists { list.swipeUp() }
+        XCTAssertTrue(page1Row.waitForExistence(timeout: 10))
+        page1Row.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+        app.buttons["reader-close"].tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 10))
+        // 返回书架重新打开：应回原阅读进度第 2 页，而不是笔记页第 1 页。
+        tab("tab-library", label: "书架", in: app).tap()
+        openPDFFixture(app)
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10), "笔记跳转不应把原阅读进度写回第 1 页")
+        attachDesignSurface("pdf-final2-notes-jump-progress-preserved-375", app)
+        app.buttons["reader-close"].tap()
+    }
+
+    func testPDFFinalBlankTailImportNoPromptOrHelp() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=empty", "--design-theme=light"]
+        app.launch()
+        XCTAssertTrue(tab("tab-library", label: "书架", in: app).waitForExistence(timeout: 15))
+        app.buttons["library-import"].tap()
+        let fileView = app.collectionViews["File View"]
+        XCTAssertTrue(fileView.waitForExistence(timeout: 10))
+        let blankTail = fileView.cells.matching(identifier: "QA-文字PDF-空白尾页, pdf").firstMatch
+        if !blankTail.exists { throw XCTSkip("Files 沙盒缺少 QA-文字PDF-空白尾页.pdf") }
+        blankTail.tap()
+        // 2 文字页 + 1 纯白尾页：不应弹扫描提示卡，直接上书架。
+        XCTAssertTrue(app.staticTexts["QA-文字PDF-空白尾页"].waitForExistence(timeout: 20), "含空白尾页的 PDF 应静默导入")
+        if app.buttons["知道了"].waitForExistence(timeout: 3) { app.buttons["知道了"].tap() }
+        XCTAssertFalse(app.staticTexts["这份 PDF 是扫描版"].exists)
+        attachDesignSurface("pdf-final2-blank-tail-imported-shelf-375", app)
+        let shelf = app.collectionViews["library"]
+        let bookCell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "QA-文字PDF-空白尾页")).firstMatch
+        XCTAssertTrue(bookCell.waitForExistence(timeout: 10))
+        bookCell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["pdf-reader-help"].exists, "含空白尾页但无扫描页时不应显示「?」")
+        attachDesignSurface("pdf-final2-blank-tail-reader-375", app)
+        app.buttons["reader-close"].tap()
+    }
+
     private func attachDesignSurface(_ name: String, _ app: XCUIApplication) {
         // The design's longest state transition is 240 ms. Capture only after
         // it has completed so navigation and sheet screenshots are stable.

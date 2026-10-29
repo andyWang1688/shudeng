@@ -230,7 +230,7 @@ final class ProfileController: UICollectionViewController {
     }
 
     private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.3.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.0"
     }
 
     private var selectedAppearance: UIUserInterfaceStyle {
@@ -566,7 +566,7 @@ private final class AboutController: UICollectionViewController {
     }
 
     private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.3.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.0"
     }
 
     override func numberOfSections(in collectionView: UICollectionView) -> Int { 2 }
@@ -727,6 +727,44 @@ private struct ShelfEmptyState {
     let actionTitle: String?
 }
 
+/// 扫描页确认卡的 continuation 保底：用户切 tab/弹卡失败/任务取消时也要 resume(false)，
+/// 否则 `library.importBook` 会永远等待、书架 busy 卡死。
+private final class ImportConfirmationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var resumed = false
+
+    func install(_ continuation: CheckedContinuation<Bool, Never>) {
+        lock.lock()
+        if resumed {
+            lock.unlock()
+            continuation.resume(returning: false)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    var hasResumed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return resumed
+    }
+
+    func resume(_ value: Bool) {
+        lock.lock()
+        if resumed {
+            lock.unlock()
+            return
+        }
+        resumed = true
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: value)
+    }
+}
+
 private struct ShelfPresentation {
     let title: String
     let sectionTitle: String
@@ -751,6 +789,8 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
     private var busy = false
     private var showingRemoved = false
     private var searchTask: Task<Void, Never>?
+    private var importTask: Task<Void, Never>?
+    private var pdfProgressView: PDFImportProgressView?
     private var preparationObserver: NSObjectProtocol?
     private var libraryObserver: NSObjectProtocol?
 
@@ -787,6 +827,7 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
 
     deinit {
         searchTask?.cancel()
+        importTask?.cancel()
         if let preparationObserver { NotificationCenter.default.removeObserver(preparationObserver) }
         if let libraryObserver { NotificationCenter.default.removeObserver(libraryObserver) }
     }
@@ -899,7 +940,7 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
         if baseIsEmpty && !removingSearch {
             empty = ShelfEmptyState(
                 title: "从一本书开始",
-                detail: "导入你的 EPUB，\n让阅读与理解一起发生。",
+                detail: "导入你的 EPUB 或 PDF，\n让阅读与理解一起发生。",
                 actionTitle: "导入书籍"
             )
         } else if displayed.isEmpty && removingSearch {
@@ -1078,9 +1119,15 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
         Task {
             defer { busy = false }
             do {
-                let publication = try await library.open(book)
+                let reader: UIViewController
+                if book.resolvedFormat == .pdf {
+                    // PDF Spike：正文由系统 PDFKit 渲染；EPUB 仍走 Readium。
+                    reader = try PDFReaderController(book: book, library: library)
+                } else {
+                    let publication = try await library.open(book)
+                    reader = try ReaderController(book: book, publication: publication, library: library)
+                }
                 UserDefaults.standard.set(book.id, forKey: "last-read-" + library.root.path)
-                let reader = try ReaderController(book: book, publication: publication, library: library)
                 reader.modalPresentationStyle = .fullScreen
                 present(reader, animated: true)
             } catch {
@@ -1092,19 +1139,38 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
     @objc private func importFile() {
         guard !busy else { return }
         let epub = UTType(filenameExtension: "epub") ?? UTType(importedAs: "org.idpf.epub-container")
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [epub, .data], asCopy: true)
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [epub, .pdf, .data], asCopy: true)
         picker.delegate = self
         picker.allowsMultipleSelection = false
         present(picker, animated: true)
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        guard let url = urls.first else { return }
+        guard let url = urls.first, !busy else { return }
         busy = true
-        Task {
-            defer { busy = false }
+        rootTabsController?.setTabInteractionEnabled(false)
+        let isPDF = url.pathExtension.lowercased() == "pdf"
+        if isPDF { showPDFImportProgress() }
+        importTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                hidePDFImportProgress()
+                busy = false
+                importTask = nil
+                rootTabsController?.setTabInteractionEnabled(true)
+            }
             do {
-                let result = try await library.importBook(from: url)
+                let result = try await library.importBook(
+                    from: url,
+                    pdfProgress: { progress in
+                        self.pdfProgressView?.update(completed: progress.completed, total: progress.total)
+                    },
+                    confirmPDFInfo: { info in
+                        self.hidePDFImportProgress()
+                        return await self.confirmScannedPDF(info)
+                    }
+                )
+                hidePDFImportProgress()
                 showingRemoved = false
                 refresh()
                 message(
@@ -1113,10 +1179,114 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
                         ? "相同文件复用已有书籍、进度和记录；不同字节的同名文件按另一本书处理。"
                         : result.book.title
                 )
+            } catch is CancellationError {
+                // 用户取消检查/取消继续导入：静默回到书架，不写目录。
             } catch {
-                message(title: "导入失败", text: error.localizedDescription)
+                hidePDFImportProgress()
+                handleImportFailure(error, isPDF: isPDF)
             }
         }
+    }
+
+    // MARK: PDF 导入检查（进度 + 扫描页提示卡）
+
+    /// 底部 tab（RootTabController 挂在 window 根上）；导入期间禁用，避免切换后确认流程失联。
+    private var rootTabsController: RootTabController? {
+        view.window?.rootViewController as? RootTabController
+    }
+
+    /// 从 window 顶层 present 确认卡；不用仅属于书架栈的导航控制器，切 tab 后也不会失效。
+    private var topMostPresenter: UIViewController? {
+        var top = view.window?.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        return top
+    }
+
+    private func showPDFImportProgress() {
+        guard pdfProgressView == nil else { return }
+        let overlay = PDFImportProgressView()
+        overlay.onCancel = { [weak self] in
+            self?.importTask?.cancel()
+            self?.hidePDFImportProgress()
+        }
+        // 遮罩挂到 window 顶层，导入中切 tab/滚动书架都不会带走它。
+        overlay.show(in: view.window ?? navigationController?.view ?? view)
+        pdfProgressView = overlay
+    }
+
+    private func hidePDFImportProgress() {
+        pdfProgressView?.hide()
+        pdfProgressView = nil
+    }
+
+    /// 只有检查出扫描页才弹提示卡（文字页 PDF 静默导入）。
+    /// 从 window 顶层 present；确认卡失败/任务取消时都要 resume(false)，避免导入任务永久等待。
+    private func confirmScannedPDF(_ info: PDFInfo) async -> Bool {
+        let gate = ImportConfirmationGate()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                gate.install(continuation)
+                presentScannedConfirmation(info) { accepted in
+                    gate.resume(accepted)
+                }
+            }
+        } onCancel: {
+            gate.resume(false)
+        }
+    }
+
+    /// 选完文件后 document picker 可能还在 dismiss 动画中：等顶层 presenter 就位再弹卡（最多约 1s）。
+    private func presentScannedConfirmation(
+        _ info: PDFInfo,
+        attempts: Int = 0,
+        completion: @escaping @MainActor (Bool) -> Void
+    ) {
+        guard let presenter = topMostPresenter, presenter.presentedViewController == nil else {
+            guard attempts < 10 else {
+                completion(false)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                Task { @MainActor in
+                    self?.presentScannedConfirmation(info, attempts: attempts + 1, completion: completion)
+                }
+            }
+            return
+        }
+        let alert = BookAlertController(
+            title: info.scannedPagesTitle,
+            message: info.scannedPagesMessage,
+            preferredStyle: .alert
+        )
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel) { _ in
+            completion(false)
+        })
+        alert.addAction(BookAlertAction(title: "继续导入", style: .default) { _ in
+            completion(true)
+        })
+        presenter.present(alert, animated: true) { [weak alert, weak presenter] in
+            // 弹卡未真正进入窗口（例如被其他 present 抢占）：保底取消导入，恢复书架可用。
+            if alert?.view.window == nil {
+                presenter?.presentedViewController?.dismiss(animated: false)
+                completion(false)
+            }
+        }
+    }
+
+    private func handleImportFailure(_ error: Error, isPDF: Bool) {
+        if isPDF, let libraryError = error as? LibraryError {
+            switch libraryError {
+            case .unsupported:
+                message(title: "这份 PDF 打不开", text: "这个文件需要密码才能打开，目前还不能导入。")
+                return
+            case .invalid:
+                message(title: "这个文件读不出来", text: "文件可能已损坏，未能加入书架。")
+                return
+            default:
+                break
+            }
+        }
+        message(title: "导入失败", text: error.localizedDescription)
     }
 
     private func confirmRemoval(_ id: String, deleteRecords: Bool) {
@@ -1628,5 +1798,117 @@ private final class ShelfProgressView: UIView {
     private func updateAccessibilityValue() {
         let percent = Int((max(0, min(1, value)) * 100).rounded())
         accessibilityValue = label + " " + String(percent) + "%"
+    }
+}
+
+/// PDF 导入检查遮罩：纸白卡片显示「正在检查这份 PDF…（X/Y）」并可取消。
+/// 只覆盖书架页面；检查在后台执行，取消会终止检查并丢弃暂存文件（不写目录）。
+private final class PDFImportProgressView: UIView {
+    var onCancel: (() -> Void)?
+
+    private let dim = UIView()
+    private let card = UIView()
+    private let titleLabel = BookDesign.label("正在检查这份 PDF…", font: BookType.sans(15, weight: .medium, style: .subheadline))
+    private let progressBar = UIProgressView(progressViewStyle: .default)
+    private let cancelButton = UIButton(type: .system)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        accessibilityIdentifier = "pdf-import-progress"
+        accessibilityViewIsModal = true
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0.24)
+        dim.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(dim)
+
+        card.backgroundColor = BookDesign.paper
+        card.layer.cornerRadius = BookRadius.sheet
+        card.layer.cornerCurve = .continuous
+        BookElevation.floating(card)
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.accessibilityIdentifier = "pdf-import-progress-card"
+        addSubview(card)
+
+        titleLabel.textAlignment = .center
+        titleLabel.accessibilityIdentifier = "pdf-import-progress-label"
+        progressBar.progressTintColor = BookDesign.lamp
+        progressBar.trackTintColor = BookDesign.line
+        progressBar.accessibilityIdentifier = "pdf-import-progress-bar"
+
+        var configuration = UIButton.Configuration.plain()
+        configuration.title = "取消"
+        configuration.baseForegroundColor = BookDesign.ink2
+        configuration.background.backgroundColor = BookDesign.paperDeep
+        configuration.background.cornerRadius = 12
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16)
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookType.sans(14, weight: .medium, style: .subheadline)
+            return outgoing
+        }
+        cancelButton.configuration = configuration
+        cancelButton.accessibilityIdentifier = "pdf-import-cancel"
+        cancelButton.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.cancelButton.isEnabled = false
+            self.onCancel?()
+        }, for: .touchUpInside)
+
+        for child in [titleLabel, progressBar, cancelButton] as [UIView] {
+            child.translatesAutoresizingMaskIntoConstraints = false
+            card.addSubview(child)
+        }
+        NSLayoutConstraint.activate([
+            dim.topAnchor.constraint(equalTo: topAnchor),
+            dim.bottomAnchor.constraint(equalTo: bottomAnchor),
+            dim.leadingAnchor.constraint(equalTo: leadingAnchor),
+            dim.trailingAnchor.constraint(equalTo: trailingAnchor),
+            card.centerXAnchor.constraint(equalTo: centerXAnchor),
+            card.centerYAnchor.constraint(equalTo: centerYAnchor),
+            card.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 24),
+            card.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
+            card.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+            titleLabel.topAnchor.constraint(equalTo: card.topAnchor, constant: 22),
+            titleLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20),
+            titleLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
+            progressBar.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 16),
+            progressBar.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20),
+            progressBar.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
+            cancelButton.topAnchor.constraint(equalTo: progressBar.bottomAnchor, constant: 20),
+            cancelButton.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20),
+            cancelButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
+            cancelButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            cancelButton.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -20)
+        ])
+        let preferred = card.widthAnchor.constraint(equalToConstant: 300)
+        preferred.priority = .defaultHigh
+        preferred.isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func show(in host: UIView) {
+        translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(self)
+        NSLayoutConstraint.activate([
+            topAnchor.constraint(equalTo: host.topAnchor),
+            bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            trailingAnchor.constraint(equalTo: host.trailingAnchor)
+        ])
+        alpha = 0
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.18) {
+            self.alpha = 1
+        }
+    }
+
+    func update(completed: Int, total: Int) {
+        titleLabel.text = "正在检查这份 PDF…（\(completed)/\(total)）"
+        progressBar.accessibilityValue = "已检查 \(completed)/\(total) 页"
+        guard total > 0 else { return }
+        progressBar.setProgress(Float(max(0, min(completed, total))) / Float(total), animated: true)
+    }
+
+    func hide() {
+        removeFromSuperview()
     }
 }

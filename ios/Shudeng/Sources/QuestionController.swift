@@ -449,7 +449,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         for (index, evidence) in turn.citations.enumerated() {
             let button = UIButton(type: .system)
             var configuration = UIButton.Configuration.plain()
-            configuration.title = "\(index + 1) · \(turn.bookTitle) · \(evidence.chapter)\n查看原文，核对这段解释"
+            configuration.title = citationTitle(evidence, index: index, bookTitle: turn.bookTitle)
             configuration.image = BookDesign.symbol("arrow.up.right", size: 18)
             configuration.imagePlacement = .trailing
             configuration.imagePadding = 8
@@ -596,6 +596,16 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             present(alert, animated: true)
         }
     }
+    private func citationTitle(_ evidence: QuestionEvidence, index: Int, bookTitle: String) -> String {
+        guard evidence.pdfPage != nil else {
+            return "\(index + 1) · \(bookTitle) · \(evidence.locationTitle)\n查看原文，核对这段解释"
+        }
+        let quote = evidence.quote
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let excerpt = quote.count > 36 ? String(quote.prefix(36)) + "…" : quote
+        return "\(index + 1) · \(bookTitle) · \(evidence.locationTitle)\n\(excerpt)"
+    }
     private func open(_ evidence: QuestionEvidence, origin record: ReadingQuestion) {
         guard let target = try? evidence.location(), let origin = try? record.origin() else { return }
         input.resignFirstResponder(); returningFromReference = true
@@ -603,6 +613,17 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         guard let book = library.books.first(where: { $0.id == record.bookID }), library.sourceAvailable(for: record.bookID) else {
             let alert = BookAlertController(title: "原文不可用", message: "引用文字仍可回看；重新导入相同文件后可定位原书。", preferredStyle: .alert)
             alert.addAction(BookAlertAction(title: "知道了", style: .default)); present(alert, animated: true); return
+        }
+        if book.resolvedFormat == .pdf {
+            do {
+                let reader = try PDFReaderController(book: book, library: library, target: target)
+                reader.modalPresentationStyle = .fullScreen
+                present(reader, animated: true)
+            } catch {
+                let alert = BookAlertController(title: "原文不可用", message: "引用文字已保留，未能打开原书。", preferredStyle: .alert)
+                alert.addAction(BookAlertAction(title: "知道了", style: .default)); present(alert, animated: true)
+            }
+            return
         }
         Task {
             do {
@@ -717,7 +738,7 @@ final class EvidenceController: UITableViewController {
             return UITableViewCell()
         }
         let value = values[indexPath.row]
-        cell.textLabel?.text = "\(value.id) · \(value.chapter)\n\(value.quote)"
+        cell.textLabel?.text = "\(value.id) · \(value.locationTitle)\n\(value.quote)"
         cell.detailTextLabel?.text = value.context
         cell.textLabel?.numberOfLines = 0; cell.detailTextLabel?.numberOfLines = 0
         cell.textLabel?.font = BookDesign.readingFont(17); cell.textLabel?.textColor = BookDesign.ink

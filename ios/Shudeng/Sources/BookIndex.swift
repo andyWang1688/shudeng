@@ -1,8 +1,52 @@
 import Foundation
+import PDFKit
 import SQLite3
 import SwiftSoup
 import ReadiumShared
 import ReadiumStreamer
+
+/// 在 PDFKitWorkQueue 上串行访问 PDFDocument 的页文本抽取器。
+/// PDFKit 不是线程安全的，actor/Swift 并发线程不直接碰文档；每页 autoreleasepool。
+final class PDFPageTextExtractor: @unchecked Sendable {
+    struct Metadata: Sendable {
+        let pageCount: Int
+        let isLocked: Bool
+    }
+
+    private let file: URL
+    private var document: PDFKit.PDFDocument?
+
+    init(file: URL) { self.file = file }
+
+    func open() async throws -> Metadata {
+        try await withCheckedThrowingContinuation { continuation in
+            PDFKitWorkQueue.queue.async {
+                autoreleasepool {
+                    guard let document = PDFKit.PDFDocument(url: self.file) else {
+                        continuation.resume(throwing: IndexError.source)
+                        return
+                    }
+                    self.document = document
+                    continuation.resume(returning: Metadata(pageCount: document.pageCount, isLocked: document.isLocked))
+                }
+            }
+        }
+    }
+
+    func text(at index: Int) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            PDFKitWorkQueue.queue.async {
+                guard let document = self.document else {
+                    continuation.resume(throwing: IndexError.source)
+                    return
+                }
+                autoreleasepool {
+                    continuation.resume(returning: document.page(at: index)?.string ?? "")
+                }
+            }
+        }
+    }
+}
 
 struct BookPreparationState {
     var completed = 0
@@ -12,9 +56,29 @@ struct BookPreparationState {
     var vectorsCompleted = 0
     var vectorsTotal = 0
     var semanticReady = false
-    var ready: Bool { !preparing && total > 0 && completed == total && semanticReady && failure == nil }
+    /// 扫描版/没有可检索文字：不建文字索引，但仍可阅读；EPUB 恒为 false。
+    var textIndexUnavailable = false
+    /// PDF 页数（nil = EPUB）；用它把进度与失败文案切换成「页」。
+    var pdfPageCount: Int? = nil
+    /// 导入时统计的有文字页数（nil = 未知/EPUB）；0 表示扫描版。
+    var searchablePageCount: Int? = nil
+    var ready: Bool {
+        !preparing && total > 0 && completed == total && failure == nil && (semanticReady || textIndexUnavailable)
+    }
     var message: String {
-        if let failure { return "资料准备失败（已完成\(completed)/\(total)章）：\(failure)；仍可阅读" }
+        if textIndexUnavailable {
+            return "PDF 已可阅读（共\(total)页）；没有可搜索的文字"
+        }
+        let unit = pdfPageCount == nil ? "章" : "页"
+        if let failure { return "资料准备失败（已完成\(completed)/\(total)\(unit)）：\(failure)；仍可阅读" }
+        if pdfPageCount != nil {
+            if completed == total, total > 0, !semanticReady {
+                return "正在准备 PDF 语义资料（已提交\(vectorsCompleted)/\(vectorsTotal)段），不影响阅读和原文搜索"
+            }
+            return ready
+                ? "PDF 文字资料可用（\(total)页，语义资料已完成）"
+                : "正在准备 PDF 文字索引（已完成\(completed)/\(total)页），不影响阅读"
+        }
         if completed == total && total > 0 && !semanticReady {
             return "正在准备本地语义资料（已提交\(vectorsCompleted)/\(vectorsTotal)段），不影响阅读和原文搜索"
         }
@@ -27,6 +91,16 @@ struct BookSearchHit {
     let chapter: String
     let context: String
     let locator: Locator
+    /// PDF 页级命中的 1-based 页号；EPUB 命中为 nil。
+    var page: Int? { locator.pdfPageNumber }
+}
+
+extension Locator {
+    /// PDF 1-based 页号：优先取 Readium 的 fragment `page=N`，退回显式 `page` 扩展或 `position`；非 PDF 为 nil。
+    var pdfPageNumber: Int? {
+        guard mediaType.matches(.pdf) else { return nil }
+        return locations.page ?? locations["page"]?.integer ?? locations.position
+    }
 }
 
 /// UI state only; parsing, SQLite and search run on BookIndex's actor.
@@ -42,8 +116,18 @@ final class BookPreparation {
     func start(_ book: Book, file: URL, rebuild: Bool = false) {
         guard book.removal == nil, FileManager.default.fileExists(atPath: file.path) else { return }
         guard jobs[book.id] == nil else { return }
+        if book.resolvedFormat == .pdf, let info = book.pdfInfo, info.textPageCount == 0 {
+            // 扫描版没有可建索引的文字：直接给出明确终态，避免空跑逐页检查或停在“准备中”。
+            var state = BookPreparationState(completed: info.pageCount, total: info.pageCount, preparing: false)
+            state.pdfPageCount = info.pageCount
+            state.searchablePageCount = 0
+            state.textIndexUnavailable = true
+            states[book.id] = state
+            notify()
+            return
+        }
         if !rebuild, states[book.id]?.ready == true { return }
-        var state = states[book.id] ?? BookPreparationState()
+        var state = pdfState(states[book.id] ?? BookPreparationState(), for: book)
         state.preparing = true; state.failure = nil
         states[book.id] = state
         notify()
@@ -52,20 +136,20 @@ final class BookPreparation {
             do {
                 if var committed = try? await index.state(bookID: book.id) {
                     committed.preparing = true
-                    if tokens[book.id] == token { update(committed, for: book.id) }
+                    if tokens[book.id] == token { update(pdfState(committed, for: book), for: book.id) }
                 }
                 try await index.prepare(bookID: book.id, file: file, rebuild: rebuild) { state in
-                    if self.tokens[book.id] == token { self.update(state, for: book.id) }
+                    if self.tokens[book.id] == token { self.update(self.pdfState(state, for: book), for: book.id) }
                 }
                 try Task.checkCancellation()
                 try await index.prepareVectors(bookID: book.id) { state in
-                    if self.tokens[book.id] == token { self.update(state, for: book.id) }
+                    if self.tokens[book.id] == token { self.update(self.pdfState(state, for: book), for: book.id) }
                 }
             } catch is CancellationError {
                 // Startup resumes the committed chapter checkpoint.
             } catch {
                 guard tokens[book.id] == token else { return }
-                var state = states[book.id] ?? BookPreparationState()
+                var state = pdfState(states[book.id] ?? BookPreparationState(), for: book)
                 state.failure = (error as? IndexError)?.errorDescription ?? (error as? EmbeddingError)?.errorDescription ?? "无法读取或保存资料，请检查文件与储存空间后重试"
                 state.preparing = false
                 states[book.id] = state
@@ -95,6 +179,24 @@ final class BookPreparation {
 #endif
     private func update(_ state: BookPreparationState, for id: String) { states[id] = state; notify() }
     private func notify() { NotificationCenter.default.post(name: Self.changed, object: self) }
+
+    /// PDF 的进度/终态统一补上页数与可检索页数（导入时已由 pdfInfo 统计）。
+    /// 扫描版把 `textIndexUnavailable` 置为 true：可阅读但不可搜索。
+    private func pdfState(_ state: BookPreparationState, for book: Book) -> BookPreparationState {
+        guard book.resolvedFormat == .pdf else { return state }
+        var state = state
+        if let info = book.pdfInfo {
+            state.pdfPageCount = info.pageCount
+            state.searchablePageCount = info.textPageCount
+            if info.textPageCount == 0 {
+                state.textIndexUnavailable = true
+                state.preparing = false
+            }
+        } else if state.total > 0 {
+            state.pdfPageCount = state.total
+        }
+        return state
+    }
 }
 
 enum IndexError: LocalizedError {
@@ -115,6 +217,10 @@ actor BookIndex {
     func prepare(bookID: String, file: URL, rebuild: Bool = false,
                  progress: @escaping @MainActor (BookPreparationState) async -> Void) async throws {
         try Task.checkCancellation()
+        if file.pathExtension.lowercased() == "pdf" {
+            try await preparePDF(bookID: bookID, file: file, rebuild: rebuild, progress: progress)
+            return
+        }
         let db = try IndexDatabase(url: url)
         let http = DefaultHTTPClient()
         let retriever = AssetRetriever(httpClient: http)
@@ -167,6 +273,63 @@ actor BookIndex {
             completed += 1
             await progress(BookPreparationState(completed: completed, total: order.count, preparing: completed != order.count))
         }
+    }
+
+    /// PDF 页级索引：每页一个 chapter（ordinal = page-1），页文本切成 fragments；
+    /// 空页/扫描页不产生 fragment，但保留 chapter 与进度映射。
+    /// 进度按页回调；取消/失败由调用方转为明确状态，不会停在准备中。
+    private func preparePDF(
+        bookID: String,
+        file: URL,
+        rebuild: Bool,
+        progress: @escaping @MainActor (BookPreparationState) async -> Void
+    ) async throws {
+        // PDFDocument 的创建与逐页取文本都放在 PDFKitWorkQueue 上（PDFKit 非线程安全）。
+        let extractor = PDFPageTextExtractor(file: file)
+        let metadata = try await extractor.open()
+        guard metadata.pageCount > 0, !metadata.isLocked else { throw IndexError.source }
+        let pageCount = metadata.pageCount
+        let db = try IndexDatabase(url: url)
+        // PDF 没有 Readium 的目录 JSON：contents 先留空，页级 chapter 即目录的最小形态。
+        try db.initialize(bookID, total: pageCount, contents: "[]", rebuild: rebuild)
+        var completed = try db.completed(bookID)
+        var initial = BookPreparationState(completed: completed, total: pageCount, preparing: completed != pageCount)
+        initial.pdfPageCount = pageCount
+        await progress(initial)
+        var sentFinal = false
+        let progressStep = max(1, pageCount / 100)
+        while completed < pageCount {
+            try Task.checkCancellation()
+            let text = try await extractor.text(at: completed)
+            let pageNumber = completed + 1
+            let fragments = BookText.pdfFragments(pageNumber: pageNumber, pageCount: pageCount, text: text)
+            try db.commit(bookID, chapter: completed, href: "pdf://page/\(pageNumber)",
+                          title: "第 \(pageNumber) 页", fragments: fragments)
+            completed += 1
+            var state = BookPreparationState(completed: completed, total: pageCount, preparing: completed < pageCount)
+            state.pdfPageCount = pageCount
+            if completed == pageCount {
+                let textPages = try pdfTextPageCount(bookID: bookID, db: db)
+                state.searchablePageCount = textPages
+                state.textIndexUnavailable = textPages == 0
+                sentFinal = true
+            }
+            if completed == 1 || completed % progressStep == 0 || completed == pageCount {
+                await progress(state)
+            }
+        }
+        if !sentFinal {
+            let textPages = try pdfTextPageCount(bookID: bookID, db: db)
+            var final = BookPreparationState(completed: pageCount, total: pageCount, preparing: false)
+            final.pdfPageCount = pageCount
+            final.searchablePageCount = textPages
+            final.textIndexUnavailable = textPages == 0
+            await progress(final)
+        }
+    }
+
+    private func pdfTextPageCount(bookID: String, db: IndexDatabase) throws -> Int {
+        Int(try db.rows("SELECT count(DISTINCT chapter) FROM fragments WHERE book_id=?", [bookID])[0][0]) ?? 0
     }
 
     func search(bookID: String, query: String) throws -> [BookSearchHit] {
@@ -295,6 +458,98 @@ enum BookText {
         let values = query && chars.count > 1 ? bigrams : unigrams + bigrams
         return Set(values).sorted().joined(separator: query ? " AND " : " ")
     }
+
+    /// PDF 页文本 → fragments：按行聚合为 ≤360 UTF-16 字符的段，空白页返回空。
+    /// locator 只带页级位置（fragments/page、position、totalProgression）与 80 字上下文，
+    /// 不生成 `domRange`/`cssSelector`；空页仍会由调用方保留 chapter 与进度映射。
+    static func pdfFragments(pageNumber: Int, pageCount: Int, text pageText: String) -> [BookFragment] {
+        let text = pageText as NSString
+        guard text.length > 0, let href = AnyURL(string: "pdf://page/\(pageNumber)") else { return [] }
+        // 与阅读器进度口径统一：首页 0，末页 1（单页 PDF 为 1）。
+        let progression = pageCount > 1 ? Double(pageNumber - 1) / Double(pageCount - 1) : 1
+        // 同时遵循 Readium 的 `page=N` fragment 约定，并把页号显式写进扩展位置，便于检索/UI 直接读取。
+        let locations = Locator.Locations(
+            fragments: ["page=\(pageNumber)"],
+            progression: progression,
+            totalProgression: progression,
+            position: pageNumber,
+            otherLocations: ["page": .integer(pageNumber)]
+        )
+        let title = "第 \(pageNumber) 页"
+        var runs: [NSRange] = []
+        var runStart = -1
+        var runEnd = 0
+        func flush() {
+            if runStart >= 0, runEnd > runStart { runs.append(NSRange(location: runStart, length: runEnd - runStart)) }
+            runStart = -1
+            runEnd = 0
+        }
+        text.enumerateSubstrings(in: NSRange(location: 0, length: text.length),
+                                 options: [.byLines, .substringNotRequired]) { _, range, _, _ in
+            let content = pdfContentRange(of: range, in: text)
+            guard content.length > 0 else { return }
+            for slice in pdfSlices(of: content, in: text) {
+                if runStart < 0 {
+                    runStart = slice.location
+                    runEnd = NSMaxRange(slice)
+                } else if NSMaxRange(slice) - runStart <= pdfFragmentLimit {
+                    runEnd = NSMaxRange(slice)
+                } else {
+                    flush()
+                    runStart = slice.location
+                    runEnd = NSMaxRange(slice)
+                }
+            }
+        }
+        flush()
+        return runs.map { range in
+            let fragmentText = text.substring(with: range)
+            let context = 80
+            let beforeStart = max(0, range.location - context)
+            let before = text.substring(with: NSRange(location: beforeStart, length: range.location - beforeStart))
+            let afterStart = NSMaxRange(range)
+            let afterLength = min(context, text.length - afterStart)
+            let after = afterLength > 0 ? text.substring(with: NSRange(location: afterStart, length: afterLength)) : ""
+            let locator = Locator(
+                href: href,
+                mediaType: .pdf,
+                title: title,
+                locations: locations,
+                text: .init(after: after, before: before, highlight: fragmentText)
+            )
+            return BookFragment(text: fragmentText, locator: locator)
+        }
+    }
+
+    private static let pdfFragmentLimit = 360
+
+    /// 去掉行首尾空白后的内容范围（用于跳过纯空白行）。
+    private static func pdfContentRange(of range: NSRange, in text: NSString) -> NSRange {
+        let line = text.substring(with: range)
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return NSRange(location: range.location, length: 0) }
+        let local = (line as NSString).range(of: trimmed)
+        guard local.location != NSNotFound else { return NSRange(location: range.location, length: 0) }
+        return NSRange(location: range.location + local.location, length: (trimmed as NSString).length)
+    }
+
+    /// 超长行按 UTF-16 上限切片，且不切断组合字符序列。
+    private static func pdfSlices(of range: NSRange, in text: NSString) -> [NSRange] {
+        guard range.length > pdfFragmentLimit else { return [range] }
+        var result: [NSRange] = []
+        var start = range.location
+        let end = NSMaxRange(range)
+        while start < end {
+            var sliceEnd = min(start + pdfFragmentLimit, end)
+            if sliceEnd < end {
+                let composed = text.rangeOfComposedCharacterSequence(at: sliceEnd - 1)
+                sliceEnd = max(start + 1, min(NSMaxRange(composed), end))
+            }
+            result.append(NSRange(location: start, length: sliceEnd - start))
+            start = sliceEnd
+        }
+        return result
+    }
 }
 
 /// Short-lived connections, only used by BookIndex's actor.
@@ -404,7 +659,8 @@ final class IndexDatabase {
                 var locator = base
                 locator.text = .init(after: original.substring(from: NSMaxRange(range)) + (base.text.after ?? ""),
                     before: (base.text.before ?? "") + original.substring(to: range.location), highlight: original.substring(with: range))
-                if let nodes = base.locations.otherLocations["shudengTextNodes"]?.array {
+                // PDF 页级命中没有 DOM 映射，直接跳过 domRange 重建；命中 locator 只保留页位置。
+                if !base.mediaType.matches(.pdf), let nodes = base.locations.otherLocations["shudengTextNodes"]?.array {
                     func point(_ offset: Int, end: Bool) -> DOMRange.Point? {
                         for node in nodes {
                             guard let object = node.object, let start = object["start"]?.integer, let length = object["length"]?.integer, length > 0,

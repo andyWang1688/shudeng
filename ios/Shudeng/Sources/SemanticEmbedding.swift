@@ -75,6 +75,7 @@ actor SemanticEmbedding {
     func tokenIDs(_ text: String) async throws -> [Int] { try await model().tokenizer.encode(text: text) }
 
     /// Exact source substrings; each is small enough for the model, including specials.
+    /// PDF 页级 fragments 是纯文本，与 EPUB 共用同一套切块（偏移相对 fragment 原文）。
     func chunks(_ text: String) async throws -> [(text: String, offset: Int)] {
         let tokenizer = try await model().tokenizer
         guard !text.isEmpty else { return [] }

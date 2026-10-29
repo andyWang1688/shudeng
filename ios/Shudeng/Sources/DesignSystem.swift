@@ -1,4 +1,5 @@
 import UIKit
+import PDFKit
 import ReadiumShared
 
 /// 纸与灯 / Paper & Lamp —— 2026-10-27 确认的视觉系统令牌。
@@ -420,6 +421,12 @@ final class RootTabController: UIViewController {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    /// 导入等阻塞流程期间禁用底部 tab：避免切换后 present 源控制器离开层级，导致确认卡/进度无人回收。
+    func setTabInteractionEnabled(_ enabled: Bool) {
+        tabBar.isUserInteractionEnabled = enabled
+        tabBar.accessibilityElementsHidden = !enabled
+    }
+
     func select(_ index: Int) {
         guard viewControllers.indices.contains(index) else { return }
         guard isViewLoaded else {
@@ -760,6 +767,13 @@ final class BookCoverStore {
     func image(for book: Book, library: LibraryStore) async -> UIImage? {
         if let image = cache.object(forKey: book.id as NSString) { return image }
         guard !absent.contains(book.id), library.sourceAvailable(for: book.id) else { return nil }
+        if book.resolvedFormat == .pdf {
+            // PDF 没有 EPUB 封面资源：用首页缩略图生成封面，和 EPUB 一样进现有缓存。
+            let image = await PDFCoverLoader.cover(for: library.fileURL(for: book), maxSize: CGSize(width: 480, height: 720))
+            if let image { cache.setObject(image, forKey: book.id as NSString, cost: Int(image.size.width * image.size.height * 4)) }
+            else { absent.insert(book.id) }
+            return image
+        }
         do {
             let publication = try await library.open(book)
             let image = try await publication.coverFitting(maxSize: CGSize(width: 480, height: 720)).get()
@@ -767,6 +781,24 @@ final class BookCoverStore {
             else { absent.insert(book.id) }
             return image
         } catch { return nil }
+    }
+}
+
+/// PDF 封面：在 PDFKit 串行队列上渲染首页缩略图（避免 PDFKit 在主线程/随机线程渲染大文档）。
+private enum PDFCoverLoader {
+    static func cover(for url: URL, maxSize: CGSize) async -> UIImage? {
+        await withCheckedContinuation { continuation in
+            PDFKitWorkQueue.queue.async {
+                autoreleasepool {
+                    guard let document = PDFKit.PDFDocument(url: url), let page = document.page(at: 0) else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    let image = page.thumbnail(of: maxSize, for: .cropBox)
+                    continuation.resume(returning: image.size.width > 1 && image.size.height > 1 ? image : nil)
+                }
+            }
+        }
     }
 }
 

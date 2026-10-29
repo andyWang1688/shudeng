@@ -18,6 +18,12 @@ struct QuestionEvidence: Codable, Equatable {
         guard let value = try Locator(json: JSONValue(jsonString: locatorJSON, warnings: nil), warnings: nil) else { throw LibraryError.invalidLocation }
         return value
     }
+
+    /// PDF 页级引用页号；EPUB 引用为 nil。
+    var pdfPage: Int? { (try? location().pdfPageNumber) }
+
+    /// 引用位置标题：PDF 显示「第 X 页」，其余沿用章节标题。
+    var locationTitle: String { pdfPage.map { "第 \($0) 页" } ?? chapter }
 }
 
 enum QuestionState: String, Codable {
