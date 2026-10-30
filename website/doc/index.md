@@ -4,7 +4,7 @@ layout: home
 hero:
   name: 书灯
   text: 一盏照书的灯
-  tagline: 在书里直接提问，回答带着书内依据，点一下回到原文。
+  tagline: AI 照亮你读不懂的地方。
   actions:
     - theme: brand
       text: 快速开始
