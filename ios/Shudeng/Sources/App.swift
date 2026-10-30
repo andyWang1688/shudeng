@@ -67,7 +67,7 @@ func makeApplicationTabs(library: LibraryStore, root: URL, secrets: AISecrets) -
     let shelf = UINavigationController(rootViewController: ShelfController(library: library))
     let notes = UINavigationController(rootViewController: NotesController(library: library))
     let chats = UINavigationController(rootViewController: QuestionHistoryController(library: library))
-    let profile = ProfileController(root: root, secrets: secrets, library: library)
+    let profile = ProfileController(root: root, secrets: secrets)
     return RootTabController(viewControllers: [shelf, notes, chats, UINavigationController(rootViewController: profile)])
 }
 
@@ -127,18 +127,15 @@ private final class ProfileBrandIconView: UIImageView {
 }
 
 final class ProfileController: UICollectionViewController {
-    private enum Section: Int, CaseIterable { case brand, settings, about }
+    private enum Section: Int, CaseIterable { case settings, about }
     private let root: URL
     private let secrets: AISecrets
-    private let library: LibraryStore?
     private var serviceSummary = "尚未配置，阅读仍可使用"
     private var appearanceName = "跟随系统"
-    private var stats: (books: Int, notes: Int, chats: Int)?
 
-    init(root: URL, secrets: AISecrets = KeychainSecrets(), library: LibraryStore? = nil) {
+    init(root: URL, secrets: AISecrets = KeychainSecrets()) {
         self.root = root
         self.secrets = secrets
-        self.library = library
         super.init(collectionViewLayout: ProfileController.makeLayout())
     }
 
@@ -146,17 +143,9 @@ final class ProfileController: UICollectionViewController {
 
     private static func makeLayout() -> UICollectionViewCompositionalLayout {
         UICollectionViewCompositionalLayout { index, environment in
-            var configuration: UICollectionLayoutListConfiguration
-            switch Section(rawValue: index) {
-            case .brand:
-                configuration = UICollectionLayoutListConfiguration(appearance: .plain)
-                configuration.showsSeparators = false
-            case .settings:
-                configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
-                configuration.headerMode = .supplementary
-            default:
-                configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
-                configuration.headerMode = .supplementary
+            var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
+            configuration.headerMode = .supplementary
+            if Section(rawValue: index) == .about {
                 configuration.footerMode = .supplementary
             }
             configuration.backgroundColor = BookDesign.paper
@@ -177,7 +166,6 @@ final class ProfileController: UICollectionViewController {
         collectionView.backgroundColor = BookDesign.paper
         collectionView.accessibilityIdentifier = "profile-list"
         collectionView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 24, right: 0)
-        collectionView.register(ProfileBrandCell.self, forCellWithReuseIdentifier: "profile-brand")
         collectionView.register(UICollectionViewListCell.self, forCellWithReuseIdentifier: "profile-row")
         collectionView.register(
             UICollectionViewListCell.self,
@@ -191,7 +179,6 @@ final class ProfileController: UICollectionViewController {
         )
         reloadService()
         updateAppearanceRow()
-        reloadStats()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -199,7 +186,6 @@ final class ProfileController: UICollectionViewController {
         navigationController?.setNavigationBarHidden(true, animated: false)
         reloadService()
         updateAppearanceRow()
-        reloadStats()
         collectionView.reloadData()
     }
 
@@ -216,21 +202,8 @@ final class ProfileController: UICollectionViewController {
         }
     }
 
-    private func reloadStats() {
-        guard let library else {
-            stats = nil
-            return
-        }
-        let books = library.books.filter { $0.removal == nil }
-        stats = (
-            books.count,
-            books.reduce(0) { $0 + ($1.notes?.count ?? 0) },
-            library.questions.conversations.count
-        )
-    }
-
     private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.1"
     }
 
     private var selectedAppearance: UIUserInterfaceStyle {
@@ -286,7 +259,6 @@ final class ProfileController: UICollectionViewController {
 
     override func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
         switch Section(rawValue: section) {
-        case .brand: return 1
         case .settings: return 2
         default: return 1
         }
@@ -321,11 +293,6 @@ final class ProfileController: UICollectionViewController {
     }
 
     override func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        if indexPath.section == Section.brand.rawValue {
-            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "profile-brand", for: indexPath) as! ProfileBrandCell
-            cell.configure(stats: stats)
-            return cell
-        }
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "profile-row", for: indexPath) as! UICollectionViewListCell
         if indexPath.section == Section.settings.rawValue {
             if indexPath.item == 0 {
@@ -388,138 +355,6 @@ final class ProfileController: UICollectionViewController {
     }
 }
 
-/// 我的页品牌区：标题 + 灯标 + 字标 + 副题 + 统计；作为列表首项，内容自适应。
-private final class ProfileBrandCell: UICollectionViewCell {
-    private let icon = ProfileBrandIconView(image: BookDesign.brandMark)
-    private let wordmark = BookDesign.label("书灯", font: BookType.serif(22, weight: .semibold, style: .title2))
-    private let motto = BookDesign.label(
-        "一盏照书的灯，AI 照亮你读不懂的地方",
-        font: BookType.serif(12.5, weight: .regular, style: .footnote),
-        colour: BookDesign.ink2
-    )
-    private let booksValue = BookDesign.label(nil, font: BookType.serif(17, weight: .semibold, style: .headline))
-    private let notesValue = BookDesign.label(nil, font: BookType.serif(17, weight: .semibold, style: .headline))
-    private let chatsValue = BookDesign.label(nil, font: BookType.serif(17, weight: .semibold, style: .headline))
-    private let statsRow = UIStackView()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        let title = BookDesign.label("我的", font: BookType.display)
-        title.accessibilityIdentifier = "profile-title"
-
-        icon.isAccessibilityElement = true
-        icon.accessibilityLabel = "书灯图标"
-        icon.accessibilityIdentifier = "profile-brand-icon"
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            icon.widthAnchor.constraint(equalToConstant: 56),
-            icon.heightAnchor.constraint(equalToConstant: 56)
-        ])
-
-        wordmark.textAlignment = .center
-        wordmark.accessibilityIdentifier = "profile-wordmark"
-        motto.textAlignment = .center
-        motto.numberOfLines = 0
-        motto.accessibilityLabel = "一盏照书的灯，AI 照亮你读不懂的地方"
-        motto.accessibilityIdentifier = "profile-motto"
-
-        configureStats()
-        let identity = UIStackView(arrangedSubviews: [icon, wordmark, motto, statsRow])
-        identity.axis = .vertical
-        identity.alignment = .center
-        identity.spacing = 10
-        identity.setCustomSpacing(12, after: icon)
-        identity.setCustomSpacing(4, after: wordmark)
-        identity.setCustomSpacing(18, after: motto)
-        identity.accessibilityIdentifier = "profile-brand"
-        identity.isLayoutMarginsRelativeArrangement = true
-        identity.layoutMargins = UIEdgeInsets(top: 20, left: 16, bottom: 18, right: 16)
-        identity.translatesAutoresizingMaskIntoConstraints = false
-
-        let hero = UIView()
-        hero.backgroundColor = BookDesign.paperDeep
-        hero.layer.cornerRadius = 16
-        hero.layer.cornerCurve = .continuous
-        hero.addSubview(identity)
-        NSLayoutConstraint.activate([
-            identity.topAnchor.constraint(equalTo: hero.topAnchor),
-            identity.bottomAnchor.constraint(equalTo: hero.bottomAnchor),
-            identity.leadingAnchor.constraint(equalTo: hero.leadingAnchor),
-            identity.trailingAnchor.constraint(equalTo: hero.trailingAnchor)
-        ])
-
-        let stack = UIStackView(arrangedSubviews: [title, hero])
-        stack.axis = .vertical
-        stack.spacing = 20
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: BookSpacing.screen),
-            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -BookSpacing.screen),
-            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -20)
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    private func configureStats() {
-        statsRow.axis = .horizontal
-        statsRow.alignment = .center
-        statsRow.distribution = .fillEqually
-        statsRow.spacing = 0
-        statsRow.accessibilityIdentifier = "profile-stats"
-        for (value, label) in [(booksValue, "本书"), (notesValue, "条笔记"), (chatsValue, "段对话")] {
-            let column = UIStackView(arrangedSubviews: [value, BookDesign.label(label, font: BookType.caption, colour: BookDesign.ink3)])
-            column.axis = .vertical
-            column.alignment = .center
-            column.spacing = 2
-            statsRow.addArrangedSubview(column)
-            value.textAlignment = .center
-        }
-        for index in 0..<2 {
-            let separator = UIView()
-            separator.backgroundColor = BookDesign.line
-            separator.translatesAutoresizingMaskIntoConstraints = false
-            let container = UIView()
-            container.addSubview(separator)
-            container.heightAnchor.constraint(equalToConstant: 24).isActive = true
-            NSLayoutConstraint.activate([
-                separator.widthAnchor.constraint(equalToConstant: 1),
-                separator.heightAnchor.constraint(equalToConstant: 24),
-                separator.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                separator.centerYAnchor.constraint(equalTo: container.centerYAnchor)
-            ])
-            statsRow.insertArrangedSubview(container, at: min(index * 2 + 1, statsRow.arrangedSubviews.count))
-        }
-    }
-
-    func configure(stats: (books: Int, notes: Int, chats: Int)?) {
-        guard let stats else {
-            statsRow.isHidden = true
-            return
-        }
-        statsRow.isHidden = false
-        booksValue.text = String(stats.books)
-        notesValue.text = String(stats.notes)
-        chatsValue.text = String(stats.chats)
-    }
-
-    override func preferredLayoutAttributesFitting(
-        _ layoutAttributes: UICollectionViewLayoutAttributes
-    ) -> UICollectionViewLayoutAttributes {
-        let attributes = super.preferredLayoutAttributesFitting(layoutAttributes)
-        let width = layoutAttributes.size.width > 0 ? layoutAttributes.size.width : contentView.bounds.width
-        let fitting = contentView.systemLayoutSizeFitting(
-            CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
-            withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel
-        )
-        attributes.frame.size.height = ceil(fitting.height)
-        return attributes
-    }
-}
-
 private final class AboutController: UICollectionViewController {
     private let rows: [(title: String, symbol: String, identifier: String)] = [
         ("隐私政策", "hand.raised", "about-privacy-policy"),
@@ -566,7 +401,7 @@ private final class AboutController: UICollectionViewController {
     }
 
     private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.1"
     }
 
     override func numberOfSections(in collectionView: UICollectionView) -> Int { 2 }
@@ -619,16 +454,22 @@ private final class AboutBrandCell: UICollectionViewCell {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        icon.isAccessibilityElement = false
+        icon.isAccessibilityElement = true
+        icon.accessibilityLabel = "书灯图标"
+        icon.accessibilityIdentifier = "about-brand-icon"
         icon.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             icon.widthAnchor.constraint(equalToConstant: 64),
             icon.heightAnchor.constraint(equalToConstant: 64)
         ])
         wordmark.textAlignment = .center
+        wordmark.accessibilityIdentifier = "about-wordmark"
         motto.textAlignment = .center
         motto.numberOfLines = 0
+        motto.accessibilityLabel = "一盏照书的灯，AI 照亮你读不懂的地方"
+        motto.accessibilityIdentifier = "about-motto"
         release.textAlignment = .center
+        release.accessibilityIdentifier = "about-version"
         let identity = UIStackView(arrangedSubviews: [icon, wordmark, motto, release])
         identity.axis = .vertical
         identity.alignment = .center
@@ -852,7 +693,8 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
 
         searchBar.searchBarStyle = .minimal
         searchBar.placeholder = "书名或作者"
-        searchBar.showsCancelButton = true
+        // 空闲态只保留放大镜+输入框；取消按钮在开始编辑时才出现（避免被误认为搜索按钮）。
+        searchBar.showsCancelButton = false
         searchBar.tintColor = BookDesign.lampInk
         searchBar.searchTextField.accessibilityIdentifier = "library-search"
         searchBar.delegate = self
@@ -882,6 +724,14 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
 
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         searchBar.resignFirstResponder()
+    }
+
+    func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) {
+        searchBar.setShowsCancelButton(true, animated: true)
+    }
+
+    func searchBarTextDidEndEditing(_ searchBar: UISearchBar) {
+        searchBar.setShowsCancelButton(false, animated: true)
     }
 
     func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {

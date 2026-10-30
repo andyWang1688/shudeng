@@ -318,8 +318,6 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         cancel.isHidden = !busy; retry.isHidden = !unsaved
         status.text = unsaved ? "保存失败：当前内容尚未保存，请重试保存。" : record.state.label
         if let failure = record.failure { status.text! += "\n" + failure }
-        let citationWarning = record.notice.components(separatedBy: "\n").dropFirst().joined(separator: "\n")
-        if !citationWarning.isEmpty { status.text! += "\n" + citationWarning }
         if !available { status.text! += "\n原书不可用，记录仍保留；重新导入相同文件后可返回原文。" }
         if !serviceHintLoaded { refreshServiceHint() }
         serviceHint.isHidden = record.state == .preparing || record.state == .generating
@@ -331,7 +329,12 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         } else {
             statusBox.backgroundColor = .clear
         }
-        statusBox.isHidden = record.state == .complete && !unsaved && record.failure == nil && available && citationWarning.isEmpty
+        // 草稿态（未发送、无失败/未保存）不显示状态条：「问题草稿」等字样不应出现在输入区上方。
+        let idleDraft = record.state == .draft && !unsaved && record.failure == nil
+        // 回答成功时隐藏整条系统状态条（“回答已保存/部分引用未核验”属内部日志）；
+        // 保存失败、原书不可用、失败/未完成等需要用户行动的状态仍保留状态条与操作入口。
+        let succeeded = record.state == .complete && !unsaved && record.failure == nil && available
+        statusBox.isHidden = idleDraft || succeeded
         materials.isHidden = record.evidence.isEmpty
         retryGeneration.isHidden = record.state != .incomplete || record.failure == nil
         let turns = library.questions.conversation(record.conversation)?.turns ?? [record]
@@ -557,7 +560,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             let ready = library.preparation.states[record.bookID]?.ready == true
             let continuing = (record.turnIndex ?? 0) > 0
             if continuing && !ready {
-                let alert = BookAlertController(title: "资料尚未准备完整", message: "追问需要重新查书，请等待资料准备；草稿已保留。", preferredStyle: .alert)
+                let alert = BookAlertController(title: "资料尚未准备完整", message: "追问需要重新查书，请等待资料准备；问题已保留。", preferredStyle: .alert)
                 alert.addAction(BookAlertAction(title: "等待资料准备", style: .cancel)); present(alert, animated: true); return
             }
             if ready {
@@ -1042,6 +1045,16 @@ final class QuestionHistoryController: UIViewController, UICollectionViewDelegat
                 snapshot.expand([header])
             }
             dataSource.apply(snapshot, to: sectionIDs[index], animatingDifferences: animated)
+        }
+        // 改名只改 conversationTitle，item identity（会话 UUID）不变，diffable 默认不会重建 cell；
+        // 这里重新配置当前可见的会话行，标题/摘要才能立即刷新（滚出屏幕的行再次显示时由 provider 重配）。
+        for cell in collectionView.visibleCells {
+            guard let listCell = cell as? UICollectionViewListCell,
+                  let indexPath = collectionView.indexPath(for: cell),
+                  let item = dataSource.itemIdentifier(for: indexPath) else { continue }
+            if case let .record(conversationID) = item {
+                configure(record: listCell, indexPath: indexPath, conversationID: conversationID)
+            }
         }
     }
 

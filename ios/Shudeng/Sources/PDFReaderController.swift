@@ -13,12 +13,30 @@ import ReadiumShared
 /// - 标注：选中文字 → 纸白浮层（高亮/写笔记/取消）；高亮渲染为 PDFAnnotation `.highlight`，
 ///   笔记渲染为 `.underline` + `.text` 图标；几何存 `BookNote.pdf`（归一化页面矩形）。
 /// - AI：选区浮层「问 AI」与页脚「问书灯」入口；引用按 `pdf://page/N` 回到本页（扫描版提示无文字）。
+/// 阅读器专用 PDFView：safeAreaInsets 恒为 0。
+/// PDFKit 内部滚动视图默认会随 safe area（状态栏显隐）调整 contentInset，
+/// 即使 PDFView 外框固定，页面也会竖向跳动；把 safe area 归零后内部 inset 不再变化。
+private final class ImmersivePDFView: PDFView {
+    override var safeAreaInsets: UIEdgeInsets { .zero }
+}
+
+extension UIView {
+    /// 递归找到内部滚动视图并关闭自动 safe-area inset 调整（PDFView 不公开 scrollView）。
+    func disableAutomaticContentInsetAdjustment() {
+        if let scrollView = self as? UIScrollView {
+            scrollView.contentInsetAdjustmentBehavior = .never
+            scrollView.automaticallyAdjustsScrollIndicatorInsets = false
+        }
+        for subview in subviews { subview.disableAutomaticContentInsetAdjustment() }
+    }
+}
+
 @MainActor
 final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private let book: Book
     private let library: LibraryStore
     private let document: PDFKit.PDFDocument
-    private let pdfView = PDFView()
+    private let pdfView = ImmersivePDFView()
     private let toolbar = UIView()
     private let footer = UIView()
     private let backButton = UIButton(type: .system)
@@ -45,8 +63,13 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private var notesObserver: NSObjectProtocol?
     private var activeSelection: PDFSelection?
     private var selectionMenu: PDFSelectionMenu?
-    private var isFreezingSelection = false
+    private var selectionMenuWorkItem: DispatchWorkItem?
+    private weak var pageTapGesture: UITapGestureRecognizer?
+    private var selectionAtTouchStart = false
     private lazy var selectionFeedback = UISelectionFeedbackGenerator()
+    // 沉浸式阅读：隐藏顶部工具栏/底部页脚，PDFView 扩到全屏
+    private var chromeHidden = false
+    private var chromeAnimating = false
     // 书内 AI 问答
     private let targetPage: Int?
     private let askButton = UIButton(type: .system)
@@ -64,6 +87,8 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         self.document = document
         targetPage = target?.pdfPageNumber
         super.init(nibName: nil, bundle: nil)
+        // 全屏阅读器自行控制状态栏隐藏（沉浸式）。
+        modalPresentationCapturesStatusBarAppearance = true
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -103,9 +128,16 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        pdfView.disableAutomaticContentInsetAdjustment()
         feedbackGenerator.prepare()
         restoreProgressIfNeeded()
         refreshBookmarkUI(animated: false)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // 内部滚动视图可能延迟创建；布局时补关自动 inset（幂等，不改动 PDFKit 自己的 inset 数值）。
+        pdfView.disableAutomaticContentInsetAdjustment()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -158,6 +190,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
 
     private func configureToolbar() {
         toolbar.backgroundColor = BookDesign.paper.withAlphaComponent(0.94)
+        toolbar.accessibilityIdentifier = "pdf-reader-toolbar"
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(toolbar)
 
@@ -252,7 +285,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     // MARK: - 页脚（页码 + 进度 + 单页/连续）
 
     private func configureFooter() {
-        footer.backgroundColor = BookDesign.paper
+        footer.backgroundColor = BookDesign.paper.withAlphaComponent(0.94)
         footer.accessibilityIdentifier = "pdf-reader-footer"
         footer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(footer)
@@ -337,19 +370,74 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         view.addSubview(bookmarkRibbon)
         NSLayoutConstraint.activate([
             bookmarkRibbon.trailingAnchor.constraint(equalTo: pdfView.trailingAnchor, constant: -12),
-            bookmarkRibbon.topAnchor.constraint(equalTo: pdfView.topAnchor, constant: 10),
+            bookmarkRibbon.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 10),
             bookmarkRibbon.widthAnchor.constraint(equalToConstant: 26),
             bookmarkRibbon.heightAnchor.constraint(equalToConstant: 38)
         ])
     }
 
     private func configureLayout() {
+        // 页面永远全屏固定：工具栏/页脚悬浮在页面之上，显示/隐藏不会改变 PDFView frame 或缩放。
         NSLayoutConstraint.activate([
-            pdfView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            pdfView.topAnchor.constraint(equalTo: view.topAnchor),
             pdfView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             pdfView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            pdfView.bottomAnchor.constraint(equalTo: footer.topAnchor)
+            pdfView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
+        // 确保 chrome 在 PDFView 之上（EPS 式悬浮），不随页面滚动/缩放。
+        view.bringSubviewToFront(toolbar)
+        view.bringSubviewToFront(footer)
+    }
+
+    // MARK: - 沉浸式阅读（单击页面隐藏/显示上下 chrome）
+
+    // 阅读器打开期间安全区恒定：状态栏 / home indicator 始终隐藏，与 chrome 是否显示无关。
+    // 这样 chrome 显隐只需 alpha 动画，不会触发 PDFView 内部按 safeArea 重排（页面不跳）。
+    override var prefersStatusBarHidden: Bool { true }
+
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+
+    /// 单击页面（无标注命中、无选区、无浮层）切换 chrome；PDFView 始终全屏固定、安全区恒定，
+    /// 只淡出/淡入悬浮的顶部工具栏与底部页脚，页面位置与缩放完全不受影响。
+    private func toggleImmersiveChrome() {
+        guard presentedViewController == nil, !chromeAnimating else { return }
+        let hiding = !chromeHidden
+        chromeAnimating = true
+        if hiding {
+            // 先收掉选区/书签丝带，再隐藏 chrome，避免残留浮层。
+            clearActiveSelection()
+            bookmarkRibbon.isHidden = true
+            bookmarkRibbon.alpha = 0
+            bookmarkRibbonVisible = false
+        }
+        chromeHidden = hiding
+        toolbar.isUserInteractionEnabled = !hiding
+        footer.isUserInteractionEnabled = !hiding
+        toolbar.accessibilityElementsHidden = hiding
+        footer.accessibilityElementsHidden = hiding
+        if !hiding {
+            // 显示前先恢复层级可见，再做 0.2s alpha 动画；PDFView frame/缩放保持不变。
+            toolbar.isHidden = false
+            footer.isHidden = false
+        }
+        let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        UIView.animate(
+            withDuration: reduceMotion ? 0 : 0.2,
+            delay: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction]
+        ) {
+            self.toolbar.alpha = hiding ? 0 : 1
+            self.footer.alpha = hiding ? 0 : 1
+        } completion: { _ in
+            self.chromeAnimating = false
+            if hiding {
+                self.toolbar.isHidden = true
+                self.footer.isHidden = true
+            } else {
+                // 页面从未移动，只恢复书签丝带（按当前页书签状态）。
+                self.refreshBookmarkUI(animated: false)
+            }
+        }
     }
 
     // MARK: - 页码与进度
@@ -498,6 +586,8 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func setRibbonVisible(_ visible: Bool, animated: Bool) {
+        // chrome 隐藏时书签丝带也视为沉浸内容的一部分，等恢复 chrome 时按当前页重算。
+        guard !chromeHidden else { return }
         guard visible != bookmarkRibbonVisible else { return }
         bookmarkRibbonVisible = visible
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
@@ -612,6 +702,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         let tap = UITapGestureRecognizer(target: self, action: #selector(pdfTapped(_:)))
         tap.cancelsTouchesInView = false
         tap.delegate = self
+        pageTapGesture = tap
         pdfView.addGestureRecognizer(tap)
     }
 
@@ -709,22 +800,48 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     // MARK: 选中文字 → 纸白浮层
 
     @objc private func selectionChanged() {
-        guard !isFreezingSelection, presentedViewController == nil else { return }
-        guard let selection = pdfView.currentSelection else { return }
-        let quote = (selection.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !quote.isEmpty else { return }
-        isFreezingSelection = true
-        activeSelection = selection
-        // 冻结选区视觉并移除系统选择菜单/手柄，改用纸白浮层；需要改范围时重新选择即可。
-        selection.color = BookDesign.selection.resolvedColor(with: traitCollection)
-        pdfView.highlightedSelections = [selection]
-        suppressSystemTextMenu()
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.isFreezingSelection = false
-            guard self.activeSelection === selection else { return }
-            self.showSelectionMenu(for: selection)
+        guard presentedViewController == nil else { return }
+        selectionMenuWorkItem?.cancel()
+        selectionMenuWorkItem = nil
+        hideSelectionMenu()
+        guard let selection = pdfView.currentSelection else {
+            activeSelection = nil
+            return
         }
+        let quote = (selection.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !quote.isEmpty else {
+            activeSelection = nil
+            return
+        }
+        activeSelection = selection
+        // 保留 PDFKit 原生选区与拖拽手柄：只染色，不冻结、不设 highlightedSelections、不 clearSelection。
+        selection.color = BookDesign.selection.resolvedColor(with: traitCollection)
+        // 只收起系统编辑菜单（不动选区），给原生手柄留出拖拽空间。
+        suppressSystemTextMenu(preserveSelection: true)
+        // 拖动/调整选区期间浮层保持收起；停止约 0.25s 后再出现并重新定位。
+        let item = DispatchWorkItem { [weak self] in self?.presentSelectionMenuIfStable() }
+        selectionMenuWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+    }
+
+    /// 选区稳定（停止拖拽手柄）后显示纸白浮层；期间任何新的 selectionChanged 都会取消/重排计时。
+    private func presentSelectionMenuIfStable() {
+        selectionMenuWorkItem = nil
+        guard presentedViewController == nil else { return }
+        guard let selection = pdfView.currentSelection else {
+            activeSelection = nil
+            hideSelectionMenu()
+            return
+        }
+        let quote = (selection.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !quote.isEmpty else {
+            activeSelection = nil
+            hideSelectionMenu()
+            return
+        }
+        activeSelection = selection
+        suppressSystemTextMenu(preserveSelection: true)
+        showSelectionMenu(for: selection)
     }
 
     private func selectionFrame(for selection: PDFSelection) -> CGRect? {
@@ -743,13 +860,28 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         hideSelectionMenu()
         guard let frame = selectionFrame(for: selection) else { return }
         let menu = PDFSelectionMenu()
-        menu.onHighlight = { [weak self] in self?.presentHighlightPalette(for: selection) }
-        menu.onNote = { [weak self] in self?.beginNote(for: selection) }
-        menu.onAsk = { [weak self] in self?.askSelection(selection) }
+        menu.onHighlight = { [weak self] in
+            guard let self, let current = self.currentSelectionOrFallback(selection) else { return }
+            self.presentHighlightPalette(for: current)
+        }
+        menu.onNote = { [weak self] in
+            guard let self, let current = self.currentSelectionOrFallback(selection) else { return }
+            self.beginNote(for: current)
+        }
+        menu.onAsk = { [weak self] in
+            guard let self, let current = self.currentSelectionOrFallback(selection) else { return }
+            self.askSelection(current)
+        }
         menu.onCancel = { [weak self] in self?.clearActiveSelection() }
         view.addSubview(menu)
         menu.place(belowToolbar: toolbar.frame.maxY, aboveFooter: footer.frame.minY, near: frame, in: view)
         selectionMenu = menu
+    }
+
+    /// 菜单操作时优先用最新原生选区（用户可能刚拖过手柄），拿不到再退回显示菜单时的选区。
+    private func currentSelectionOrFallback(_ fallback: PDFSelection) -> PDFSelection? {
+        guard presentedViewController == nil else { return nil }
+        return pdfView.currentSelection ?? fallback
     }
 
     private func hideSelectionMenu() {
@@ -758,23 +890,32 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func clearActiveSelection() {
+        selectionMenuWorkItem?.cancel()
+        selectionMenuWorkItem = nil
         hideSelectionMenu()
         activeSelection = nil
         pdfView.highlightedSelections = nil
         if pdfView.currentSelection != nil { pdfView.clearSelection() }
     }
 
-    /// 清除 PDFView 当前文字选择并收起系统编辑菜单（点击标注/冻结自定义选区时用）。
+    /// 收起系统编辑菜单（点击标注/正常选字时用）。
+    /// `preserveSelection=true` 时只 dismiss 菜单，不 clear PDFView 原生选区——正常选字流程要保留手柄让用户拖拽。
     /// PDFKit 的系统菜单可能在触点后异步弹出，因此立即清一次并在 0.05/0.2/0.5s 再补清。
-    private func suppressSystemTextMenu() {
-        closeSystemSelectionMenus()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.closeSystemSelectionMenus() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.closeSystemSelectionMenus() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.closeSystemSelectionMenus() }
+    private func suppressSystemTextMenu(preserveSelection: Bool = false) {
+        closeSystemSelectionMenus(preserveSelection: preserveSelection)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.closeSystemSelectionMenus(preserveSelection: preserveSelection)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.closeSystemSelectionMenus(preserveSelection: preserveSelection)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.closeSystemSelectionMenus(preserveSelection: preserveSelection)
+        }
     }
 
-    private func closeSystemSelectionMenus() {
-        if pdfView.currentSelection != nil { pdfView.clearSelection() }
+    private func closeSystemSelectionMenus(preserveSelection: Bool = false) {
+        if !preserveSelection, pdfView.currentSelection != nil { pdfView.clearSelection() }
         dismissSystemEditMenus(in: view)
         // 系统编辑菜单可能挂在独立 window/overlay 上（PDFKit 内部）；只清当前阅读器所在窗口，
         // 不去动别的窗口（如键盘/其他 scene）。
@@ -941,9 +1082,16 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
 
     @objc private func pdfTapped(_ gesture: UITapGestureRecognizer) {
         guard presentedViewController == nil else { return }
+        let hadSelectionAtTouchStart = selectionAtTouchStart
+        selectionAtTouchStart = false
         let point = gesture.location(in: pdfView)
         guard let note = note(at: point) else {
-            clearActiveSelection()
+            // 触点落下时已有选区/浮层，或点击瞬间选区仍在：这次单击只清选区/浮层，不切换沉浸 chrome。
+            if hadSelectionAtTouchStart || activeSelection != nil || selectionMenu != nil || pdfView.currentSelection != nil {
+                clearActiveSelection()
+                return
+            }
+            toggleImmersiveChrome()
             return
         }
         handleAnnotationTap(note)
@@ -1029,6 +1177,14 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool { true }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if gestureRecognizer === pageTapGesture {
+            // 记录触点落下瞬间是否有选区/浮层：用于“单击空白先清选区、不切沉浸”的判断。
+            selectionAtTouchStart = pdfView.currentSelection != nil || activeSelection != nil || selectionMenu != nil
+        }
+        return true
+    }
 
     // MARK: - 操作
 

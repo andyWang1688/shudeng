@@ -30,7 +30,7 @@ enum QuestionState: String, Codable {
     case draft, preparing, generating, complete, incomplete
     var label: String {
         switch self {
-        case .draft: return "问题草稿"
+        case .draft: return "待提问"
         case .preparing: return "正在查找书内资料"
         case .generating: return "正在生成"
         case .complete: return "回答已保存"
@@ -110,7 +110,7 @@ struct ReadingConversation: Identifiable {
     var latest: ReadingQuestion { turns[turns.count - 1] }
     var updated: Date { turns.map(\.updated).max()! }
     var submittedCount: Int { turns.filter { $0.state != .draft }.count }
-    var title: String { first.conversationTitle ?? (first.question.isEmpty ? "未填写的问题草稿" : String(first.question.prefix(48))) }
+    var title: String { first.conversationTitle ?? (first.question.isEmpty ? "未填写的问题" : String(first.question.prefix(48))) }
 }
 
 /// One atomic revision includes the answer, references and completion state.

@@ -149,9 +149,9 @@ final class QuestionPresentationTests: XCTestCase {
         XCTAssertFalse(row?.accessibilityLabel?.contains("2 次提问") == true)
         let answer = QuestionController(library: library, id: complete.id)
         answer.loadViewIfNeeded()
-        let status = try XCTUnwrap(descendants(answer.view).first { $0.accessibilityIdentifier == "question-status" } as? UILabel)
-        XCTAssertTrue(status.text?.contains("未通过本次原文核验") == true)
-        XCTAssertFalse(status.text?.contains("Legacy range") == true)
+        // task-71：回答成功态隐藏整条状态条，「部分出处未通过核验」也不显示。
+        let statusBox = try XCTUnwrap(descendants(answer.view).first { $0.accessibilityIdentifier == "question-status-box" })
+        XCTAssertTrue(statusBox.isHidden, "成功态不应显示 question-status-box")
         XCTAssertTrue(library.questions.record(follow)?.isEmptyDraft == true)
     }
 

@@ -518,6 +518,24 @@ final class DesignFixtureTests: XCTestCase {
         let scopePage2 = BookEvidenceScope(bookID: book.id, throughPage: 2)
         let permittedBoth = try await index.permits([evidence1, evidence2], scope: scopePage2)
         XCTAssertTrue(permittedBoth)
+        // task-70：跨 fragment/跨页长选文在「起始页拼接原文 + 整个 scope 拼接原文」中应可通过。
+        let document = try XCTUnwrap(PDFKit.PDFDocument(url: file))
+        let page1Text = try XCTUnwrap(document.page(at: 0)?.string)
+        let page2Text = try XCTUnwrap(document.page(at: 1)?.string)
+        let crossQuote = String(page1Text.suffix(24)) + String(page2Text.prefix(24))
+        var crossLocator = hit1.locator
+        crossLocator.text = .init(highlight: crossQuote)
+        let crossEvidence = QuestionEvidence(locator: crossLocator)
+        let crossWholeBook = try await index.permits([crossEvidence], scope: BookEvidenceScope(bookID: book.id))
+        let crossPage1Scope = try await index.permits([crossEvidence], scope: scopePage1)
+        let crossPage2Scope = try await index.permits([crossEvidence], scope: scopePage2)
+        var forgedCross = crossLocator
+        forgedCross.text = .init(highlight: crossQuote + "被篡改")
+        let forgedCrossPermitted = try await index.permits([QuestionEvidence(locator: forgedCross)], scope: scopePage2)
+        XCTAssertTrue(crossWholeBook, "跨页长选文应通过 permits（task-70）")
+        XCTAssertFalse(crossPage1Scope, "跨页选文不应通过仅第 1 页范围")
+        XCTAssertTrue(crossPage2Scope)
+        XCTAssertFalse(forgedCrossPermitted, "篡改跨页 quote 应被拒绝")
         let db = try IndexDatabase(url: session.library.root.appendingPathComponent("book-index.sqlite"))
         let termsPage1 = try db.keywordFragments(scope: scopePage1, terms: ["PDFKit"], limit: 10)
         XCTAssertTrue(termsPage1.isEmpty, "PDFKit 只在第 2 页，第 1 页范围不应命中")
@@ -2971,31 +2989,12 @@ final class DesignFixtureTests: XCTestCase {
         root.view.layoutIfNeeded()
 
         let views = root.view.allViews
-        let title = try XCTUnwrap(
-            views.first { $0.accessibilityIdentifier == "profile-title" }
-        )
-        XCTAssertEqual((title as? UILabel)?.text, "我的")
-        let titleFrame = root.view.convert(title.bounds, from: title)
-        // v2 品牌区作为系统列表首项，标题左边距为页面 24pt 屏边距。
-        XCTAssertLessThanOrEqual(titleFrame.minX, 32)
-        XCTAssertGreaterThanOrEqual(titleFrame.minX, 8)
-        let icon = try XCTUnwrap(
-            views.first { $0.accessibilityIdentifier == "profile-brand-icon" }
-        )
-        XCTAssertEqual(icon.bounds.width, 56, accuracy: 0.5)
-        XCTAssertEqual(icon.bounds.height, 56, accuracy: 0.5)
-        let iconFrame = root.view.convert(icon.bounds, from: icon)
-        XCTAssertEqual(iconFrame.midX, root.view.bounds.midX, accuracy: 0.5)
-        let wordmark = try XCTUnwrap(
-            views.first { $0.accessibilityIdentifier == "profile-wordmark" }
-        )
-        let wordmarkFrame = root.view.convert(wordmark.bounds, from: wordmark)
-        XCTAssertEqual(wordmarkFrame.midX, root.view.bounds.midX, accuracy: 0.5)
-        let motto = try XCTUnwrap(
-            views.first { $0.accessibilityIdentifier == "profile-motto" }
-        )
-        let mottoFrame = root.view.convert(motto.bounds, from: motto)
-        XCTAssertEqual(mottoFrame.midX, root.view.bounds.midX, accuracy: 0.5)
+        // task-72：「我的」去掉顶部品牌 hero，直接从「设置」「关于」两组系统列表开始。
+        XCTAssertNotNil(views.first { $0.accessibilityIdentifier == "profile-list" })
+        XCTAssertNil(views.first { $0.accessibilityIdentifier == "profile-brand" })
+        XCTAssertNil(views.first { $0.accessibilityIdentifier == "profile-title" })
+        XCTAssertNil(views.first { $0.accessibilityIdentifier == "profile-brand-icon" })
+        XCTAssertNil(views.first { $0.accessibilityIdentifier == "profile-stats" })
 
         for identifier in [
             "profile-ai-service",
@@ -3097,16 +3096,9 @@ final class DesignFixtureTests: XCTestCase {
             style: .light,
             preferredContentSizeCategory: .accessibilityExtraExtraLarge
         )
-        // XXXL 下列表内容超出一屏：先断言首屏品牌区，再滚到底断言设置行（系统列表只实例化可见 cell）。
+        // XXXL 下列表内容超出一屏：滚到底断言设置行（系统列表只实例化可见 cell）。
         let accessibleViews = accessible.view.allViews
-        for identifier in ["profile-title", "profile-brand-icon"] {
-            let view = try XCTUnwrap(
-                accessibleViews.first { $0.accessibilityIdentifier == identifier },
-                identifier
-            )
-            XCTAssertGreaterThan(view.bounds.height, 0)
-            XCTAssertLessThanOrEqual(view.frame.maxX, 375.5)
-        }
+        XCTAssertNil(accessibleViews.first { $0.accessibilityIdentifier == "profile-title" })
         let profileList = try XCTUnwrap(
             accessibleViews.compactMap { $0 as? UICollectionView }
                 .first { $0.accessibilityIdentifier == "profile-list" },
@@ -3448,6 +3440,86 @@ final class DesignFixtureTests: XCTestCase {
         }
     }
 
+    /// task-72：对话改名后立即生效，并可从磁盘重新加载（等价 App 重启后仍为新标题）。
+    func testConversationRenamePersistsAfterStoreReload() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .normal, theme: .light))
+        try await DesignFixture.seed(session)
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let conversations = session.library.questions.conversations
+        let conversation = try XCTUnwrap(conversations.first)
+        let oldTitle = conversation.title
+        XCTAssertTrue(session.library.questions.rename(conversation.id, title: "QA重启后仍保留的新标题"))
+        XCTAssertEqual(session.library.questions.conversation(conversation.id)?.title, "QA重启后仍保留的新标题")
+        XCTAssertNotEqual(oldTitle, "QA重启后仍保留的新标题")
+        let reloaded = QuestionStore(root: session.root, secrets: EphemeralSecrets())
+        // QuestionStore 构造时从磁盘读取，等价 App 重启后的数据加载。
+        for _ in 0..<50 where reloaded.conversations.isEmpty { try? await Task.sleep(nanoseconds: 50_000_000) }
+        let persisted = try XCTUnwrap(reloaded.conversation(conversation.id))
+        XCTAssertEqual(persisted.title, "QA重启后仍保留的新标题", "重启后应仍显示新标题")
+        XCTAssertFalse(reloaded.conversations.contains { $0.title.contains(oldTitle) }, "旧标题不应残留")
+    }
+
+    /// task-70：页内 >360 字长选文/跨页拼接 quote 均通过 permits；篡改仍拒绝。    /// task-70：页内 >360 字长选文/跨页拼接 quote 均通过 permits；篡改仍拒绝。
+    func testPDFLongSelectionPermitsCrossFragmentAndCrossPage() async throws {
+        let text1 = "第一页长文开始。" + String(repeating: "书灯的灯光照亮纸页，也照亮读者心里的疑问。", count: 24) + "第一页收尾。"
+        let text2 = "第二页开头。" + String(repeating: "PDF 阅读器把长选文交给问答系统校验。", count: 14) + "第二页收尾。"
+        let bounds = CGRect(x: 0, y: 0, width: 595, height: 842)
+        let renderer = UIGraphicsPDFRenderer(bounds: bounds)
+        let data = renderer.pdfData { context in
+            for text in [text1, text2] {
+                context.beginPage()
+                (text as NSString).draw(
+                    in: CGRect(x: 56, y: 80, width: 480, height: 700),
+                    withAttributes: [.font: UIFont.systemFont(ofSize: 13), .foregroundColor: UIColor.black]
+                )
+            }
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PDFLongPermits-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try LibraryStore(root: root, secrets: EphemeralSecrets())
+        let source = root.appendingPathComponent("long-selection.pdf")
+        try data.write(to: source)
+        let imported = try await library.importBook(from: source)
+        let book = imported.book
+        var state: BookPreparationState?
+        for _ in 0..<400 {
+            if let value = library.preparation.states[book.id], !value.preparing { state = value; break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertNotNil(state)
+        let document = try XCTUnwrap(PDFKit.PDFDocument(url: library.fileURL(for: book)))
+        let p1 = try XCTUnwrap(document.page(at: 0)?.string)
+        let p2 = try XCTUnwrap(document.page(at: 1)?.string)
+        XCTAssertGreaterThan(p1.count, 400, "测试 PDF 第 1 页应 >400 字")
+        func locator(page: Int, quote: String) -> Locator {
+            Locator(
+                href: AnyURL(string: "pdf://page/\(page)")!,
+                mediaType: .pdf,
+                title: "第 \(page) 页",
+                locations: .init(position: page),
+                text: .init(highlight: quote)
+            )
+        }
+        // 页内长 quote（>360 字）。
+        let longQuote = String(p1.prefix(400))
+        XCTAssertGreaterThan(longQuote.count, 360)
+        let longPermitted = try await library.preparation.index.permits([QuestionEvidence(locator: locator(page: 1, quote: longQuote))], scope: BookEvidenceScope(bookID: book.id))
+        var forgedLong = locator(page: 1, quote: longQuote)
+        forgedLong.text = .init(highlight: longQuote + "篡改")
+        let forgedLongPermitted = try await library.preparation.index.permits([QuestionEvidence(locator: forgedLong)], scope: BookEvidenceScope(bookID: book.id))
+        let cross = String(p1.suffix(30)) + String(p2.prefix(30))
+        let crossPermitted = try await library.preparation.index.permits([QuestionEvidence(locator: locator(page: 1, quote: cross))], scope: BookEvidenceScope(bookID: book.id))
+        var forgedCross = locator(page: 1, quote: cross)
+        forgedCross.text = .init(highlight: cross + "篡改")
+        let forgedCrossPermitted = try await library.preparation.index.permits([QuestionEvidence(locator: forgedCross)], scope: BookEvidenceScope(bookID: book.id))
+        XCTAssertTrue(longPermitted, "页内长选文（>360 字）应通过 permits")
+        XCTAssertFalse(forgedLongPermitted, "篡改长 quote 应拒绝")
+        XCTAssertTrue(crossPermitted, "跨页拼接 quote 应通过 permits")
+        XCTAssertFalse(forgedCrossPermitted, "篡改跨页 quote 应拒绝")
+    }
+
     func testQuestionSheetUsesDesignedPanelIdentityDraftAndStates() async throws {
         let request = DesignFixture.Request(scenario: .normal, theme: .light)
         let session = try DesignFixture.makeSession(request)
@@ -3509,6 +3581,29 @@ final class DesignFixtureTests: XCTestCase {
             }
         }
 
+        // task-70：draft 未发送且无 failure/未保存时状态条隐藏，且不出现「草稿」字样。
+        XCTAssertEqual(QuestionState.draft.label, "待提问")
+        let draftBook = try XCTUnwrap(session.library.books.first)
+        var draftRecord = ReadingQuestion(book: draftBook, selection: record.selection, neighbors: [])
+        draftRecord.question = "尚未发送的问题"
+        XCTAssertTrue(session.library.questions.save(draftRecord))
+        let draftNavigation = UINavigationController(
+            rootViewController: QuestionController(library: session.library, id: draftRecord.id)
+        )
+        QuestionSheetPresentation.configure(draftNavigation)
+        let draftImage = DesignFixture.renderRoot(draftNavigation, size: CGSize(width: 375, height: 667), style: .light)
+        let draftPage = try XCTUnwrap(draftNavigation.topViewController as? QuestionController)
+        let draftViews = draftPage.view.allViews
+        XCTAssertTrue(try XCTUnwrap(draftViews.first { $0.accessibilityIdentifier == "question-status-box" }).isHidden, "draft 无 failure 时状态条应隐藏")
+        XCTAssertFalse(
+            draftViews.compactMap { ($0 as? UILabel)?.text }.contains { $0.contains("草稿") },
+            "draft 态不应出现草稿文案"
+        )
+        let draftAttachment = XCTAttachment(data: try XCTUnwrap(draftImage.pngData()), uniformTypeIdentifier: "public.png")
+        draftAttachment.name = "question-draft-idle-375-light"
+        draftAttachment.lifetime = .keepAlways
+        add(draftAttachment)
+
         let states: [(QuestionState, String, String?)] = [
             (.generating, "", nil),
             (.incomplete, "", "暂时没能连接 AI 服务，问题与选文已保留，请重试。"),
@@ -3532,6 +3627,7 @@ final class DesignFixtureTests: XCTestCase {
                 } as? UILabel
             )
             XCTAssertFalse(page.view.allViews.first { $0.accessibilityIdentifier == "question-status-box" }?.isHidden ?? true)
+            XCTAssertFalse(status.text?.contains("草稿") == true, "状态条不应出现草稿字样")
             if let failure = value.2 {
                 XCTAssertTrue(status.text?.contains("回答未完成") == true)
                 XCTAssertTrue(status.text?.contains(failure) == true)

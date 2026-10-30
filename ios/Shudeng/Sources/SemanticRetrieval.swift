@@ -229,8 +229,44 @@ extension BookIndex {
     func permits(_ evidence: [QuestionEvidence], scope: BookEvidenceScope) throws -> Bool {
         let db = try IndexDatabase(url: url)
         let fragments = try db.scopedFragments(scope: scope)
+        // PDF 证据可能跨多个 fragment / 多页（长选文）：一次 permits 调用预计算
+        // 「每页所有 fragment 拼接原文」与「整个 scope 按 chapter/ordinal 拼接原文」，
+        // 避免对每条证据重复扫描/拼接。EPUB 分支仍走原有 DOM/片段精确校验。
+        var pdfPageTexts: [String: String]?
+        var pdfScopedText: String?
+
+        func ensurePDFPageTexts() -> [String: String] {
+            if let pdfPageTexts { return pdfPageTexts }
+            var pages: [String: String] = [:]
+            for row in fragments where row.count > 4 {
+                guard let source = try? Locator(json: JSONValue(jsonString: row[3], warnings: nil), warnings: nil) else { continue }
+                pages[source.href.string, default: ""] += row[4] + "\n"
+            }
+            pdfPageTexts = pages
+            return pages
+        }
+
+        func scopedPDFText() -> String {
+            if let pdfScopedText { return pdfScopedText }
+            let text = fragments.filter { $0.count > 4 }.map { $0[4] }.joined(separator: "\n")
+            pdfScopedText = text
+            return text
+        }
+
         for value in evidence where !value.quote.isEmpty {
             let location = try value.location()
+            if location.mediaType.matches(.pdf) {
+                // 先在起始页所有 fragment 的拼接原文里定位（覆盖页内长选文/跨 fragment）；
+                // 再在整个 scope 拼接原文里定位（覆盖跨页长选文，locator 只有起始页属已知限制）。
+                if let pageText = ensurePDFPageTexts()[location.href.string],
+                   Self.pdfQuote(value.quote, occursIn: pageText as NSString) {
+                    continue
+                }
+                if Self.pdfQuote(value.quote, occursIn: scopedPDFText() as NSString) {
+                    continue
+                }
+                return false
+            }
             let found = try fragments.contains { row in
                 guard let source = try Locator(json: JSONValue(jsonString: row[3], warnings: nil), warnings: nil),
                       source.href == location.href else { return false }
@@ -252,17 +288,6 @@ extension BookIndex {
                     guard let start = offset(range["start"]), let end = offset(range["end"]),
                           start >= fragmentStart, end >= start, end <= fragmentStart + original.length else { return false }
                     return original.substring(with: NSRange(location: start - fragmentStart, length: end - start)) == value.quote
-                }
-                if location.mediaType.matches(.pdf) {
-                    // PDF 页级 locator 没有 DOM；选区 before 是「页面内 quote 前 80 字」，与
-                    // fragment before（fragment 前 80 字）不能拼接反推偏移（页中下部选区会算错）。
-                    // 改为在 fragment 原文中直接定位 quote：精确匹配 → 忽略空白/换行归一化匹配；
-                    // 都失败才回退旧的 before 偏移算法，保持既有边界不放宽。
-                    if Self.pdfQuote(value.quote, occursIn: original) { return true }
-                    guard let before = location.text.before, before.hasPrefix(source.text.before ?? "") else { return false }
-                    let start = before.utf16.count - (source.text.before ?? "").utf16.count
-                    guard start >= 0, start + value.quote.utf16.count <= original.length else { return false }
-                    return original.substring(with: NSRange(location: start, length: value.quote.utf16.count)) == value.quote
                 }
                 guard source.locations.cssSelector == location.locations.cssSelector,
                       let before = location.text.before, before.hasPrefix(source.text.before ?? "") else { return false }
