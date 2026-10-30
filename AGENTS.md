@@ -16,6 +16,13 @@
 
 用户文档在 `website/doc/`（发布到 GitHub Pages），开发文档在 `docs/`（不发布）。写或改文档前读取 `docs/agents/documentation.md`。
 
+### 发布流程
+
+1. 在本地 `main` 完成合并，确认工作区干净、`main` 与 `origin/main` 一致。
+2. 推送 `main`。文档站由 `.github/workflows/docs.yml` 自动构建并部署到 GitHub Pages；App 版本按 `delivery/` 的既有步骤构建安装包，并在 GitHub Releases 发布。
+3. 验证：文档站返回 200，发布页的版本、安装包与说明一致。
+4. 不要用 `git push <分支>:main` 绕过本地 `main`；先本地合并、再推送。
+
 
 ## 磁盘与临时资源管理
 
