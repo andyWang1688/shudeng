@@ -4,7 +4,7 @@
 
 以阅读为中心的个人阅读应用。AI 是按需出现的辅助工具。
 
-> 最新版 v0.4.1：PDF 沉浸阅读、原生选字手柄、跨页长选文 AI 与界面打磨。[下载新版](https://github.com/andyWang1688/shudeng/releases/tag/v0.4.1) · [安装与版本说明](docs/releases/v0.4.1.md)。下载包用于 Apple Silicon Mac 的 Xcode iOS Simulator，真机和 App Store 分发尚未验证。
+> 最新版 v0.4.1：PDF 沉浸阅读、原生选字手柄、跨页长选文 AI 与界面打磨。[下载新版](https://github.com/andyWang1688/shudeng/releases/tag/v0.4.1) · [使用文档](https://andywang1688.github.io/shudeng/) · [安装与版本说明](docs/releases/v0.4.1.md)。下载包用于 Apple Silicon Mac 的 Xcode iOS Simulator，真机和 App Store 分发尚未验证。 8471ec2 (docs(guide): add user-facing product documentation)
 
 ## 项目方向
 
