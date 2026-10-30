@@ -50,6 +50,8 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private let pdfView = ImmersivePDFView()
     private let toolbar = UIView()
     private let footer = UIView()
+    /// chrome 显示时盖住顶部安全区（刘海/灵动岛）的纸白背板；不改变 PDFView frame。
+    private let chromeTopBackdrop = UIView()
     private let backButton = UIButton(type: .system)
     private let modeButton = UIButton(type: .system)
     private let bookmarkButton = UIButton(type: .system)
@@ -411,6 +413,13 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         toolbar.accessibilityIdentifier = "pdf-reader-toolbar"
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(toolbar)
+        // 顶部安全区（刘海/灵动岛横屏）不被 PDF 页面透出；只覆盖 toolbar 上方区域，不改 PDFView。
+        chromeTopBackdrop.backgroundColor = BookDesign.paper.withAlphaComponent(0.94)
+        chromeTopBackdrop.accessibilityIdentifier = "pdf-reader-top-backdrop"
+        chromeTopBackdrop.isUserInteractionEnabled = false
+        chromeTopBackdrop.accessibilityElementsHidden = true
+        chromeTopBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        view.insertSubview(chromeTopBackdrop, belowSubview: toolbar)
 
         let hairline = UIView()
         hairline.backgroundColor = BookDesign.line
@@ -459,6 +468,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         titleLabel.textAlignment = .center
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.numberOfLines = 1
+        titleLabel.maximumContentSizeCategory = .extraLarge
         // 工具栏空间不足时让标题先让位：标题压缩阻力与居中优先级都低于右侧按钮，
         // 长书名下标题会向左让位/截断，书签、目录和「?」始终保持 intrinsic 宽度与可点性。
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -486,11 +496,11 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
             hairline.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor),
             hairline.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor),
             hairline.heightAnchor.constraint(equalToConstant: 1),
-            backButton.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor, constant: 13),
+            backButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 13),
             backButton.widthAnchor.constraint(equalToConstant: 44),
             backButton.heightAnchor.constraint(equalToConstant: 44),
             backButton.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
-            trailing.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor, constant: -16),
+            trailing.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             trailing.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
             trailing.heightAnchor.constraint(equalToConstant: 44),
             titleCentering,
@@ -514,6 +524,8 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         footer.addSubview(hairline)
 
         pageLabel.textAlignment = .center
+        pageLabel.numberOfLines = 1
+        pageLabel.maximumContentSizeCategory = .extraLarge
         pageLabel.accessibilityIdentifier = "pdf-reader-page"
         progressView.progressTintColor = BookDesign.lamp
         progressView.trackTintColor = BookDesign.line
@@ -525,7 +537,10 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         modeConfig.contentInsets = .zero
         modeConfig.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var outgoing = incoming
-            outgoing.font = BookType.sans(12, weight: .medium, style: .subheadline)
+            outgoing.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
+                for: .systemFont(ofSize: 12, weight: .medium),
+                maximumPointSize: 16
+            )
             return outgoing
         }
         modeButton.configuration = modeConfig
@@ -540,7 +555,10 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         askConfig.contentInsets = .zero
         askConfig.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var outgoing = incoming
-            outgoing.font = BookType.sans(12, weight: .medium, style: .subheadline)
+            outgoing.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
+                for: .systemFont(ofSize: 12, weight: .medium),
+                maximumPointSize: 16
+            )
             return outgoing
         }
         askButton.configuration = askConfig
@@ -563,16 +581,16 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
             pageLabel.topAnchor.constraint(equalTo: footer.topAnchor, constant: 10),
             pageLabel.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
             pageLabel.leadingAnchor.constraint(greaterThanOrEqualTo: askButton.trailingAnchor, constant: 8),
-            askButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 14),
+            askButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 14),
             askButton.centerYAnchor.constraint(equalTo: pageLabel.centerYAnchor),
             askButton.heightAnchor.constraint(equalToConstant: 44),
             pageLabel.trailingAnchor.constraint(lessThanOrEqualTo: modeButton.leadingAnchor, constant: -8),
-            modeButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -12),
+            modeButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
             modeButton.centerYAnchor.constraint(equalTo: pageLabel.centerYAnchor),
             modeButton.heightAnchor.constraint(equalToConstant: 44),
             progressView.topAnchor.constraint(equalTo: modeButton.bottomAnchor, constant: 2),
-            progressView.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 28),
-            progressView.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -28),
+            progressView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 28),
+            progressView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -28),
             progressView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10)
         ])
         updateModeButton()
@@ -587,7 +605,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         bookmarkRibbon.addTarget(self, action: #selector(toggleBookmark), for: .touchUpInside)
         view.addSubview(bookmarkRibbon)
         NSLayoutConstraint.activate([
-            bookmarkRibbon.trailingAnchor.constraint(equalTo: pdfView.trailingAnchor, constant: -12),
+            bookmarkRibbon.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
             bookmarkRibbon.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 10),
             bookmarkRibbon.widthAnchor.constraint(equalToConstant: 26),
             bookmarkRibbon.heightAnchor.constraint(equalToConstant: 38)
@@ -601,6 +619,12 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
             pdfView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             pdfView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             pdfView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        NSLayoutConstraint.activate([
+            chromeTopBackdrop.topAnchor.constraint(equalTo: view.topAnchor),
+            chromeTopBackdrop.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            chromeTopBackdrop.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            chromeTopBackdrop.bottomAnchor.constraint(equalTo: toolbar.topAnchor)
         ])
         // 确保 chrome 在 PDFView 之上（EPS 式悬浮），不随页面滚动/缩放。
         view.bringSubviewToFront(toolbar)
@@ -637,6 +661,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
             // 显示前先恢复层级可见，再做 0.2s alpha 动画；PDFView frame/缩放保持不变。
             toolbar.isHidden = false
             footer.isHidden = false
+            chromeTopBackdrop.isHidden = false
         }
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
         UIView.animate(
@@ -646,11 +671,13 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         ) {
             self.toolbar.alpha = hiding ? 0 : 1
             self.footer.alpha = hiding ? 0 : 1
+            self.chromeTopBackdrop.alpha = hiding ? 0 : 1
         } completion: { _ in
             self.chromeAnimating = false
             if hiding {
                 self.toolbar.isHidden = true
                 self.footer.isHidden = true
+                self.chromeTopBackdrop.isHidden = true
             } else {
                 // 页面从未移动，只恢复书签丝带（按当前页书签状态）。
                 self.refreshBookmarkUI(animated: false)

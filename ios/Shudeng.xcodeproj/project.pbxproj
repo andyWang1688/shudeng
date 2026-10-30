@@ -118,6 +118,24 @@
 		<key>showEnvVarsInLog</key>
 		<string>0</string>
 	</dict>
+	<key>A1D000000000000000000001</key>
+	<dict>
+		<key>isa</key>
+		<string>PBXFileReference</string>
+		<key>lastKnownFileType</key>
+		<string>sourcecode.swift</string>
+		<key>path</key>
+		<string>SceneDelegate.swift</string>
+		<key>sourceTree</key>
+		<string>&lt;group&gt;</string>
+	</dict>
+	<key>A1D000000000000000000002</key>
+	<dict>
+		<key>fileRef</key>
+		<string>A1D000000000000000000001</string>
+		<key>isa</key>
+		<string>PBXBuildFile</string>
+	</dict>
 	<key>A10000000000000000000005</key>
 	<dict>
 		<key>fileRef</key>
@@ -583,11 +601,9 @@
 				<key>ENABLE_TESTABILITY</key>
 				<string>YES</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
-				<string>YES</string>
-				<key>INFOPLIST_KEY_CFBundleDisplayName</key>
-				<string>书灯</string>
-				<key>INFOPLIST_KEY_UILaunchScreen_Generation</key>
-				<string>YES</string>
+				<string>NO</string>
+				<key>INFOPLIST_FILE</key>
+				<string>Shudeng/Info.plist</string>
 				<key>IPHONEOS_DEPLOYMENT_TARGET</key>
 				<string>16.0</string>
 				<key>LD_RUNPATH_SEARCH_PATHS</key>
@@ -886,11 +902,9 @@
 				<key>ENABLE_USER_SCRIPT_SANDBOXING</key>
 				<string>NO</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
-				<string>YES</string>
-				<key>INFOPLIST_KEY_CFBundleDisplayName</key>
-				<string>书灯</string>
-				<key>INFOPLIST_KEY_UILaunchScreen_Generation</key>
-				<string>YES</string>
+				<string>NO</string>
+				<key>INFOPLIST_FILE</key>
+				<string>Shudeng/Info.plist</string>
 				<key>IPHONEOS_DEPLOYMENT_TARGET</key>
 				<string>16.0</string>
 				<key>LD_RUNPATH_SEARCH_PATHS</key>
@@ -1301,6 +1315,7 @@
 <string>A10000000000000000000007</string>
 <string>A24000000000000000000001</string>
 				<string>A1C000000000000000000002</string>
+				<string>A1D000000000000000000002</string>
 </array>
 			<key>isa</key>
 			<string>PBXSourcesBuildPhase</string>
@@ -1365,6 +1380,7 @@
 <string>A10000000000000000000006</string>
 <string>A24000000000000000000000</string>
 				<string>A1C000000000000000000001</string>
+				<string>A1D000000000000000000001</string>
 </array>
 			<key>isa</key>
 			<string>PBXGroup</string>

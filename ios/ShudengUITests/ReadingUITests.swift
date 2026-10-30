@@ -638,7 +638,7 @@ extension ReadingUITests {
         app.buttons["书架"].tap()
         XCTAssertTrue(app.buttons["continue-reading"].waitForExistence(timeout: 10))
 
-        let search = app.textFields["library-search"].firstMatch
+        let search = app.searchFields["library-search"].firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.tap()
         search.typeText("不存在的书")

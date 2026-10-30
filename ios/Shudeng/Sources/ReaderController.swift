@@ -202,6 +202,7 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         status.font = BookType.caption
         status.textColor = BookDesign.ink3
         status.numberOfLines = 0
+        status.maximumContentSizeCategory = .extraLarge
         status.accessibilityIdentifier = "reading-save-status"
         // 加载进度由中间的点状 spinner 表达，不再显示底部提示条。
         status.text = ""
@@ -239,14 +240,15 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
             toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             toolbar.heightAnchor.constraint(equalToConstant: 64),
-            content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            // 正文内容避开横屏左右安全区（刘海/灵动岛/侧边 home indicator）；竖屏左右为 0，不变。
+            content.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             footer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
             footer.heightAnchor.constraint(equalToConstant: 76),
-            statusPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            statusPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            statusPanel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20),
+            statusPanel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20),
             statusPanel.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8)
         ])
         bookmarkRibbon.translatesAutoresizingMaskIntoConstraints = false
@@ -666,6 +668,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         if finished, let value = String(data: encoded, encoding: .utf8) { print("[ReaderToolbarAcceptance] \(value)") }
         #endif
     }
+    /// Readium 默认会把 window 的左右安全区再加到正文上；阅读器容器本身已避开安全区，
+    /// 所以这里显式返回水平 0，只保留原有上下留白，避免横屏双重内缩。
+    func navigatorContentInset(_ navigator: VisualNavigator) -> UIEdgeInsets? {
+        UIEdgeInsets(top: Self.designedGutter, left: 0, bottom: 22, right: 0)
+    }
+
     func navigator(_ navigator: VisualNavigator, didTapAt point: CGPoint) {
         guard curl == nil else { return }
         handleReadingTap(at: point)
@@ -1886,10 +1894,15 @@ final class ReaderToolbarView: UIView {
         titleLabel.textAlignment = .center
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.adjustsFontForContentSizeCategory = true
+        // XXXL 等大字号下保持单行 + 限制最大字号，避免撑出 64pt 工具栏、跨过分隔线。
+        titleLabel.numberOfLines = 1
+        titleLabel.maximumContentSizeCategory = .extraLarge
         titleLabel.accessibilityIdentifier = "reader-title"
         chapterLabel.textAlignment = .center
         chapterLabel.lineBreakMode = .byTruncatingTail
         chapterLabel.adjustsFontForContentSizeCategory = true
+        chapterLabel.numberOfLines = 1
+        chapterLabel.maximumContentSizeCategory = .extraLarge
         chapterLabel.accessibilityIdentifier = "reader-chapter"
 
         let titleStack = UIStackView(arrangedSubviews: [titleLabel, chapterLabel])
@@ -1915,10 +1928,10 @@ final class ReaderToolbarView: UIView {
         NSLayoutConstraint.activate([
             leadingWidth,
             backWidth,
-            leadingRegion.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 13),
+            leadingRegion.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 13),
             leadingRegion.centerYAnchor.constraint(equalTo: centerYAnchor),
             leadingRegion.heightAnchor.constraint(equalToConstant: 44),
-            trailingRegion.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -13),
+            trailingRegion.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -13),
             trailingRegion.centerYAnchor.constraint(equalTo: centerYAnchor),
             trailingRegion.widthAnchor.constraint(equalToConstant: 88),
             trailingRegion.heightAnchor.constraint(equalToConstant: 44),
@@ -1960,7 +1973,11 @@ final class ReaderToolbarView: UIView {
         config.imagePadding = 5
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
             var attributes = $0
-            attributes.font = BookDesign.font(14, weight: .medium)
+            // 返回/问答标题按钮限制最大字号，避免大字号下按钮标题被裁切。
+            attributes.font = UIFontMetrics(forTextStyle: .body).scaledFont(
+                for: .systemFont(ofSize: 14, weight: .medium),
+                maximumPointSize: 17
+            )
             return attributes
         }
         button.configuration = config
@@ -1989,7 +2006,11 @@ final class ReaderFooterView: UIView {
         config.background.cornerRadius = BookRadius.pill
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
             var attributes = $0
-            attributes.font = BookType.sans(12, weight: .medium, style: .footnote)
+            // 限制最大字号，避免 XXXL 下「问问书灯」胶囊与底部进度/章节文字重叠。
+            attributes.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
+                for: .systemFont(ofSize: 12, weight: .medium),
+                maximumPointSize: 16
+            )
             return attributes
         }
         askButton.configuration = config
@@ -2001,21 +2022,25 @@ final class ReaderFooterView: UIView {
         askButton.layer.shadowOffset = CGSize(width: 0, height: 8)
 
         progressLabel.accessibilityIdentifier = "reader-progress"
+        progressLabel.numberOfLines = 1
+        progressLabel.maximumContentSizeCategory = .extraLarge
         chapterLabel.accessibilityIdentifier = "reader-footer-chapter"
         chapterLabel.textAlignment = .right
         chapterLabel.lineBreakMode = .byTruncatingHead
+        chapterLabel.numberOfLines = 1
+        chapterLabel.maximumContentSizeCategory = .extraLarge
 
         for child in [askButton, progressLabel, chapterLabel] {
             child.translatesAutoresizingMaskIntoConstraints = false
             addSubview(child)
         }
         NSLayoutConstraint.activate([
-            askButton.centerXAnchor.constraint(equalTo: centerXAnchor),
+            askButton.centerXAnchor.constraint(equalTo: safeAreaLayoutGuide.centerXAnchor),
             askButton.heightAnchor.constraint(equalToConstant: 36),
             askButton.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            progressLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 26),
+            progressLabel.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 26),
             progressLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-            chapterLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -26),
+            chapterLabel.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -26),
             chapterLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
             chapterLabel.leadingAnchor.constraint(greaterThanOrEqualTo: progressLabel.trailingAnchor, constant: 12)
         ])

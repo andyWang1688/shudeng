@@ -10,11 +10,9 @@ enum QuestionSheetPresentation {
         navigation.modalPresentationStyle = .pageSheet
         guard let sheet = navigation.sheetPresentationController else { return }
         sheet.detents = [
+            // 以 sheet 可用最大高度为基准：竖屏为屏高 76%，横屏/大屏也不会超过上下文上限。
             .custom(identifier: .init("shudeng.question.76")) { context in
-                min(
-                    context.maximumDetentValue,
-                    UIScreen.main.bounds.height * heightFraction
-                )
+                context.maximumDetentValue * heightFraction
             },
             .large()
         ]
@@ -260,18 +258,19 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         messages.translatesAutoresizingMaskIntoConstraints = false; scroll.addSubview(messages)
         NSLayoutConstraint.activate([
             sheetHeader.topAnchor.constraint(equalTo: view.topAnchor),
-            sheetHeader.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            sheetHeader.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            // 横屏时左右 59pt 为刘海/圆角安全区，标题与输入区不得进入。
+            sheetHeader.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            sheetHeader.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             scroll.topAnchor.constraint(equalTo: sheetHeader.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scroll.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: composerDivider.topAnchor),
             composerDivider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             composerDivider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             composerDivider.bottomAnchor.constraint(equalTo: composer.topAnchor),
             composerDivider.heightAnchor.constraint(equalToConstant: 1),
-            composer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            composer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            composer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            composer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             composer.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
             messages.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 16),
             messages.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -16),

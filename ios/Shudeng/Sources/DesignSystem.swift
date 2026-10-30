@@ -412,6 +412,8 @@ final class RootTabController: UIViewController {
     let tabBar = RootTabBar()
     private(set) var selectedIndex = 0
     private var selectedController: UIViewController?
+    /// 底部 tab bar 高度：56 + 当前底部安全区（home indicator）。无安全区设备保持 56。
+    private var tabBarHeightConstraint: NSLayoutConstraint?
 
     init(viewControllers: [UIViewController]) {
         precondition(viewControllers.count == RootDestination.allCases.count)
@@ -450,6 +452,8 @@ final class RootTabController: UIViewController {
         view.addSubview(content)
         view.addSubview(tabBar)
 
+        let tabBarHeight = tabBar.heightAnchor.constraint(equalToConstant: 56)
+        tabBarHeightConstraint = tabBarHeight
         NSLayoutConstraint.activate([
             content.topAnchor.constraint(equalTo: view.topAnchor),
             content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -458,11 +462,30 @@ final class RootTabController: UIViewController {
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             tabBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            tabBar.heightAnchor.constraint(equalToConstant: 56)
+            tabBarHeight
         ])
 
         tabBar.onSelect = { [weak self] index in self?.select(index) }
         installSelectedController()
+        updateTabBarHeight()
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        updateTabBarHeight()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateTabBarHeight()
+    }
+
+    /// 底部 tab bar 让出 home indicator 安全区：高度 = 56 + view.safeAreaInsets.bottom，
+    /// 内部图标行仍固定在顶部 56（见 RootTabBar），避免图标跟着下移进安全区。
+    private func updateTabBarHeight() {
+        let height = 56 + view.safeAreaInsets.bottom
+        guard let tabBarHeightConstraint, abs(tabBarHeightConstraint.constant - height) > 0.5 else { return }
+        tabBarHeightConstraint.constant = height
     }
 
     private func installSelectedController() {
@@ -530,7 +553,9 @@ final class RootTabBar: UIView {
             row.topAnchor.constraint(equalTo: topAnchor),
             row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
             row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor)
+            // 图标/文案行固定 56pt 高并贴顶；bar 总高度多出的底部安全区保持纸白留白，
+            // 这样 home indicator 不会再压住 tab 图标。
+            row.heightAnchor.constraint(equalToConstant: 56)
         ])
 
         for (index, button) in buttons.enumerated() {
@@ -569,6 +594,12 @@ private final class RootTabButton: UIControl {
         label.text = destination.title
         label.textAlignment = .center
         label.isAccessibilityElement = false
+        // Dynamic Type XXXL 下限高：限制最大字号 + 单行 + 必要时缩字，避免 56pt 行高内文案底部裁切。
+        label.numberOfLines = 1
+        label.maximumContentSizeCategory = .extraLarge
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.8
+        label.lineBreakMode = .byTruncatingTail
 
         let stack = UIStackView(arrangedSubviews: [icon, label])
         stack.axis = .vertical

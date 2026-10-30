@@ -1078,14 +1078,16 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
             grabber.heightAnchor.constraint(equalToConstant: 4),
 
             header.topAnchor.constraint(equalTo: dragArea.bottomAnchor, constant: 2),
-            header.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
-            header.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
+            // 横屏左右安全区（刘海/圆角）；竖屏为 0，布局与之前一致。
+            header.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            header.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             header.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
 
             scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
-            scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
-            scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
-            scroll.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8),
+            scroll.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            scroll.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            // 收起键盘时卡片贴底；用卡片自身安全区给 home indicator 留 padding（键盘弹出时卡片已抬离底部，无额外留白）。
+            scroll.bottomAnchor.constraint(equalTo: card.safeAreaLayoutGuide.bottomAnchor, constant: -8),
 
             content.topAnchor.constraint(equalTo: contentGuide.topAnchor),
             content.leadingAnchor.constraint(equalTo: contentGuide.leadingAnchor),
@@ -1106,11 +1108,17 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
 
         cardBottom = card.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         cardBottom.isActive = true
-        cardHeight = card.heightAnchor.constraint(
-            equalToConstant: max(220, UIScreen.main.bounds.height * Self.initialRatio)
-        )
+        // 高度只由约束决定：实际值在 viewDidLayoutSubviews 里按 view.bounds 计算（初始 0，不依赖全局屏幕尺寸）。
+        cardHeight = card.heightAnchor.constraint(equalToConstant: 0)
+        cardHeight.priority = UILayoutPriority(999)
         cardHeight.isActive = true
-        card.heightAnchor.constraint(greaterThanOrEqualTo: view.heightAnchor, multiplier: Self.minRatio).isActive = true
+        // 键盘/横屏需要把卡片压得比 44% 更矮，故最小高度约束降为高优先级（收起键盘时仍按 54% 布局）。
+        let minimumHeight = card.heightAnchor.constraint(
+            greaterThanOrEqualTo: view.heightAnchor,
+            multiplier: Self.minRatio
+        )
+        minimumHeight.priority = UILayoutPriority(750)
+        minimumHeight.isActive = true
         card.heightAnchor.constraint(lessThanOrEqualTo: view.heightAnchor, multiplier: Self.maxRatio).isActive = true
 
         updateSaveButton()
@@ -1169,12 +1177,14 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
         applyKeyboardLayout(userInfo: notification.userInfo)
     }
 
-    /// 键盘态目标高度：min(基础 54%, 键盘上方可用高度 - 24)，且不低于 280 或屏高 44%。
+    /// 键盘态目标高度：min(基础 54%, 键盘顶部与安全顶部之间的可用高度)。
+    /// 竖屏约 300pt；横屏（含中文候选栏）可收缩到 ~100pt，保证 grabber/关闭/保存始终在键盘上方可见。
     private func keyboardClampedHeight() -> CGFloat {
         let bounds = view.bounds.height
-        let minimum = max(280, bounds * Self.minRatio)
-        let available = bounds - keyboardOverlap
-        return min(bounds * Self.initialRatio, max(minimum, available - 24))
+        let safeTop = max(view.safeAreaInsets.top, 0)
+        let keyboardTop = bounds - keyboardOverlap
+        let available = max(0, keyboardTop - safeTop - 8)
+        return min(bounds * Self.initialRatio, available)
     }
 
     /// 键盘可见：只上移卡片并把高度收窄到可用高度；键盘收起：恢复基础 54% 高度。
@@ -1182,7 +1192,8 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
         let targetBottom: CGFloat
         let targetHeight: CGFloat
         if keyboardOverlap > 0 {
-            targetBottom = -max(0, keyboardOverlap - view.safeAreaInsets.bottom)
+            // 卡片底边精确贴在键盘顶部；不再减 safeAreaInsets.bottom，避免中文候选栏时整卡过度上移。
+            targetBottom = -keyboardOverlap
             targetHeight = keyboardClampedHeight()
         } else {
             targetBottom = 0
@@ -1237,7 +1248,7 @@ final class NoteEditorController: UIViewController, UITextViewDelegate {
             isDraggingCard = false
             let moved = cardHeight.constant
             let velocity = gesture.velocity(in: view).y
-            if moved < minHeight || velocity > 1200 {
+            if velocity > 1200 || (keyboardOverlap == 0 && moved < minHeight) {
                 dismissCard()
                 return
             }

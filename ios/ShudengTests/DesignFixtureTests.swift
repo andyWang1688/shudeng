@@ -2750,7 +2750,7 @@ final class DesignFixtureTests: XCTestCase {
                 for category in [UIContentSizeCategory.large, .accessibilityExtraExtraExtraLarge] {
                     let controller: UIViewController = page == "notes"
                         ? NotesController(library: fixture.library) : QuestionHistoryController(library: fixture.library)
-                    let image = DesignFixture.renderRoot(
+                    let image = renderRootInScene(
                         controller,
                         size: CGSize(width: 375, height: 667),
                         style: style,
@@ -2871,7 +2871,14 @@ final class DesignFixtureTests: XCTestCase {
     /// 把夹具根控制器挂进真实窗口，走完外观回调；系统空态视图需要窗口才会实例化。
     @discardableResult
     private func host(_ root: UIViewController, size: CGSize) -> UIWindow {
-        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+        // UIScene 迁移后，测试自建窗口挂到当前 scene，才能拿到真实 trait/布局时序（接近 App 运行）。
+        let window: UIWindow
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: size)
+        } else {
+            window = UIWindow(frame: CGRect(origin: .zero, size: size))
+        }
         window.rootViewController = root
         window.isHidden = false
         root.beginAppearanceTransition(true, animated: false)
@@ -3974,5 +3981,137 @@ extension DesignFixtureTests {
         XCTAssertTrue(final.semanticReady)
         XCTAssertFalse(final.semanticUnavailable)
         XCTAssertEqual(final.message, "书内资料可用（\(final.total)章，语义资料已完成）", "降级文案应转为语义完成：\(final.message)")
+    }
+}
+
+extension DesignFixtureTests {
+    /// UIScene 迁移后，测试需把临时窗口挂到当前 scene，动态字体/布局 trait 才能正确生效。
+    private func renderRootInScene(
+        _ root: UIViewController,
+        size: CGSize,
+        style: UIUserInterfaceStyle,
+        preferredContentSizeCategory: UIContentSizeCategory? = nil
+    ) -> UIImage {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window: UIWindow
+        if let scene {
+            window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: size)
+        } else {
+            window = UIWindow(frame: CGRect(origin: .zero, size: size))
+        }
+        window.overrideUserInterfaceStyle = style
+        if #available(iOS 17.0, *), let preferredContentSizeCategory {
+            window.traitOverrides.preferredContentSizeCategory = preferredContentSizeCategory
+        }
+        window.rootViewController = root
+        window.isHidden = false
+        root.beginAppearanceTransition(true, animated: false)
+        root.view.frame = window.bounds
+        root.view.setNeedsLayout()
+        root.view.layoutIfNeeded()
+        root.endAppearanceTransition()
+        CATransaction.flush()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        root.view.layoutIfNeeded()
+        CATransaction.flush()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            root.view.drawHierarchy(in: root.view.bounds, afterScreenUpdates: true)
+        }
+        window.isHidden = true
+        return image
+    }
+}
+
+// TEMP-TASK88: verification-only class, removed before handoff.
+@MainActor
+final class XXXLFinalCheckTests: XCTestCase {
+    private func makeReaderSession() async throws -> (DesignFixture.Session, Book, Publication) {
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        try await DesignFixture.seed(session)
+        let primary = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.fixtureTitle })
+        let publication = try await session.library.open(primary)
+        return (session, primary, publication)
+    }
+
+    private func attach(_ name: String, _ image: UIImage) throws {
+        let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    func testXXXLFinalReaderChromePortraitAndLandscape() async throws {
+        let (session, primary, publication) = try await makeReaderSession()
+        let sizes: [CGSize] = [
+            CGSize(width: 393, height: 852),
+            CGSize(width: 852, height: 393),
+            CGSize(width: 375, height: 667)
+        ]
+        for category in [UIContentSizeCategory.accessibilityExtraExtraExtraLarge, .large] {
+            let suffix = category == .large ? "normal" : "accessibilityXXXL"
+            for size in sizes {
+                let reader = try ReaderController(book: primary, publication: publication, library: session.library)
+                let image = DesignFixture.renderRoot(
+                    reader,
+                    size: size,
+                    style: .light,
+                    preferredContentSizeCategory: category
+                )
+                try attach("reader-\(suffix)-\(Int(size.width))x\(Int(size.height))", image)
+
+                let views = reader.view.allViews
+                let toolbar = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-toolbar" })
+                let footer = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-footer" })
+                let title = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-title" } as? UILabel)
+                let chapter = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-chapter" } as? UILabel)
+                let progress = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-progress" } as? UILabel)
+                let footerChapter = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-footer-chapter" } as? UILabel)
+                let ask = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-ask-book" })
+
+                let toolbarFrame = toolbar.convert(toolbar.bounds, to: reader.view)
+                let footerFrame = footer.convert(footer.bounds, to: reader.view)
+                let titleFrame = title.convert(title.bounds, to: reader.view)
+                let chapterFrame = chapter.convert(chapter.bounds, to: reader.view)
+                let progressFrame = progress.convert(progress.bounds, to: reader.view)
+                let footerChapterFrame = footerChapter.convert(footerChapter.bounds, to: reader.view)
+                let askFrame = ask.convert(ask.bounds, to: reader.view)
+
+                XCTAssertEqual(toolbarFrame.height, 64, accuracy: 0.5)
+                XCTAssertEqual(title.numberOfLines, 1)
+                XCTAssertEqual(chapter.numberOfLines, 1)
+                XCTAssertLessThanOrEqual(titleFrame.maxY, toolbarFrame.maxY + 0.5, "XXXL 标题越出 toolbar")
+                XCTAssertLessThanOrEqual(chapterFrame.maxY, toolbarFrame.maxY + 0.5, "XXXL 章节名越出 toolbar")
+                XCTAssertGreaterThanOrEqual(progressFrame.minY, footerFrame.minY - 0.5)
+                XCTAssertLessThanOrEqual(progressFrame.maxY, footerFrame.maxY + 0.5)
+                XCTAssertLessThanOrEqual(footerChapterFrame.maxY, footerFrame.maxY + 0.5)
+                XCTAssertFalse(askFrame.intersects(progressFrame), "问问书灯与进度重叠")
+                XCTAssertFalse(askFrame.intersects(footerChapterFrame), "问问书灯与章节重叠")
+            }
+        }
+    }
+
+    func testXXXLFinalTabBar() throws {
+        let request = DesignFixture.Request(scenario: .normal, theme: .light)
+        let session = try DesignFixture.makeSession(request)
+        let tabs = makeApplicationTabs(library: session.library, root: session.root, secrets: session.secrets)
+        for (category, suffix) in [
+            (UIContentSizeCategory.accessibilityExtraExtraExtraLarge, "accessibilityXXXL"),
+            (.large, "normal")
+        ] {
+            for size in [CGSize(width: 393, height: 852), CGSize(width: 375, height: 667), CGSize(width: 852, height: 393)] {
+                let image = DesignFixture.renderRoot(
+                    tabs,
+                    size: size,
+                    style: .light,
+                    preferredContentSizeCategory: category
+                )
+                try attach("tabbar-\(suffix)-\(Int(size.width))x\(Int(size.height))", image)
+            }
+        }
     }
 }
