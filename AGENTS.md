@@ -12,6 +12,10 @@
 
 使用单一领域布局：根目录 `GLOSSARY.md` 和 `docs/adr/`。探索或设计前读取 `docs/agents/domain.md`。
 
+### Documentation
+
+用户文档在 `website/doc/`（发布到 GitHub Pages），开发文档在 `docs/`（不发布）。写或改文档前读取 `docs/agents/documentation.md`。
+
 
 ## 磁盘与临时资源管理
 
