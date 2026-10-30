@@ -5,10 +5,11 @@ import zlib
 import NaturalLanguage
 
 enum EmbeddingError: LocalizedError {
-    case unavailable, inference
+    case notDownloaded, unavailable, inference
     var errorDescription: String? {
         switch self {
-        case .unavailable: return "本地语义模型不可用，请重新安装应用后重试；仍可阅读和搜索原文"
+        case .notDownloaded: return "离线语义资料尚未下载；可在「我的 → AI 服务」中下载。阅读和原文搜索不受影响"
+        case .unavailable: return "本地语义模型不可用，请重新下载后重试；仍可阅读和搜索原文"
         case .inference: return "本地语义推理失败，可重试准备；仍可阅读和搜索原文"
         }
     }
@@ -22,7 +23,13 @@ actor SemanticEmbedding {
     static let modelSHA = "783fea82d71a58179b830a4dbd2d58447e640609e98eedf9ffa12622d375a672"
     private let folder: URL?
     private var loading: Task<Model, Error>?
-    init(folder: URL? = Bundle.main.url(forResource: "SemanticModel", withExtension: nil)) { self.folder = folder }
+    /// 默认模型来源：按需下载的 Application Support 安装目录优先；Debug/测试保留 app 内
+    /// SemanticModel 资源作为后备（Release 打包会移除该资源）。
+    init(folder: URL? = nil) {
+        self.folder = folder
+            ?? SemanticModelStore.shared.installedFolder
+            ?? Bundle.main.url(forResource: "SemanticModel", withExtension: nil)
+    }
 
     private final class Model {
         let env: ORTEnv
@@ -66,10 +73,11 @@ actor SemanticEmbedding {
     }
     private func model() async throws -> Model {
         if loading == nil {
-            guard let folder else { throw EmbeddingError.unavailable }
+            guard let folder else { throw EmbeddingError.notDownloaded }
             loading = Task { try await Model(folder: folder) }
         }
         do { return try await loading!.value }
+        catch EmbeddingError.notDownloaded { loading = nil; throw EmbeddingError.notDownloaded }
         catch { loading = nil; throw EmbeddingError.unavailable }
     }
     func tokenIDs(_ text: String) async throws -> [Int] { try await model().tokenizer.encode(text: text) }

@@ -1,13 +1,52 @@
 import UIKit
 
 final class AISettingsController: UITableViewController {
+    /// 离线语义资料（按需下载）在设置页的状态机。
+    private enum SemanticState {
+        case notInstalled
+        case downloading(progress: Double)
+        case failed(SemanticFailure)
+        case installed
+        /// Debug 构建自带资料（Release 无 bundle 资源，不会出现）。
+        case bundled
+    }
+
+    private enum SemanticFailure {
+        case network, integrity, space, other
+
+        var shortMessage: String {
+            switch self {
+            case .network: return "网络连接失败，点按重试"
+            case .integrity: return "下载的资料不完整，点按重试"
+            case .space: return "存储空间不足，点按重试"
+            case .other: return "点按重试"
+            }
+        }
+
+        var message: String {
+            switch self {
+            case .network: return "网络连接失败；请确认网络后重试。资料约 81MB，需要联网一次。"
+            case .integrity: return "下载的资料不完整；请重试。"
+            case .space: return "设备存储空间不足；请清理后重试。"
+            case .other: return "资料下载未完成；请重试。"
+            }
+        }
+    }
+
     private let root: URL
     private let secrets: AISecrets
+    private let semanticStore: SemanticModelStore
     private var store: AIConfigurationStore?
     private var failure: String?
+    private var semanticState: SemanticState = .notInstalled
+    private var semanticDownload: Task<Void, Never>?
+    private var semanticObserver: NSObjectProtocol?
+    private var semanticGeneration = 0
+    private var lastProgressAt = Date.distantPast
+    private var lastProgressValue: Double = -1
 
-    init(root: URL, secrets: AISecrets = KeychainSecrets()) {
-        self.root = root; self.secrets = secrets
+    init(root: URL, secrets: AISecrets = KeychainSecrets(), semanticStore: SemanticModelStore = .shared) {
+        self.root = root; self.secrets = secrets; self.semanticStore = semanticStore
         super.init(style: .insetGrouped)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -21,11 +60,30 @@ final class AISettingsController: UITableViewController {
             UIBarButtonItem(title: "添加", style: .plain, target: self, action: #selector(add)),
             UIBarButtonItem(title: "切换", style: .plain, target: self, action: #selector(switchService))
         ]
+        // 下载完成/移除后（含从其他入口触发）刷新本页状态；不打断进行中的下载。
+        semanticObserver = NotificationCenter.default.addObserver(
+            forName: SemanticModelStore.changed,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.refreshSemanticState()
+                self.updateSemanticRow()
+            }
+        }
+        refreshSemanticState()
         load()
+    }
+
+    deinit {
+        if let semanticObserver { NotificationCenter.default.removeObserver(semanticObserver) }
     }
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(false, animated: false)
+        refreshSemanticState()
+        updateSemanticRow()
     }
     private var configurations: [AIConfiguration] {
         guard let store else { return [] }
@@ -39,19 +97,29 @@ final class AISettingsController: UITableViewController {
         navigationItem.rightBarButtonItems?.last?.isEnabled = !configurations.isEmpty
         tableView.reloadData()
     }
-    override func numberOfSections(in tableView: UITableView) -> Int { 2 }
+    override func numberOfSections(in tableView: UITableView) -> Int { 3 }
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         section == 0 ? max(configurations.count, 1) : 1
     }
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        section == 0 ? "服务" : nil
+        switch section {
+        case 0: return "服务"
+        case 1: return "离线语义资料"
+        default: return nil
+        }
     }
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        section == 0 ? "API Key 仅保存在本机 Keychain；点按服务可编辑或检查连接。" : nil
+        switch section {
+        case 0: return "API Key 仅保存在本机 Keychain；点按服务可编辑或检查连接。"
+        case 1: return "用于书内 AI 语义检索；阅读、原文搜索、笔记不受影响。下载约 81MB，需联网一次。"
+        default: return nil
+        }
     }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "ai-value", for: indexPath)
         if indexPath.section == 1 {
+            configureSemanticCell(cell)
+        } else if indexPath.section == 2 {
             configureAICell(
                 cell,
                 title: "提问时问题与相关原文会发送到所选服务。详情",
@@ -83,11 +151,267 @@ final class AISettingsController: UITableViewController {
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         if indexPath.section == 1 {
+            handleSemanticTap()
+            return
+        }
+        if indexPath.section == 2 {
             navigationController?.pushViewController(AIPrivacyController(content: .sending), animated: true)
             return
         }
         guard store != nil else { load(); return }
         if !configurations.isEmpty { edit(configurations[indexPath.row]) }
+    }
+
+    // MARK: - 离线语义资料
+
+    private func configureSemanticCell(_ cell: UITableViewCell) {
+        var content = UIListContentConfiguration.subtitleCell()
+        content.text = "离线语义资料"
+        content.textProperties.font = BookType.body
+        content.textProperties.color = BookDesign.ink
+        content.textProperties.adjustsFontForContentSizeCategory = true
+
+        let failed = isSemanticFailure
+        content.secondaryText = semanticDetailText
+        content.secondaryTextProperties.font = BookType.footnote
+        content.secondaryTextProperties.color = failed ? BookDesign.error : BookDesign.ink3
+        content.secondaryTextProperties.numberOfLines = 0
+        content.secondaryTextProperties.adjustsFontForContentSizeCategory = true
+
+        let symbol: String
+        switch semanticState {
+        case .installed, .bundled: symbol = "checkmark.circle.fill"
+        case .downloading: symbol = "arrow.down.circle"
+        case .failed: symbol = "exclamationmark.circle"
+        case .notInstalled: symbol = "arrow.down.circle"
+        }
+        content.image = BookDesign.symbol(symbol, size: 18)
+        content.imageProperties.tintColor = failed ? BookDesign.error : BookDesign.lampInk
+
+        cell.contentConfiguration = content
+        cell.backgroundColor = BookDesign.surface
+        cell.accessoryType = .none
+        cell.isAccessibilityElement = true
+        cell.accessibilityIdentifier = "ai-semantic"
+        cell.accessibilityLabel = "离线语义资料"
+        cell.accessibilityValue = semanticAccessibilityValue
+        cell.accessibilityHint = semanticAccessibilityHint
+        cell.selectionStyle = .default
+    }
+
+    private var isSemanticFailure: Bool {
+        if case .failed = semanticState { return true }
+        return false
+    }
+
+    private var semanticDetailText: String {
+        switch semanticState {
+        case .installed: return "已下载 · 约 81MB"
+        case .notInstalled: return "未下载 · 约 81MB"
+        case .downloading(let progress): return "下载中 \(Int((progress * 100).rounded()))%"
+        case .failed(let failure): return "下载失败 · " + failure.shortMessage
+        case .bundled: return "可用 · 随 App 提供"
+        }
+    }
+
+    private var semanticAccessibilityValue: String {
+        switch semanticState {
+        case .installed: return "已下载"
+        case .notInstalled: return "未下载"
+        case .downloading(let progress): return "下载中 \(Int((progress * 100).rounded()))%"
+        case .failed: return "下载失败"
+        case .bundled: return "可用"
+        }
+    }
+
+    private var semanticAccessibilityHint: String {
+        switch semanticState {
+        case .notInstalled: return "轻点下载离线语义资料"
+        case .downloading: return "轻点取消下载"
+        case .installed: return "轻点删除离线语义资料"
+        case .failed: return "轻点重新下载"
+        case .bundled: return "随 App 提供，无需下载"
+        }
+    }
+
+    private func updateSemanticRow() {
+        let indexPath = IndexPath(row: 0, section: 1)
+        guard tableView.numberOfSections > indexPath.section,
+              tableView.numberOfRows(inSection: indexPath.section) > indexPath.row,
+              let cell = tableView.cellForRow(at: indexPath) else { return }
+        configureSemanticCell(cell)
+    }
+
+    private func refreshSemanticState(resetFailure: Bool = false) {
+        guard semanticDownload == nil else { return }
+        if semanticStore.isInstalled {
+            semanticState = .installed
+        } else if bundledSemanticAvailable {
+            semanticState = .bundled
+        } else if !resetFailure, isSemanticFailure {
+            // 保留失败的分类提示，等待用户点按重试。
+        } else {
+            semanticState = .notInstalled
+        }
+    }
+
+    private var bundledSemanticAvailable: Bool {
+        Bundle.main.url(forResource: "SemanticModel", withExtension: nil) != nil
+    }
+
+    private func handleSemanticTap() {
+        if case .downloading = semanticState {
+            cancelSemanticDownload()
+            return
+        }
+        switch semanticState {
+        case .installed:
+            confirmRemoveSemantic()
+        case .bundled:
+            let alert = BookAlertController(
+                title: "离线语义资料可用",
+                message: "当前 App 已随包提供离线语义资料，无需下载。",
+                preferredStyle: .alert
+            )
+            alert.addAction(BookAlertAction(title: "知道了", style: .default))
+            present(alert, animated: true)
+        case .notInstalled, .failed:
+            startSemanticDownload()
+        case .downloading:
+            break
+        }
+    }
+
+    private func startSemanticDownload() {
+        semanticGeneration += 1
+        let generation = semanticGeneration
+        semanticState = .downloading(progress: 0)
+        lastProgressAt = .distantPast
+        lastProgressValue = -1
+        updateSemanticRow()
+        semanticDownload = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.semanticStore.download { [weak self] progress in
+                    self?.receiveSemanticProgress(progress, generation: generation)
+                }
+                guard !Task.isCancelled, self.semanticGeneration == generation else { return }
+                self.semanticDownload = nil
+                if self.semanticStore.isInstalled {
+                    self.semanticState = .installed
+                    self.updateSemanticRow()
+                    self.showSemanticDownloadedNotice()
+                } else {
+                    self.semanticState = .failed(.integrity)
+                    self.updateSemanticRow()
+                    self.showSemanticFailure(.integrity)
+                }
+            } catch {
+                guard self.semanticGeneration == generation else { return }
+                let cancelled = Task.isCancelled || (error as? URLError)?.code == .cancelled
+                self.semanticDownload = nil
+                if cancelled {
+                    self.refreshSemanticState(resetFailure: true)
+                    self.updateSemanticRow()
+                } else {
+                    let failure = Self.classifySemanticFailure(error)
+                    self.semanticState = .failed(failure)
+                    self.updateSemanticRow()
+                    self.showSemanticFailure(failure)
+                }
+            }
+        }
+    }
+
+    /// 进度节流：≥1% 或 ≥0.2s 才刷新一次行，避免整表 reload/抖动。
+    private func receiveSemanticProgress(_ value: Double, generation: Int) {
+        guard generation == semanticGeneration else { return }
+        let progress = min(max(value, 0), 1)
+        let now = Date()
+        guard progress >= 1
+                || progress - lastProgressValue >= 0.01
+                || now.timeIntervalSince(lastProgressAt) >= 0.2 else { return }
+        lastProgressValue = progress
+        lastProgressAt = now
+        guard case .downloading = semanticState else { return }
+        semanticState = .downloading(progress: progress)
+        updateSemanticRow()
+    }
+
+    private func cancelSemanticDownload() {
+        semanticGeneration += 1
+        semanticDownload?.cancel()
+        semanticDownload = nil
+        refreshSemanticState(resetFailure: true)
+        updateSemanticRow()
+    }
+
+    private func confirmRemoveSemantic() {
+        let alert = BookAlertController(
+            title: "删除离线语义资料？",
+            message: "删除后书内 AI 语义检索暂不可用；阅读、原文搜索和笔记不受影响。",
+            preferredStyle: .alert
+        )
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.addAction(BookAlertAction(title: "删除", style: .destructive) { [weak self] _ in
+            guard let self else { return }
+            do {
+                try self.semanticStore.remove()
+                self.refreshSemanticState(resetFailure: true)
+                self.updateSemanticRow()
+            } catch {
+                let failure = BookAlertController(
+                    title: "删除未完成",
+                    message: "离线语义资料仍保留；请稍后重试。",
+                    preferredStyle: .alert
+                )
+                failure.addAction(BookAlertAction(title: "知道了", style: .default))
+                self.present(failure, animated: true)
+            }
+        })
+        present(alert, animated: true)
+    }
+
+    private func showSemanticDownloadedNotice() {
+        let alert = BookAlertController(
+            title: "离线语义资料已下载",
+            message: "语义资料会在后台准备；阅读、原文搜索和笔记不受影响。",
+            preferredStyle: .alert
+        )
+        alert.addAction(BookAlertAction(title: "完成", style: .default))
+        present(alert, animated: true)
+    }
+
+    private func showSemanticFailure(_ failure: SemanticFailure) {
+        let alert = BookAlertController(
+            title: "下载未完成",
+            message: failure.message,
+            preferredStyle: .alert
+        )
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.addAction(BookAlertAction(title: "重试", style: .default) { [weak self] _ in
+            self?.startSemanticDownload()
+        })
+        present(alert, animated: true)
+    }
+
+    private static func classifySemanticFailure(_ error: Error) -> SemanticFailure {
+        if let downloadError = error as? SemanticModelDownloadError {
+            if case .integrity = downloadError { return .integrity }
+            return .network
+        }
+        if error is URLError { return .network }
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain, nsError.code == Int(POSIXErrorCode.ENOSPC.rawValue) {
+            return .space
+        }
+        if nsError.domain == NSCocoaErrorDomain, nsError.code == NSFileWriteOutOfSpaceError {
+            return .space
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            return classifySemanticFailure(underlying)
+        }
+        return .other
     }
     @objc private func add() { edit(nil) }
     @objc private func switchService() {
@@ -433,6 +757,11 @@ private func configureAICell(
     cell.contentConfiguration = content
     cell.backgroundColor = BookDesign.surface
     cell.accessoryType = accessory
+    // 复用自“离线语义资料”行时清理该行设置的无障碍信息，避免串到服务行。
+    cell.isAccessibilityElement = true
+    cell.accessibilityLabel = nil
+    cell.accessibilityValue = nil
+    cell.accessibilityHint = nil
     cell.tintColor = accessory == .checkmark ? BookDesign.lamp : BookDesign.ink3
     cell.selectionStyle = .default
 }

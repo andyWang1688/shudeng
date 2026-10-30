@@ -58,12 +58,15 @@ struct BookPreparationState {
     var semanticReady = false
     /// 扫描版/没有可检索文字：不建文字索引，但仍可阅读；EPUB 恒为 false。
     var textIndexUnavailable = false
+    /// AI 语义模型尚未下载：文字索引完成即 ready，不跑向量准备、不显示“正在准备语义资料”。
+    var semanticUnavailable = false
     /// PDF 页数（nil = EPUB）；用它把进度与失败文案切换成「页」。
     var pdfPageCount: Int? = nil
     /// 导入时统计的有文字页数（nil = 未知/EPUB）；0 表示扫描版。
     var searchablePageCount: Int? = nil
     var ready: Bool {
-        !preparing && total > 0 && completed == total && failure == nil && (semanticReady || textIndexUnavailable)
+        !preparing && total > 0 && completed == total && failure == nil
+            && (semanticReady || textIndexUnavailable || semanticUnavailable)
     }
     var message: String {
         if textIndexUnavailable {
@@ -71,6 +74,9 @@ struct BookPreparationState {
         }
         let unit = pdfPageCount == nil ? "章" : "页"
         if let failure { return "资料准备失败（已完成\(completed)/\(total)\(unit)）：\(failure)；仍可阅读" }
+        if semanticUnavailable {
+            return "书内文字资料可用；到「我的 → AI 服务」下载离线语义资料后，可使用 AI 语义检索"
+        }
         if pdfPageCount != nil {
             if completed == total, total > 0, !semanticReady {
                 return "正在准备 PDF 语义资料（已提交\(vectorsCompleted)/\(vectorsTotal)段），不影响阅读和原文搜索"
@@ -126,20 +132,32 @@ final class BookPreparation {
             notify()
             return
         }
-        if !rebuild, states[book.id]?.ready == true { return }
+        if !rebuild, states[book.id]?.ready == true {
+            // 语义模型刚下载完成时，semanticUnavailable 的书要重新准备语义，不能因 ready 永远早退。
+            if states[book.id]?.semanticUnavailable == true, SemanticModelStore.hasLocalModel {
+                states[book.id] = nil
+            } else {
+                return
+            }
+        }
         let token = UUID(); tokens[book.id] = token
         jobs[book.id] = Task {
             // 启动优化：磁盘索引已完成（total>0、completed==total）且语义资料就绪/扫描版不可检索时，
             // 直接恢复终态，不再重跑 index.prepare 与 prepareVectors（升级 rebuild 仍走下面的重建流程）。
+            let modelAvailable = SemanticModelStore.hasLocalModel
             if !rebuild,
                let saved = try? await index.state(bookID: book.id),
                saved.total > 0,
                saved.completed == saved.total,
-               saved.semanticReady || saved.textIndexUnavailable {
+               saved.semanticReady || saved.textIndexUnavailable || !modelAvailable {
                 guard self.tokens[book.id] == token else { return }
                 var restored = self.pdfState(saved, for: book)
                 restored.preparing = false
                 restored.failure = nil
+                if !modelAvailable, !saved.textIndexUnavailable {
+                    // 文字索引已完成但模型缺失：语义降级，不让书架一直“准备中”。
+                    restored.semanticUnavailable = true
+                }
                 self.states[book.id] = restored
                 self.jobs[book.id] = nil
                 self.tokens[book.id] = nil
@@ -150,6 +168,7 @@ final class BookPreparation {
             state.preparing = true; state.failure = nil
             self.states[book.id] = state
             self.notify()
+            var textIndexFinished = false
             do {
                 if var committed = try? await self.index.state(bookID: book.id) {
                     committed.preparing = true
@@ -158,23 +177,53 @@ final class BookPreparation {
                 try await self.index.prepare(bookID: book.id, file: file, rebuild: rebuild) { state in
                     if self.tokens[book.id] == token { self.update(self.pdfState(state, for: book), for: book.id) }
                 }
-                try Task.checkCancellation()
-                try await self.index.prepareVectors(bookID: book.id) { state in
-                    if self.tokens[book.id] == token { self.update(self.pdfState(state, for: book), for: book.id) }
+                textIndexFinished = true
+                if SemanticModelStore.hasLocalModel {
+                    try Task.checkCancellation()
+                    try await self.index.prepareVectors(bookID: book.id) { state in
+                        if self.tokens[book.id] == token { self.update(self.pdfState(state, for: book), for: book.id) }
+                    }
+                } else if let current = self.states[book.id], self.tokens[book.id] == token {
+                    // 语义模型尚未下载：文字索引完成即可用，不进入“正在准备语义资料”。
+                    var degraded = self.pdfState(current, for: book)
+                    degraded.preparing = false
+                    degraded.failure = nil
+                    degraded.semanticReady = false
+                    degraded.semanticUnavailable = true
+                    self.states[book.id] = degraded
                 }
             } catch is CancellationError {
                 // Startup resumes the committed chapter checkpoint.
             } catch {
                 guard tokens[book.id] == token else { return }
                 var state = pdfState(states[book.id] ?? BookPreparationState(), for: book)
-                state.failure = (error as? IndexError)?.errorDescription ?? (error as? EmbeddingError)?.errorDescription ?? "无法读取或保存资料，请检查文件与储存空间后重试"
-                state.preparing = false
+                let modelMissing = !SemanticModelStore.hasLocalModel
+                if textIndexFinished, modelMissing, error is EmbeddingError {
+                    // 文字索引成功、仅语义模型缺失：降级可用，不报“资料准备失败”。
+                    state.preparing = false
+                    state.failure = nil
+                    state.semanticReady = false
+                    state.semanticUnavailable = true
+                } else {
+                    state.failure = (error as? IndexError)?.errorDescription ?? (error as? EmbeddingError)?.errorDescription ?? "无法读取或保存资料，请检查文件与储存空间后重试"
+                    state.preparing = false
+                }
                 states[book.id] = state
             }
             guard tokens[book.id] == token else { return }
             jobs[book.id] = nil; tokens[book.id] = nil
             notify()
         }
+    }
+    /// 语义模型下载完成通知后：把「文字索引已完成但语义模型缺失」的书重新启动准备，
+    /// 否则 ready 早退会让它们永远停留在 degradation 状态。
+    func retrySemanticPreparationIfNeeded(_ book: Book, file: URL) {
+        guard SemanticModelStore.hasLocalModel else { return }
+        if let state = states[book.id] {
+            guard state.semanticUnavailable else { return }
+            states[book.id] = nil
+        }
+        start(book, file: file)
     }
     func stop(bookID: String) async {
         let job = jobs[bookID]

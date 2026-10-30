@@ -76,6 +76,48 @@
 		<string>../Vendor/SemanticRuntime</string>
 	</dict>
 
+
+	<key>A1C000000000000000000001</key>
+	<dict>
+		<key>isa</key>
+		<string>PBXFileReference</string>
+		<key>lastKnownFileType</key>
+		<string>sourcecode.swift</string>
+		<key>path</key>
+		<string>SemanticModelStore.swift</string>
+		<key>sourceTree</key>
+		<string>&lt;group&gt;</string>
+	</dict>
+	<key>A1C000000000000000000002</key>
+	<dict>
+		<key>fileRef</key>
+		<string>A1C000000000000000000001</string>
+		<key>isa</key>
+		<string>PBXBuildFile</string>
+	</dict>
+	<key>A1C000000000000000000003</key>
+	<dict>
+		<key>buildActionMask</key>
+		<string>2147483647</string>
+		<key>files</key>
+		<array/>
+		<key>inputPaths</key>
+		<array/>
+		<key>isa</key>
+		<string>PBXShellScriptBuildPhase</string>
+		<key>name</key>
+		<string>Remove SemanticModel (Release)</string>
+		<key>outputPaths</key>
+		<array/>
+		<key>runOnlyForDeploymentPostprocessing</key>
+		<string>0</string>
+		<key>shellPath</key>
+		<string>/bin/sh</string>
+		<key>shellScript</key>
+		<string>if [ "$CONFIGURATION" = "Release" ]; then rm -rf "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/SemanticModel"; fi</string>
+		<key>showEnvVarsInLog</key>
+		<string>0</string>
+	</dict>
 	<key>A10000000000000000000005</key>
 	<dict>
 		<key>fileRef</key>
@@ -841,6 +883,8 @@
 				<string>5</string>
 				<key>DEPLOYMENT_POSTPROCESSING</key>
 				<string>YES</string>
+				<key>ENABLE_USER_SCRIPT_SANDBOXING</key>
+				<string>NO</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
 				<string>YES</string>
 				<key>INFOPLIST_KEY_CFBundleDisplayName</key>
@@ -1071,6 +1115,7 @@
 				<string>CE14A2AE58961CFE9D81A9EE</string>
 				<string>2A4B0CF801BE6CA026BE5A83</string>
 				<string>74CD3AAA1B4A1F34A741214F</string>
+				<string>A1C000000000000000000003</string>
 			</array>
 			<key>buildRules</key>
 			<array/>
@@ -1255,6 +1300,7 @@
 
 <string>A10000000000000000000007</string>
 <string>A24000000000000000000001</string>
+				<string>A1C000000000000000000002</string>
 </array>
 			<key>isa</key>
 			<string>PBXSourcesBuildPhase</string>
@@ -1318,6 +1364,7 @@
 
 <string>A10000000000000000000006</string>
 <string>A24000000000000000000000</string>
+				<string>A1C000000000000000000001</string>
 </array>
 			<key>isa</key>
 			<string>PBXGroup</string>

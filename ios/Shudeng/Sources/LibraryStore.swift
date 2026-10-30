@@ -401,6 +401,7 @@ final class LibraryStore {
     )
     private var catalog: URL { root.appendingPathComponent("library.json") }
     private var files: URL { root.appendingPathComponent("Books", isDirectory: true) }
+    private var semanticModelObserver: NSObjectProtocol?
 
     init(root: URL, secrets: AISecrets = KeychainSecrets()) throws {
         self.root = root
@@ -416,6 +417,28 @@ final class LibraryStore {
             return book.recordIdentity == record.bookIdentity
         }
         questions.canGenerate = { [weak self] id in self?.sourceAvailable(for: id) == true }
+        // 语义模型按需下载完成/移除后，允许已降级的书籍重新准备语义资料。
+        semanticModelObserver = NotificationCenter.default.addObserver(
+            forName: SemanticModelStore.changed,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.retrySemanticPreparation() }
+        }
+    }
+
+    deinit {
+        if let semanticModelObserver { NotificationCenter.default.removeObserver(semanticModelObserver) }
+    }
+
+    @MainActor
+    private func retrySemanticPreparation() {
+        guard SemanticModelStore.hasLocalModel else { return }
+        for book in books where book.removal == nil {
+            let file = fileURL(for: book)
+            guard fileManager.fileExists(atPath: file.path) else { continue }
+            preparation.retrySemanticPreparationIfNeeded(book, file: file)
+        }
     }
 
     func importBook(

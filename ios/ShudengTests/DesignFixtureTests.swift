@@ -236,6 +236,7 @@ final class DesignFixtureTests: XCTestCase {
         try await DesignFixture.seed(session)
         let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
         let reader = try PDFReaderController(book: pdf, library: session.library)
+        try await waitForPDFReady(reader)
         let image = DesignFixture.renderRoot(reader, size: CGSize(width: 375, height: 667), style: .light)
         let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
         attachment.name = "pdf-reader-375x667-light"
@@ -276,6 +277,7 @@ final class DesignFixtureTests: XCTestCase {
         let reader = try PDFReaderController(book: pdf, library: session.library)
         let window = host(reader, size: CGSize(width: 375, height: 667))
         defer { window.isHidden = true }
+        try await waitForPDFReady(reader)
         let toggle = try XCTUnwrap(button("pdf-bookmark-toggle", in: reader.view))
         let ribbon = try XCTUnwrap(button("pdf-bookmark-ribbon", in: reader.view))
         XCTAssertTrue(ribbon.isHidden, "初始不应显示丝带")
@@ -298,6 +300,7 @@ final class DesignFixtureTests: XCTestCase {
         let reader2 = try PDFReaderController(book: pdfReloaded, library: reloaded)
         let window2 = host(reader2, size: CGSize(width: 375, height: 667))
         defer { window2.isHidden = true }
+        try await waitForPDFReady(reader2)
         let toggle2 = try XCTUnwrap(button("pdf-bookmark-toggle", in: reader2.view))
         XCTAssertEqual(toggle2.accessibilityValue, "此页已有书签", "重启后应恢复本页书签")
         XCTAssertFalse(try XCTUnwrap(button("pdf-bookmark-ribbon", in: reader2.view)).isHidden)
@@ -363,6 +366,7 @@ final class DesignFixtureTests: XCTestCase {
 
         let reader = try PDFReaderController(book: pdf, library: session.library)
         let window = host(reader, size: CGSize(width: 375, height: 667))
+        try await waitForPDFReady(reader)
         defer { window.isHidden = true }
         let contentsButton = try XCTUnwrap(
             reader.view.allViews.compactMap { $0 as? UIButton }
@@ -627,13 +631,16 @@ final class DesignFixtureTests: XCTestCase {
             root.allViews.compactMap { $0 as? UITextField }
                 .first { $0.accessibilityIdentifier == "pdf-search-field" }
         }
-        func openSearchTab(_ reader: PDFReaderController) throws -> (UITableView, UISegmentedControl, UITextField) {
+        func openSearchTab(_ reader: PDFReaderController) async throws -> (UITableView, UISegmentedControl, UITextField) {
             let contentsButton = try XCTUnwrap(
                 reader.view.allViews.compactMap { $0 as? UIButton }
                     .first { $0.accessibilityIdentifier == "pdf-contents" }
             )
             contentsButton.sendActions(for: .touchUpInside)
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+            for _ in 0..<80 {
+                try await Task.sleep(nanoseconds: 50_000_000)
+                if reader.presentedViewController is UINavigationController { break }
+            }
             let navigation = try XCTUnwrap(reader.presentedViewController as? UINavigationController)
             let panel = try XCTUnwrap(navigation.topViewController)
             let tabs = try XCTUnwrap(panel.navigationItem.titleView as? UISegmentedControl)
@@ -659,8 +666,9 @@ final class DesignFixtureTests: XCTestCase {
         session.library.preparation.setDesignState(preparing, for: pdf.id)
         let reader = try PDFReaderController(book: pdf, library: session.library)
         let window = host(reader, size: CGSize(width: 375, height: 667))
+        try await waitForPDFReady(reader)
         defer { window.isHidden = true }
-        let (preparingTable, tabs, preparingField) = try openSearchTab(reader)
+        let (preparingTable, tabs, preparingField) = try await openSearchTab(reader)
         XCTAssertEqual(tabs.numberOfSegments, 3)
         XCTAssertFalse(preparingField.isEnabled, "准备中不应允许输入")
         let preparingCell = preparingTable.dataSource?.tableView(preparingTable, cellForRowAt: IndexPath(row: 0, section: 0))
@@ -684,7 +692,8 @@ final class DesignFixtureTests: XCTestCase {
         let scanReader = try PDFReaderController(book: scanBook, library: scanSession.library)
         let scanWindow = host(scanReader, size: CGSize(width: 375, height: 667))
         defer { scanWindow.isHidden = true }
-        let (scanTable, _, scanField) = try openSearchTab(scanReader)
+        try await waitForPDFReady(scanReader)
+        let (scanTable, _, scanField) = try await openSearchTab(scanReader)
         XCTAssertFalse(scanField.isEnabled, "扫描版不应允许输入")
         let scanCell = scanTable.dataSource?.tableView(scanTable, cellForRowAt: IndexPath(row: 0, section: 0))
         XCTAssertEqual((scanCell?.contentConfiguration as? UIListContentConfiguration)?.text, "没有可搜索的文字")
@@ -775,6 +784,7 @@ final class DesignFixtureTests: XCTestCase {
 
         let reader = try PDFReaderController(book: pdf, library: session.library)
         let window = host(reader, size: CGSize(width: 375, height: 667))
+        try await waitForPDFReady(reader)
         defer { window.isHidden = true }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
         let pdfView = try XCTUnwrap(
@@ -854,6 +864,7 @@ final class DesignFixtureTests: XCTestCase {
         let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
         let reader = try PDFReaderController(book: pdf, library: session.library)
         let window = host(reader, size: CGSize(width: 375, height: 667))
+        try await waitForPDFReady(reader)
         defer { window.isHidden = true }
         let pdfView = try XCTUnwrap(
             reader.view.allViews.compactMap { $0 as? PDFView }.first { $0.accessibilityIdentifier == "pdf-reader-view" }
@@ -1102,13 +1113,22 @@ final class DesignFixtureTests: XCTestCase {
         XCTAssertEqual(saved.body, "编辑后的 PDF 笔记正文")
 
         // trailing 删除（走 UI 确认弹层）→ removeNote。
+        // PDF 阅读器关闭后导航控制器曾短暂离开 window 层级；等它回到 window 再触发 present 确认弹层。
+        window.makeKeyAndVisible()
+        for _ in 0..<40 {
+            if controller.view.window != nil { break }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        try await Task.sleep(nanoseconds: 600_000_000)
         let trailing = try XCTUnwrap(controller.trailingSwipeActions(for: fallback.id))
         let deleteAction = try XCTUnwrap(trailing.actions.first)
         XCTAssertEqual(deleteAction.title, "删除")
         deleteAction.handler(deleteAction, UIView()) { _ in }
         var alertView: UIView?
-        for _ in 0..<20 {
+        for _ in 0..<80 {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            try await Task.sleep(nanoseconds: 50_000_000)
             if let presented = controller.presentedViewController ?? nav.presentedViewController,
                presented.view.accessibilityIdentifier == "book-dialog" {
                 alertView = presented.view; break
@@ -1342,6 +1362,7 @@ final class DesignFixtureTests: XCTestCase {
         let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
         let reader = try PDFReaderController(book: pdf, library: session.library)
         let window = host(reader, size: CGSize(width: 375, height: 667))
+        try await waitForPDFReady(reader)
         defer { window.isHidden = true }
         // 程序化选区 → 纸白浮层「问 AI」（用新阅读器，避免 sheet dismiss 过渡态干扰）。
         let pdfView = try XCTUnwrap(
@@ -1507,6 +1528,7 @@ final class DesignFixtureTests: XCTestCase {
         try FileManager.default.copyItem(at: file, to: library.fileURL(for: book))
         let reader = try PDFReaderController(book: book, library: library)
         let window = host(reader, size: CGSize(width: 375, height: 667))
+        try await waitForPDFReady(reader)
         defer { window.isHidden = true }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         let openSeconds = Date().timeIntervalSince(openStarted)
@@ -1525,7 +1547,7 @@ final class DesignFixtureTests: XCTestCase {
         let turnSeconds = Date().timeIntervalSince(turnStarted)
         print(String(format: "QA_PERF text_pdf_open_seconds=%.3f page_turns_20_seconds=%.3f resident_after_open_mb=%.1f", openSeconds, turnSeconds, memoryAfterOpen))
         XCTAssertLessThan(indexSeconds, 60, "300 页索引应在一分钟内完成")
-        XCTAssertLessThan(openSeconds, 5, "300 页 PDF 打开应低于 5s")
+        XCTAssertLessThan(openSeconds, 8, "300 页 PDF 打开（含首帧渲染，异步打开后口径）应低于 8s")
         XCTAssertLessThan(turnSeconds, 5, "20 次翻页应低于 5s")
     }
 
@@ -1667,6 +1689,7 @@ final class DesignFixtureTests: XCTestCase {
         let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
         let reader = try PDFReaderController(book: pdf, library: session.library)
         let window = host(reader, size: CGSize(width: 375, height: 667))
+        try await waitForPDFReady(reader)
         defer { window.isHidden = true }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         // host 不会自动触发 appearance；显式调用以完成 restore 流程（否则 didRestoreProgress=false 不落盘）。
@@ -2856,8 +2879,19 @@ final class DesignFixtureTests: XCTestCase {
         root.view.layoutIfNeeded()
         root.endAppearanceTransition()
         window.layoutIfNeeded()
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         window.layoutIfNeeded()
+        // task-76 后 PDF 打开改为异步（串行队列 + loading）；等首帧/可交互后再断言，避免读 document 时仍为 nil。
+        if let reader = root as? PDFReaderController {
+            // 等异步 PDFDocument 挂载完成（不能只看 loading 是否隐藏：loading 在 viewDidLoad 后可能尚未插入/已移除）。
+            for _ in 0..<100 {
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+                window.layoutIfNeeded()
+                let pdfView = reader.view.allViews.compactMap { $0 as? PDFView }.first
+                if pdfView?.document != nil { break }
+            }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        }
         return window
     }
 
@@ -3685,5 +3719,260 @@ private extension UIView {
 
     var allViews: [UIView] {
         [self] + subviews.flatMap(\.allViews)
+    }
+}
+
+extension DesignFixtureTests {
+    private func semanticModelSource() throws -> URL {
+        try XCTUnwrap(
+            Bundle.main.url(forResource: "SemanticModel", withExtension: nil),
+            "Debug app bundle 应包含 SemanticModel"
+        )
+    }
+
+    private func semanticTempFolder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SemanticModelQA-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    /// task-78：install/isInstalled/verify/remove 基础路径。
+    func testSemanticModelStoreInstallVerifyRemove() throws {
+        let source = try semanticModelSource()
+        let folder = try semanticTempFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = SemanticModelStore(folder: folder.appendingPathComponent("SemanticModel"))
+        XCTAssertFalse(store.isInstalled)
+        XCTAssertFalse(store.verifyInstalledFiles())
+        XCTAssertTrue(store.installedFolder == nil)
+
+        try store.install(from: source)
+        XCTAssertTrue(store.isInstalled, "install 后应快速校验通过")
+        XCTAssertTrue(store.verifyInstalledFiles(), "install 后全量 SHA 应通过")
+        XCTAssertEqual(store.installedFolder?.standardizedFileURL, store.folder.standardizedFileURL)
+        for spec in SemanticModelStore.files {
+            let file = store.folder.appendingPathComponent(spec.name)
+            let attrs = try FileManager.default.attributesOfItem(atPath: file.path)
+            XCTAssertEqual((attrs[.size] as? NSNumber)?.int64Value, spec.bytes, spec.name)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.folder.appendingPathComponent(".installed.json").path))
+
+        try store.remove()
+        XCTAssertFalse(store.isInstalled)
+        XCTAssertFalse(store.verifyInstalledFiles())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.folder.path))
+    }
+
+    /// task-78：篡改文件/标记后应拒绝（全量 SHA / 大小 / 标记校验）。
+    func testSemanticModelStoreRejectsTamperedSourceAndMarker() throws {
+        let source = try semanticModelSource()
+        let tamperedSource = try semanticTempFolder()
+        defer { try? FileManager.default.removeItem(at: tamperedSource) }
+        for spec in SemanticModelStore.files {
+            try FileManager.default.copyItem(
+                at: source.appendingPathComponent(spec.name),
+                to: tamperedSource.appendingPathComponent(spec.name)
+            )
+        }
+        let target = try semanticTempFolder()
+        defer { try? FileManager.default.removeItem(at: target) }
+        let store = SemanticModelStore(folder: target.appendingPathComponent("SemanticModel"))
+        var bytes = try Data(contentsOf: tamperedSource.appendingPathComponent("tokenizer.json"))
+        bytes.append(0x00)
+        try bytes.write(to: tamperedSource.appendingPathComponent("tokenizer.json"))
+        XCTAssertThrowsError(try store.install(from: tamperedSource), "源文件被篡改应拒绝安装") { error in
+            XCTAssertTrue(String(describing: error).contains("integrity"), "错误应为 integrity：\(error)")
+        }
+        XCTAssertFalse(store.isInstalled, "失败安装不应留下可用安装")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.folder.path))
+
+        // 正常安装后篡改 marker/文件应使 isInstalled/verify 失败。
+        try store.install(from: source)
+        XCTAssertTrue(store.isInstalled)
+        let markerURL = store.folder.appendingPathComponent(".installed.json")
+        var markerJSON = try JSONSerialization.jsonObject(with: Data(contentsOf: markerURL)) as! [String: Any]
+        var hashes = markerJSON["hashes"] as! [String: String]
+        hashes["tokenizer.json"] = String(repeating: "0", count: 64)
+        markerJSON["hashes"] = hashes
+        try JSONSerialization.data(withJSONObject: markerJSON).write(to: markerURL)
+        XCTAssertFalse(store.isInstalled, "marker SHA 不一致时应快速失败")
+        XCTAssertFalse(store.verifyInstalledFiles())
+
+        try store.remove()
+        try store.install(from: source)
+        var data = try Data(contentsOf: store.folder.appendingPathComponent("model.onnx.gz"))
+        data[0] = data[0] ^ 0xFF
+        try data.write(to: store.folder.appendingPathComponent("model.onnx.gz"))
+        XCTAssertFalse(store.verifyInstalledFiles(), "文件内容被改后全量校验应失败")
+    }
+}
+
+extension DesignFixtureTests {
+    /// task-78：无本地模型时文字索引完成即 ready，不卡“准备中”、不报失败（需 Debug app 内移除 SemanticModel）。
+    func testBookPreparationDegradesWithoutSemanticModel() async throws {
+        guard SemanticModelStore.shared.installedFolder == nil,
+              Bundle.main.url(forResource: "SemanticModel", withExtension: nil) == nil else {
+            throw XCTSkip("当前 Debug app 仍有本地 SemanticModel，无法模拟未下载")
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NoModelPrep-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try LibraryStore(root: root, secrets: EphemeralSecrets())
+        let fixture = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "original-fixture", withExtension: "epub", subdirectory: "Fixtures")
+        )
+        let book = try await library.importBook(from: fixture).book
+        var state: BookPreparationState?
+        for _ in 0..<300 {
+            if let value = library.preparation.states[book.id], !value.preparing { state = value; break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let final = try XCTUnwrap(state, "无模型时应完成文字索引并进入终态")
+        XCTAssertTrue(final.ready, "无模型降级应 ready：\(final)")
+        XCTAssertTrue(final.semanticUnavailable, "应标记语义模型未下载")
+        XCTAssertNil(final.failure)
+        XCTAssertEqual(final.message, "书内文字资料可用；到「我的 → AI 服务」下载离线语义资料后，可使用 AI 语义检索")
+        let hits = try await library.preparation.index.search(bookID: book.id, query: "C1-P01")
+        XCTAssertFalse(hits.isEmpty, "无模型时原文搜索仍应可用")
+    }
+}
+
+extension DesignFixtureTests {
+    /// task-78 补充：真实网络下载（进度/取消/重试/校验）——需显式 QA_REAL_MODEL_DOWNLOAD=1，CI 默认跳过。
+    func testSemanticModelStoreRealDownloadProgressVerifyAndCancel() async throws {
+        guard ProcessInfo.processInfo.environment["QA_REAL_MODEL_DOWNLOAD"] == "1" else {
+            throw XCTSkip("未设置 QA_REAL_MODEL_DOWNLOAD=1，跳过真实 84MB 模型下载")
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SemanticModelRealDownload-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // 取消：下载进行中取消，不应留下已安装目录。
+        let cancelStore = SemanticModelStore(folder: root.appendingPathComponent("SemanticModelCancel"))
+        var cancelFractions: [Double] = []
+        let cancelTask = Task {
+            try await cancelStore.download(progress: { value in cancelFractions.append(value) })
+        }
+        for _ in 0..<300 {
+            if (cancelFractions.last ?? 0) > 0.02 { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertGreaterThan(cancelFractions.last ?? 0, 0, "取消前应已有下载进度")
+        cancelTask.cancel()
+        var cancelled = false
+        do { try await cancelTask.value } catch { cancelled = true }
+        XCTAssertTrue(cancelled, "取消应抛错")
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        XCTAssertFalse(cancelStore.isInstalled, "取消后不应留下安装")
+        XCTAssertFalse(cancelStore.verifyInstalledFiles())
+
+        // 完整下载：进度单调→1，安装后快速+全量校验通过。
+        let store = SemanticModelStore(folder: root.appendingPathComponent("SemanticModelFull"))
+        var fractions: [Double] = []
+        let started = Date()
+        try await store.download(progress: { value in fractions.append(value) })
+        let elapsed = Date().timeIntervalSince(started)
+        print(String(format: "QA_PERF semantic_model_download_seconds=%.2f progressCalls=%d", elapsed, fractions.count))
+        XCTAssertEqual(fractions.last, 1, "最终进度应为 1")
+        XCTAssertEqual(fractions, fractions.sorted(), "进度应单调不减")
+        XCTAssertTrue(store.isInstalled)
+        XCTAssertTrue(store.verifyInstalledFiles(), "真实下载文件全量 SHA 应通过")
+        try store.remove()
+        XCTAssertFalse(store.isInstalled)
+    }
+}
+
+
+
+
+extension DesignFixtureTests {
+    /// task-76 后 PDF 异步打开：测试侧等待文档+首帧就绪（不依赖产品 hook）。
+    private func waitForPDFReady(_ reader: PDFReaderController, timeout: TimeInterval = 10) async throws {
+        reader.loadViewIfNeeded()
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            let views = reader.view.allViews
+            let pdfView = views.compactMap { $0 as? PDFView }.first { $0.accessibilityIdentifier == "pdf-reader-view" }
+            let loadingVisible = views.contains {
+                $0.accessibilityIdentifier == "pdf-reader-loading" && !$0.isHidden
+            }
+            let pageText = (views.first { $0.accessibilityIdentifier == "pdf-reader-page" } as? UILabel)?.text
+            if pdfView?.document != nil, !loadingVisible, pageText != nil {
+                return
+            }
+        }
+        XCTFail("PDF 异步打开超时（document/loading/页码未就绪）")
+    }
+
+    private func waitForPresentedReader(_ owner: UIViewController, timeout: TimeInterval = 6) async throws -> PDFReaderController {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if let reader = (owner.presentedViewController ?? owner.presentedViewController) as? PDFReaderController {
+                return reader
+            }
+        }
+        throw NSError(domain: "QA", code: 1, userInfo: [NSLocalizedDescriptionKey: "presented PDFReader 超时"])
+    }
+}
+
+extension DesignFixtureTests {
+    /// task-78/79：无模型降级（semanticUnavailable）后安装离线语义资料，应自动重试语义准备并转 semanticReady。
+    /// 需从 host 拷入模型源目录，并通过 QA_MODEL_INSTALL_SOURCE 传入容器内绝对路径；Debug app 需无 bundle 模型。
+    func testBookPreparationRetriesSemanticAfterModelInstall() async throws {
+        let source: URL
+        if let sourcePath = ProcessInfo.processInfo.environment["QA_MODEL_INSTALL_SOURCE"], !sourcePath.isEmpty {
+            source = URL(fileURLWithPath: sourcePath, isDirectory: true)
+        } else {
+            source = Bundle.main.bundleURL.appendingPathComponent("QAInstallSource/SemanticModel", isDirectory: true)
+        }
+        guard FileManager.default.fileExists(atPath: source.appendingPathComponent("model.onnx.gz").path) else {
+            throw XCTSkip("缺少模型安装源：\(source.path)")
+        }
+        guard SemanticModelStore.shared.installedFolder == nil,
+              Bundle.main.url(forResource: "SemanticModel", withExtension: nil) == nil else {
+            throw XCTSkip("Debug app 仍有本地模型，无法模拟未下载")
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SemanticRetry-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try LibraryStore(root: root, secrets: EphemeralSecrets())
+        let fixture = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "original-fixture", withExtension: "epub", subdirectory: "Fixtures")
+        )
+        let book = try await library.importBook(from: fixture).book
+        var degraded: BookPreparationState?
+        for _ in 0..<300 {
+            if let value = library.preparation.states[book.id],
+               !value.preparing,
+               value.semanticUnavailable || value.semanticReady || value.textIndexUnavailable {
+                degraded = value; break
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let initial = try XCTUnwrap(degraded)
+        XCTAssertTrue(initial.semanticUnavailable, "应先处于无模型降级：\(initial)")
+        XCTAssertTrue(initial.ready)
+
+        try SemanticModelStore.shared.install(from: source)
+        defer { try? SemanticModelStore.shared.remove() }
+        XCTAssertTrue(SemanticModelStore.shared.isInstalled)
+
+        var readyState: BookPreparationState?
+        for _ in 0..<600 {
+            if let value = library.preparation.states[book.id], value.semanticReady {
+                readyState = value; break
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let final = try XCTUnwrap(readyState, "安装模型后应自动重试语义准备并 ready；当前：\(String(describing: library.preparation.states[book.id]))")
+        XCTAssertTrue(final.semanticReady)
+        XCTAssertFalse(final.semanticUnavailable)
+        XCTAssertEqual(final.message, "书内资料可用（\(final.total)章，语义资料已完成）", "降级文案应转为语义完成：\(final.message)")
     }
 }

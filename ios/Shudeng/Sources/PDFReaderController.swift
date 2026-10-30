@@ -1,4 +1,5 @@
 import UIKit
+import Darwin
 import PDFKit
 import ReadiumShared
 
@@ -39,6 +40,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private var document: PDFKit.PDFDocument?
     private let documentURL: URL
     private var openTask: Task<Void, Never>?
+    private let openCancellation = PDFWorkCancellation()
     private let openClock = CFAbsoluteTimeGetCurrent()
     private let loadingView = UIView()
     private let loadingLabel = BookDesign.label(nil, font: BookType.subhead, colour: BookDesign.ink2)
@@ -76,6 +78,11 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private weak var pageTapGesture: UITapGestureRecognizer?
     private var selectionAtTouchStart = false
     private lazy var selectionFeedback = UISelectionFeedbackGenerator()
+    /// 大 PDF 默认单页（pageViewController）的页数阈值：>= 200 页默认单页首屏，
+    /// 显著降低 PDFKit 连续模式的内存/CPU；用户仍可用页脚按钮切回连续。
+    private static let largePDFPageThreshold = 200
+    /// QA 内存 A/B/回归：启动参数 `--pdf-single-page-first` 时强制单页（任意页数）。
+    private static let singlePageFirstExperiment = ProcessInfo.processInfo.arguments.contains("--pdf-single-page-first")
     // 沉浸式阅读：隐藏顶部工具栏/底部页脚，PDFView 扩到全屏
     private var chromeHidden = false
     private var chromeAnimating = false
@@ -106,6 +113,9 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         openTask?.cancel()
         NotificationCenter.default.removeObserver(self)
         if let notesObserver { NotificationCenter.default.removeObserver(notesObserver) }
+        // dealloc 验证：若 QA 从未看到该日志，说明阅读器仍被某处持有（retain 归因线索）。
+        NSLog("PDF_OPEN_TIMING reader.deinit")
+        PDFMemoryProbe.log("reader.deinit")
     }
 
     override func viewDidLoad() {
@@ -128,6 +138,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         configureNoteAnnotations()
         configureSelectionInteraction()
         logOpenTiming("viewDidLoad(不含打开文档)", since: viewDidLoadStart)
+        PDFMemoryProbe.log("viewDidLoad")
         // 异步打开 PDF：占位先出现，文档就绪后再挂载/恢复页码/首帧，之后才做标注与书签等次要工作。
         openTask = Task { [weak self] in
             guard let self else { return }
@@ -145,6 +156,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         logOpenTiming("viewDidAppear(since init)", since: openClock)
+        PDFMemoryProbe.log("viewDidAppear")
         pdfView.disableAutomaticContentInsetAdjustment()
         feedbackGenerator.prepare()
         restoreProgressIfNeeded()
@@ -166,14 +178,45 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         backButton.accessibilityLabel = closeAccessibilityLabel()
     }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        logOpenTiming("viewDidDisappear(释放 PDFView 文档)", since: openClock)
+        PDFMemoryProbe.log("viewDidDisappear-beforeRelease")
+        // 阅读器真正离开层级后彻底拆掉 PDFKit 视图/文档/选区/标注/观察者，
+        // 避免已关闭的 514 页 PDF 继续占用内存/CPU（QA 用 memory 打点验证释放时机）。
+        selectionMenuWorkItem?.cancel()
+        selectionMenuWorkItem = nil
+        hideSelectionMenu()
+        activeSelection = nil
+        pdfView.highlightedSelections = nil
+        pdfView.document = nil
+        document = nil
+        noteAnnotations = [:]
+        openCancellation.cancel()
+        openTask?.cancel()
+        openTask = nil
+        if let notesObserver {
+            NotificationCenter.default.removeObserver(notesObserver)
+            self.notesObserver = nil
+        }
+        pdfView.removeFromSuperview()
+        PDFMemoryProbe.logAfterDismissal()
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         clearActiveSelection()
         flushProgress()
         if document == nil {
-            // 加载中就被关闭：取消打开任务，避免加载完成后对已关闭的阅读器继续做挂载工作。
+            // 加载中就被关闭：取消打开任务（含串行队列里的解析），避免加载完成后继续挂载/占内存。
+            openCancellation.cancel()
             openTask?.cancel()
             openTask = nil
+        } else if isBeingDismissed || presentingViewController?.isBeingDismissed == true {
+            // 真正关闭（非临时被 sheet 覆盖）：释放 PDFView 文档，停止 PDFKit 后续布局/栅格化。
+            pdfView.document = nil
+            document = nil
+            noteAnnotations = [:]
         }
     }
 
@@ -202,6 +245,8 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private func configurePDFView() {
         pdfView.backgroundColor = BookDesign.paper
         pdfView.accessibilityIdentifier = "pdf-reader-view"
+        // 真实显示模式在文档打开后按页数决定（见 applyDefaultDisplayMode(pageCount:)）：
+        // >=200 页默认 pageVC 单页，小 PDF 连续；登录参数可强制单页。
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
         // 打开性能：减少首屏无谓的阴影/分页装饰与页间距重排。
@@ -217,11 +262,12 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private func openDocumentAndInstall() async {
         let loadStart = CFAbsoluteTimeGetCurrent()
         do {
-            let doc = try await PDFReaderDocumentLoader.open(url: documentURL)
+            let doc = try await PDFReaderDocumentLoader.open(url: documentURL, cancellation: openCancellation)
             logOpenTiming("PDFDocument.open(serialQueue)", since: loadStart)
             guard !Task.isCancelled, isViewLoaded else { return }
             install(document: doc)
         } catch is CancellationError {
+            logOpenTiming("open cancelled(since init)", since: openClock)
             return
         } catch {
             guard !Task.isCancelled else { return }
@@ -234,6 +280,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         let installStart = CFAbsoluteTimeGetCurrent()
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: documentURL.path)[.size] as? NSNumber)?.doubleValue ?? 0
         NSLog("PDF_OPEN_TIMING info pages=%d file=%.1fMB", doc.pageCount, fileSize / 1024 / 1024)
+        applyDefaultDisplayMode(pageCount: doc.pageCount)
         document = doc
         let setStart = CFAbsoluteTimeGetCurrent()
         pdfView.document = doc
@@ -250,6 +297,14 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         hideLoading()
         logOpenTiming("install done / 可交互(loading hidden)", since: installStart)
         logOpenTiming("TOTAL 可交互(since init)", since: openClock)
+        NSLog(
+            "PDF_OPEN_TIMING mode=%@ pages=%d threshold=%d forcedSingle=%@",
+            continuousScroll ? "continuous" : "singlePage",
+            doc.pageCount,
+            Self.largePDFPageThreshold,
+            Self.singlePageFirstExperiment ? "yes" : "no"
+        )
+        PDFMemoryProbe.log("afterInstall")
         // 观察首帧后主线程是否仍被 PDFKit 长时间占用（日志延迟出现即说明主线程被阻塞）。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self else { return }
@@ -258,6 +313,14 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             guard let self else { return }
             self.logOpenTiming("mainLoop 2.0s after interactive(since init)", since: self.openClock)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+            guard let self else { return }
+            self.logOpenTiming("mainLoop 5.0s after interactive(since init)", since: self.openClock)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { [weak self] in
+            guard let self else { return }
+            self.logOpenTiming("mainLoop 10.0s after interactive(since init)", since: self.openClock)
         }
         // 次要工作延后到首帧后：标注重建、书签 UI、页码/进度刷新。
         DispatchQueue.main.async { [weak self] in
@@ -269,6 +332,27 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
             self.logOpenTiming("post-first-frame(标注+书签+页码)", since: deferredStart)
             self.logOpenTiming("TOTAL 首帧后次要工作完成(since init)", since: self.openClock)
         }
+    }
+
+    /// 文档就绪后按页数选择默认显示模式：大 PDF 用 pageVC 单页（低内存/低 CPU），
+    /// 小 PDF 保持连续；`--pdf-single-page-first` 强制单页。本轮不持久化用户选择，
+    /// 页脚「单页/连续」仍可随时切换。
+    private func applyDefaultDisplayMode(pageCount: Int) {
+        let useSinglePage = Self.singlePageFirstExperiment || pageCount >= Self.largePDFPageThreshold
+        continuousScroll = !useSinglePage
+        if useSinglePage {
+            // PDFKit 要求先启用 page view controller，再在设置 document 后 autoScales 才会按页宽缩放。
+            pdfView.usePageViewController(true, withViewOptions: [
+                UIPageViewController.OptionsKey.interPageSpacing: 16
+            ])
+            pdfView.displayDirection = .horizontal
+            pdfView.displayMode = .singlePage
+        } else {
+            pdfView.usePageViewController(false, withViewOptions: nil)
+            pdfView.displayDirection = .vertical
+            pdfView.displayMode = .singlePageContinuous
+        }
+        updateModeButton()
     }
 
     private func configureLoadingView() {
@@ -2162,12 +2246,21 @@ private final class PDFHighlightPaletteController: UIViewController {
 /// 在 PDFKit 串行队列创建 PDFDocument（大幅 PDF 解析可能慢），完成后回主线程挂到 PDFView。
 /// PDFKit 线程约定：串行队列是唯一接触该 document 的后台线程；创建后不再在队列里访问它。
 private enum PDFReaderDocumentLoader {
-    static func open(url: URL) async throws -> PDFKit.PDFDocument {
+    static func open(url: URL, cancellation: PDFWorkCancellation) async throws -> PDFKit.PDFDocument {
         try await withCheckedThrowingContinuation { continuation in
             PDFKitWorkQueue.queue.async {
+                if cancellation.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
                 autoreleasepool {
                     guard let document = PDFKit.PDFDocument(url: url) else {
                         continuation.resume(throwing: LibraryError.invalid)
+                        return
+                    }
+                    if cancellation.isCancelled {
+                        // 阅读器已关闭：立即释放解析结果，避免继续占用大 PDF 的内存/CPU。
+                        continuation.resume(throwing: CancellationError())
                         return
                     }
                     guard !document.isLocked else {
@@ -2180,6 +2273,37 @@ private enum PDFReaderDocumentLoader {
                     }
                     continuation.resume(returning: document)
                 }
+            }
+        }
+    }
+}
+
+// MARK: - 510+ 页大 PDF 内存探测（QA 抓 PDF_OPEN_TIMING memory 用）
+
+private enum PDFMemoryProbe {
+    /// 当前进程 phys_footprint（与 Instruments/Xcode 内存口径接近，含 dirty 页）。
+    static func footprintMB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return -1 }
+        return Double(info.phys_footprint) / 1024 / 1024
+    }
+
+    static func log(_ label: String) {
+        NSLog("PDF_OPEN_TIMING memory %@ footprint=%.1fMB", label, footprintMB())
+    }
+
+    /// 阅读器移除后（不再持有 self）延时打点：验证 PDFKit/文档内存是否真正释放。
+    static func logAfterDismissal() {
+        log("dismiss")
+        for delay in [1.0, 5.0, 10.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                log("afterDismiss+\(Int(delay))s")
             }
         }
     }
