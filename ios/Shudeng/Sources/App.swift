@@ -206,7 +206,7 @@ final class ProfileController: UICollectionViewController {
     }
 
     private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.1"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.2"
     }
 
     private var selectedAppearance: UIUserInterfaceStyle {
@@ -404,7 +404,7 @@ private final class AboutController: UICollectionViewController {
     }
 
     private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.1"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.2"
     }
 
     override func numberOfSections(in collectionView: UICollectionView) -> Int { 2 }
