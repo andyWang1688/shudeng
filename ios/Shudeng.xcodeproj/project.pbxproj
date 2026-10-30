@@ -839,7 +839,7 @@
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
 				<string>5</string>
-				<key>ENABLE_TESTABILITY</key>
+				<key>DEPLOYMENT_POSTPROCESSING</key>
 				<string>YES</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
 				<string>YES</string>
@@ -857,6 +857,8 @@
 				<string>dev.shudeng.app</string>
 				<key>SDKROOT</key>
 				<string>iphoneos</string>
+				<key>STRIP_INSTALLED_PRODUCT</key>
+				<string>YES</string>
 				<key>SWIFT_VERSION</key>
 				<string>5.0</string>
 				<key>TARGETED_DEVICE_FAMILY</key>

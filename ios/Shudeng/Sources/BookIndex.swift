@@ -127,22 +127,39 @@ final class BookPreparation {
             return
         }
         if !rebuild, states[book.id]?.ready == true { return }
-        var state = pdfState(states[book.id] ?? BookPreparationState(), for: book)
-        state.preparing = true; state.failure = nil
-        states[book.id] = state
-        notify()
         let token = UUID(); tokens[book.id] = token
         jobs[book.id] = Task {
+            // 启动优化：磁盘索引已完成（total>0、completed==total）且语义资料就绪/扫描版不可检索时，
+            // 直接恢复终态，不再重跑 index.prepare 与 prepareVectors（升级 rebuild 仍走下面的重建流程）。
+            if !rebuild,
+               let saved = try? await index.state(bookID: book.id),
+               saved.total > 0,
+               saved.completed == saved.total,
+               saved.semanticReady || saved.textIndexUnavailable {
+                guard self.tokens[book.id] == token else { return }
+                var restored = self.pdfState(saved, for: book)
+                restored.preparing = false
+                restored.failure = nil
+                self.states[book.id] = restored
+                self.jobs[book.id] = nil
+                self.tokens[book.id] = nil
+                self.notify()
+                return
+            }
+            var state = self.pdfState(self.states[book.id] ?? BookPreparationState(), for: book)
+            state.preparing = true; state.failure = nil
+            self.states[book.id] = state
+            self.notify()
             do {
-                if var committed = try? await index.state(bookID: book.id) {
+                if var committed = try? await self.index.state(bookID: book.id) {
                     committed.preparing = true
-                    if tokens[book.id] == token { update(pdfState(committed, for: book), for: book.id) }
+                    if self.tokens[book.id] == token { self.update(self.pdfState(committed, for: book), for: book.id) }
                 }
-                try await index.prepare(bookID: book.id, file: file, rebuild: rebuild) { state in
+                try await self.index.prepare(bookID: book.id, file: file, rebuild: rebuild) { state in
                     if self.tokens[book.id] == token { self.update(self.pdfState(state, for: book), for: book.id) }
                 }
                 try Task.checkCancellation()
-                try await index.prepareVectors(bookID: book.id) { state in
+                try await self.index.prepareVectors(bookID: book.id) { state in
                     if self.tokens[book.id] == token { self.update(self.pdfState(state, for: book), for: book.id) }
                 }
             } catch is CancellationError {

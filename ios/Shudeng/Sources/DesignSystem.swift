@@ -759,35 +759,92 @@ final class BookCoverView: UIView {
 }
 
 /// Bounded, memory-only thumbnails; source books and catalogue format are unchanged.
+/// PDF 封面额外写磁盘 JPEG 缓存（Caches/covers/<bookID>.jpg），启动优先读盘，
+/// 避免每次启动/滚动都重新渲染 PDF 首页。
 @MainActor
 final class BookCoverStore {
+    private static let coverSize = CGSize(width: 320, height: 480)
+    private static let directory: URL? = {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        let dir = caches.appendingPathComponent("covers", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
     private let cache = NSCache<NSString, UIImage>()
     private var absent: Set<String> = []
     init() { cache.totalCostLimit = 24 * 1024 * 1024; cache.countLimit = 40 }
+
     func image(for book: Book, library: LibraryStore) async -> UIImage? {
         if let image = cache.object(forKey: book.id as NSString) { return image }
         guard !absent.contains(book.id), library.sourceAvailable(for: book.id) else { return nil }
         if book.resolvedFormat == .pdf {
-            // PDF 没有 EPUB 封面资源：用首页缩略图生成封面，和 EPUB 一样进现有缓存。
-            let image = await PDFCoverLoader.cover(for: library.fileURL(for: book), maxSize: CGSize(width: 480, height: 720))
-            if let image { cache.setObject(image, forKey: book.id as NSString, cost: Int(image.size.width * image.size.height * 4)) }
-            else { absent.insert(book.id) }
+            // 优先磁盘封面（上次生成过）；没有再按需渲染首页并回写缓存。
+            let diskStart = CFAbsoluteTimeGetCurrent()
+            if let image = Self.readCover(bookID: book.id) {
+                NSLog("PDF_OPEN_TIMING cover.diskHit %.1fms", (CFAbsoluteTimeGetCurrent() - diskStart) * 1000)
+                store(image, for: book.id)
+                return image
+            }
+            let image = await PDFCoverLoader.cover(for: library.fileURL(for: book), maxSize: Self.coverSize)
+            if let image {
+                store(image, for: book.id)
+                Self.writeCover(image, bookID: book.id)
+            } else {
+                absent.insert(book.id)
+            }
             return image
         }
         do {
             let publication = try await library.open(book)
             let image = try await publication.coverFitting(maxSize: CGSize(width: 480, height: 720)).get()
-            if let image { cache.setObject(image, forKey: book.id as NSString, cost: Int(image.size.width * image.size.height * 4)) }
+            if let image { store(image, for: book.id) }
             else { absent.insert(book.id) }
             return image
         } catch { return nil }
+    }
+
+    /// 清理已删除书籍遗留的磁盘封面（启动后延迟调用一次，覆盖 recoverRemovals 路径）。
+    func purgeOrphanedCovers(keeping bookIDs: Set<String>) {
+        guard let directory = Self.directory,
+              let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+        for url in files where url.pathExtension == "jpg" {
+            let id = url.deletingPathExtension().lastPathComponent
+            if !bookIDs.contains(id) { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    /// 删书后清理内存 + 磁盘封面。
+    func removeCover(forBookID id: String) {
+        cache.removeObject(forKey: id as NSString)
+        absent.remove(id)
+        if let url = Self.coverURL(for: id) { try? FileManager.default.removeItem(at: url) }
+    }
+
+    private func store(_ image: UIImage, for id: String) {
+        cache.setObject(image, forKey: id as NSString, cost: Int(image.size.width * image.size.height * 4))
+    }
+
+    private static func coverURL(for id: String) -> URL? {
+        directory?.appendingPathComponent(id + ".jpg")
+    }
+
+    private static func readCover(bookID: String) -> UIImage? {
+        guard let url = coverURL(for: bookID), FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return UIImage(contentsOfFile: url.path)
+    }
+
+    private static func writeCover(_ image: UIImage, bookID: String) {
+        guard let url = coverURL(for: bookID), let data = image.jpegData(compressionQuality: 0.8) else { return }
+        try? data.write(to: url, options: .atomic)
     }
 }
 
 /// PDF 封面：在 PDFKit 串行队列上渲染首页缩略图（避免 PDFKit 在主线程/随机线程渲染大文档）。
 private enum PDFCoverLoader {
     static func cover(for url: URL, maxSize: CGSize) async -> UIImage? {
-        await withCheckedContinuation { continuation in
+        let start = CFAbsoluteTimeGetCurrent()
+        let image: UIImage? = await withCheckedContinuation { continuation in
             PDFKitWorkQueue.queue.async {
                 autoreleasepool {
                     guard let document = PDFKit.PDFDocument(url: url), let page = document.page(at: 0) else {
@@ -799,6 +856,9 @@ private enum PDFCoverLoader {
                 }
             }
         }
+        // 封面渲染发生在新书首次可见/无磁盘缓存时；与 PDF_OPEN_TIMING 一起便于归因打开耗时。
+        NSLog("PDF_OPEN_TIMING cover.generate %.1fms", (CFAbsoluteTimeGetCurrent() - start) * 1000)
+        return image
     }
 }
 

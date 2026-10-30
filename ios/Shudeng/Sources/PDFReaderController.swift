@@ -35,7 +35,16 @@ extension UIView {
 final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private let book: Book
     private let library: LibraryStore
-    private let document: PDFKit.PDFDocument
+    /// 打开性能：PDFDocument 在串行队列异步创建，回主线程后再挂到 PDFView。
+    private var document: PDFKit.PDFDocument?
+    private let documentURL: URL
+    private var openTask: Task<Void, Never>?
+    private let openClock = CFAbsoluteTimeGetCurrent()
+    private let loadingView = UIView()
+    private let loadingLabel = BookDesign.label(nil, font: BookType.subhead, colour: BookDesign.ink2)
+    private let loadingSpinner = UIActivityIndicatorView(style: .medium)
+    private var layoutPassCount = 0
+    private var firstPageChangeLogged = false
     private let pdfView = ImmersivePDFView()
     private let toolbar = UIView()
     private let footer = UIView()
@@ -79,27 +88,29 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         guard book.resolvedFormat == .pdf else { throw LibraryError.invalid }
         let url = library.fileURL(for: book)
         guard FileManager.default.fileExists(atPath: url.path) else { throw LibraryError.missing }
-        guard let document = PDFKit.PDFDocument(url: url) else { throw LibraryError.invalid }
-        guard !document.isLocked else { throw LibraryError.unsupported }
-        guard document.pageCount > 0 else { throw LibraryError.invalid }
+        // 这里只做轻量校验：PDFDocument 创建可能很慢（大 PDF），放到串行队列异步打开，
+        // 先让阅读器以纸白「正在打开」占位出现，避免点书后主线程长时间空白。
         self.book = book
         self.library = library
-        self.document = document
+        self.documentURL = url
         targetPage = target?.pdfPageNumber
         super.init(nibName: nil, bundle: nil)
         // 全屏阅读器自行控制状态栏隐藏（沉浸式）。
         modalPresentationCapturesStatusBarAppearance = true
+        logOpenTiming("init", since: openClock)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     deinit {
+        openTask?.cancel()
         NotificationCenter.default.removeObserver(self)
         if let notesObserver { NotificationCenter.default.removeObserver(notesObserver) }
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        let viewDidLoadStart = CFAbsoluteTimeGetCurrent()
         view.backgroundColor = BookDesign.paper
         view.accessibilityIdentifier = "pdf-reader"
         configurePDFView()
@@ -107,8 +118,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         configureFooter()
         configureBookmarkRibbon()
         configureLayout()
-        updatePageIndicator()
-        refreshBookmarkUI(animated: false)
+        configureLoadingView()
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(pageChanged),
@@ -117,6 +127,12 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         )
         configureNoteAnnotations()
         configureSelectionInteraction()
+        logOpenTiming("viewDidLoad(不含打开文档)", since: viewDidLoadStart)
+        // 异步打开 PDF：占位先出现，文档就绪后再挂载/恢复页码/首帧，之后才做标注与书签等次要工作。
+        openTask = Task { [weak self] in
+            guard let self else { return }
+            await self.openDocumentAndInstall()
+        }
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -128,16 +144,20 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        logOpenTiming("viewDidAppear(since init)", since: openClock)
         pdfView.disableAutomaticContentInsetAdjustment()
         feedbackGenerator.prepare()
         restoreProgressIfNeeded()
-        refreshBookmarkUI(animated: false)
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // 内部滚动视图可能延迟创建；布局时补关自动 inset（幂等，不改动 PDFKit 自己的 inset 数值）。
         pdfView.disableAutomaticContentInsetAdjustment()
+        layoutPassCount += 1
+        if layoutPassCount <= 5 {
+            logOpenTiming("viewDidLayoutSubviews #\(layoutPassCount) (since init)", since: openClock)
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -150,6 +170,11 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         super.viewWillDisappear(animated)
         clearActiveSelection()
         flushProgress()
+        if document == nil {
+            // 加载中就被关闭：取消打开任务，避免加载完成后对已关闭的阅读器继续做挂载工作。
+            openTask?.cancel()
+            openTask = nil
+        }
     }
 
     private func closeAccessibilityLabel() -> String {
@@ -179,11 +204,120 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         pdfView.accessibilityIdentifier = "pdf-reader-view"
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
+        // 打开性能：减少首屏无谓的阴影/分页装饰与页间距重排。
         pdfView.pageShadowsEnabled = false
-        pdfView.document = document
-        pdfView.autoScales = true
+        pdfView.displaysPageBreaks = false
+        pdfView.pageBreakMargins = .zero
         pdfView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(pdfView)
+    }
+
+    // MARK: - 打开文档（性能：异步 + 分段计时）
+
+    private func openDocumentAndInstall() async {
+        let loadStart = CFAbsoluteTimeGetCurrent()
+        do {
+            let doc = try await PDFReaderDocumentLoader.open(url: documentURL)
+            logOpenTiming("PDFDocument.open(serialQueue)", since: loadStart)
+            guard !Task.isCancelled, isViewLoaded else { return }
+            install(document: doc)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            presentOpenFailure(error)
+        }
+    }
+
+    /// 文档就绪后回主线程挂载：先恢复页码，再去掉 loading 让用户可交互；标注/书签延后到下一帧。
+    private func install(document doc: PDFKit.PDFDocument) {
+        let installStart = CFAbsoluteTimeGetCurrent()
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: documentURL.path)[.size] as? NSNumber)?.doubleValue ?? 0
+        NSLog("PDF_OPEN_TIMING info pages=%d file=%.1fMB", doc.pageCount, fileSize / 1024 / 1024)
+        document = doc
+        let setStart = CFAbsoluteTimeGetCurrent()
+        pdfView.document = doc
+        logOpenTiming("pdfView.document=", since: setStart)
+        let scaleStart = CFAbsoluteTimeGetCurrent()
+        pdfView.autoScales = true
+        logOpenTiming("pdfView.autoScales", since: scaleStart)
+        let restoreStart = CFAbsoluteTimeGetCurrent()
+        restoreProgressIfNeeded()
+        logOpenTiming("restoreProgressIfNeeded", since: restoreStart)
+        let layoutStart = CFAbsoluteTimeGetCurrent()
+        view.layoutIfNeeded()
+        logOpenTiming("first layoutIfNeeded(含首屏渲染)", since: layoutStart)
+        hideLoading()
+        logOpenTiming("install done / 可交互(loading hidden)", since: installStart)
+        logOpenTiming("TOTAL 可交互(since init)", since: openClock)
+        // 观察首帧后主线程是否仍被 PDFKit 长时间占用（日志延迟出现即说明主线程被阻塞）。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            self.logOpenTiming("mainLoop 0.5s after interactive(since init)", since: self.openClock)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self else { return }
+            self.logOpenTiming("mainLoop 2.0s after interactive(since init)", since: self.openClock)
+        }
+        // 次要工作延后到首帧后：标注重建、书签 UI、页码/进度刷新。
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let deferredStart = CFAbsoluteTimeGetCurrent()
+            self.updatePageIndicator()
+            self.refreshBookmarkUI(animated: false)
+            self.renderNoteAnnotations()
+            self.logOpenTiming("post-first-frame(标注+书签+页码)", since: deferredStart)
+            self.logOpenTiming("TOTAL 首帧后次要工作完成(since init)", since: self.openClock)
+        }
+    }
+
+    private func configureLoadingView() {
+        loadingView.backgroundColor = BookDesign.paper
+        loadingView.accessibilityIdentifier = "pdf-reader-loading"
+        loadingView.accessibilityViewIsModal = true
+        loadingView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(loadingView)
+        loadingLabel.text = "正在打开这本书…"
+        loadingLabel.textAlignment = .center
+        loadingSpinner.color = BookDesign.ink3
+        loadingSpinner.startAnimating()
+        for child in [loadingLabel, loadingSpinner] as [UIView] {
+            child.translatesAutoresizingMaskIntoConstraints = false
+            loadingView.addSubview(child)
+        }
+        NSLayoutConstraint.activate([
+            loadingView.topAnchor.constraint(equalTo: view.topAnchor),
+            loadingView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            loadingView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            loadingView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            loadingSpinner.centerXAnchor.constraint(equalTo: loadingView.centerXAnchor),
+            loadingSpinner.centerYAnchor.constraint(equalTo: loadingView.centerYAnchor, constant: -18),
+            loadingLabel.topAnchor.constraint(equalTo: loadingSpinner.bottomAnchor, constant: 12),
+            loadingLabel.centerXAnchor.constraint(equalTo: loadingView.centerXAnchor)
+        ])
+    }
+
+    private func hideLoading() {
+        loadingSpinner.stopAnimating()
+        loadingView.isHidden = true
+        loadingView.removeFromSuperview()
+    }
+
+    private func presentOpenFailure(_ error: Error) {
+        loadingSpinner.stopAnimating()
+        loadingLabel.text = "无法打开这本书"
+        guard view.window != nil, presentedViewController == nil else { return }
+        let alert = BookAlertController(title: "无法打开这本书", message: error.localizedDescription, preferredStyle: .alert)
+        alert.addAction(BookAlertAction(title: "知道了", style: .cancel) { [weak self] _ in
+            self?.dismiss(animated: true)
+        })
+        present(alert, animated: true)
+    }
+
+    /// 打开流程分段计时：`NSLog` 在真机/模拟器 Console 可见（QA 抓日志用，阶段完成可移除）。
+    private func logOpenTiming(_ label: String, since start: CFAbsoluteTime) {
+        let milliseconds = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        NSLog("PDF_OPEN_TIMING %@ %.1fms", label, milliseconds)
     }
 
     // MARK: - 工具栏（返回 / 书名 / 书签 / 目录 / 说明）
@@ -443,11 +577,11 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     // MARK: - 页码与进度
 
     private func currentPageNumber() -> Int {
-        guard let page = pdfView.currentPage else { return max(1, lastKnownPage) }
+        guard let document = document, let page = pdfView.currentPage else { return max(1, lastKnownPage) }
         return min(max(document.index(for: page) + 1, 1), document.pageCount)
     }
 
-    private var pageCount: Int { document.pageCount }
+    private var pageCount: Int { document?.pageCount ?? 0 }
 
     private func totalProgression(for page: Int) -> Double {
         pageCount > 1 ? Double(page - 1) / Double(pageCount - 1) : 1
@@ -469,7 +603,8 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func restoreProgressIfNeeded() {
-        guard !didRestoreProgress else { return }
+        // 文档未就绪时不标记完成：viewDidAppear 可能早于异步打开，等 install 后再恢复页码。
+        guard document != nil, !didRestoreProgress else { return }
         didRestoreProgress = true
         // 恢复前的初始页回调不能写回书架（避免把「默认第 1 页」覆盖已保存进度）。
         pendingProgressPage = nil
@@ -483,7 +618,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
 
     private func goToPage(_ number: Int) {
         let page = min(max(number, 1), pageCount)
-        guard let target = document.page(at: page - 1) else { return }
+        guard let document = document, let target = document.page(at: page - 1) else { return }
         pdfView.go(to: target)
         // 切换显示模式后 PDFView 可能到下一轮布局才应用目标页。
         DispatchQueue.main.async { [weak self] in
@@ -493,6 +628,10 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     @objc private func pageChanged() {
+        if !firstPageChangeLogged, document != nil {
+            firstPageChangeLogged = true
+            logOpenTiming("first PDFViewPageChanged", since: openClock)
+        }
         updatePageIndicator()
         scheduleProgressWrite()
         refreshBookmarkUI()
@@ -569,7 +708,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func firstLine(ofPage page: Int) -> String {
-        guard let pdfPage = document.page(at: page - 1), let text = pdfPage.string else { return "" }
+        guard let document = document, let pdfPage = document.page(at: page - 1), let text = pdfPage.string else { return "" }
         let line = text.components(separatedBy: .newlines)
             .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
         // 摘要只做列表展示，限制长度避免把整页塞进目录 JSON。
@@ -660,6 +799,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     // MARK: - 目录 / 书签面板
 
     @objc private func openContents() {
+        guard let document = document else { return }
         let panel = PDFContentsController(
             book: book,
             library: library,
@@ -679,7 +819,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     // MARK: - PDF 文字标注（高亮 / 笔记）
 
     private func configureNoteAnnotations() {
-        renderNoteAnnotations()
+        // 标注重建延后到文档就绪/首帧之后（见 install(document:)），避免阻塞打开。
         notesObserver = NotificationCenter.default.addObserver(
             forName: LibraryStore.changed,
             object: library,
@@ -742,6 +882,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     /// 按 BookNote 重建 PDFAnnotation：高亮 → .highlight；笔记（body 非空）→ .underline + .text 图标。
     /// 先移除本控制器添加过的 annotation，避免重复；标注未变化时跳过。
     private func renderNoteAnnotations() {
+        guard let document = document else { return }
         let signature = noteSignature()
         guard signature != notesSignature || !didRenderAnnotations else { return }
         notesSignature = signature
@@ -935,7 +1076,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     // MARK: 选中文字 → 高亮调色盘（创建）
 
     private func presentHighlightPalette(for selection: PDFSelection) {
-        guard presentedViewController == nil else { return }
+        guard presentedViewController == nil, let document = document else { return }
         guard let made = PDFNoteGeometry.make(from: selection, document: document) else {
             clearActiveSelection()
             return
@@ -971,7 +1112,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     // MARK: 选中文字 → 写笔记
 
     private func beginNote(for selection: PDFSelection) {
-        guard presentedViewController == nil else { return }
+        guard presentedViewController == nil, let document = document else { return }
         guard let made = PDFNoteGeometry.make(from: selection, document: document) else {
             clearActiveSelection()
             return
@@ -1050,7 +1191,8 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private func askSelection(_ selection: PDFSelection) {
         guard presentedViewController == nil else { return }
         guard hasSearchableText else { showNoTextAlert(); return }
-        guard !library.questions.loadFailed, library.sourceAvailable(for: book.id),
+        guard let document = document,
+              !library.questions.loadFailed, library.sourceAvailable(for: book.id),
               let made = PDFNoteGeometry.make(from: selection, document: document) else {
             clearActiveSelection()
             return
@@ -1121,7 +1263,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func note(at point: CGPoint) -> BookNote? {
-        guard let page = pdfView.page(for: point, nearest: false) else { return nil }
+        guard let document = document, let page = pdfView.page(for: point, nearest: false) else { return nil }
         let pageNumber = document.index(for: page) + 1
         let pagePoint = pdfView.convert(point, to: page)
         let pageBounds = page.bounds(for: .cropBox)
@@ -2011,6 +2153,34 @@ private final class PDFHighlightPaletteController: UIViewController {
             self.card.alpha = 0
         }) { _ in
             self.dismiss(animated: false) { action() }
+        }
+    }
+}
+
+// MARK: - PDF 文档异步打开
+
+/// 在 PDFKit 串行队列创建 PDFDocument（大幅 PDF 解析可能慢），完成后回主线程挂到 PDFView。
+/// PDFKit 线程约定：串行队列是唯一接触该 document 的后台线程；创建后不再在队列里访问它。
+private enum PDFReaderDocumentLoader {
+    static func open(url: URL) async throws -> PDFKit.PDFDocument {
+        try await withCheckedThrowingContinuation { continuation in
+            PDFKitWorkQueue.queue.async {
+                autoreleasepool {
+                    guard let document = PDFKit.PDFDocument(url: url) else {
+                        continuation.resume(throwing: LibraryError.invalid)
+                        return
+                    }
+                    guard !document.isLocked else {
+                        continuation.resume(throwing: LibraryError.unsupported)
+                        return
+                    }
+                    guard document.pageCount > 0 else {
+                        continuation.resume(throwing: LibraryError.invalid)
+                        return
+                    }
+                    continuation.resume(returning: document)
+                }
+            }
         }
     }
 }

@@ -45,8 +45,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 #endif
             let secrets = KeychainSecrets()
             let library = try LibraryStore(root: root, secrets: secrets)
-            library.prepareBooks()
             window.rootViewController = makeApplicationTabs(library: library, root: root, secrets: secrets)
+            // 轻量化：首屏渲染后再启动索引准备，避免启动时与首屏/封面渲染抢 CPU（准备过程不阻塞阅读）。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                library.prepareBooks()
+            }
         } catch {
             let controller = UIViewController()
             controller.view.backgroundColor = BookDesign.paper
@@ -621,6 +624,7 @@ private struct ShelfPresentation {
 final class ShelfController: UICollectionViewController, UIDocumentPickerDelegate, UISearchBarDelegate {
     private let library: LibraryStore
     private let covers = BookCoverStore()
+    private var didPurgeCoverCache = false
     private let searchBar = UISearchBar()
     private weak var visibleHeader: ShelfPageHeader?
     private var latestPresentation: ShelfPresentation?
@@ -720,6 +724,14 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(true, animated: false)
         refresh()
+        if !didPurgeCoverCache {
+            didPurgeCoverCache = true
+            // 延迟到 recoverRemovals/prepareBooks 完成后清理孤儿封面（覆盖启动时续删的书籍）。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self else { return }
+                self.covers.purgeOrphanedCovers(keeping: Set(self.library.books.filter { $0.removal == nil }.map(\.id)))
+            }
+        }
     }
 
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -966,6 +978,7 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
         searchTask?.cancel()
         searchBar.resignFirstResponder()
         busy = true
+        let openBookStart = CFAbsoluteTimeGetCurrent()
         Task {
             defer { busy = false }
             do {
@@ -973,6 +986,7 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
                 if book.resolvedFormat == .pdf {
                     // PDF Spike：正文由系统 PDFKit 渲染；EPUB 仍走 Readium。
                     reader = try PDFReaderController(book: book, library: library)
+                    NSLog("PDF_OPEN_TIMING shelf.readerCreated %.1fms", (CFAbsoluteTimeGetCurrent() - openBookStart) * 1000)
                 } else {
                     let publication = try await library.open(book)
                     reader = try ReaderController(book: book, publication: publication, library: library)
@@ -980,6 +994,7 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
                 UserDefaults.standard.set(book.id, forKey: "last-read-" + library.root.path)
                 reader.modalPresentationStyle = .fullScreen
                 present(reader, animated: true)
+                NSLog("PDF_OPEN_TIMING shelf.presented(since tap) %.1fms", (CFAbsoluteTimeGetCurrent() - openBookStart) * 1000)
             } catch {
                 message(title: "无法打开书籍", text: error.localizedDescription)
             }
@@ -1163,6 +1178,7 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
             defer { busy = false; refresh() }
             do {
                 try await library.removeBook(id, deleteRecords: deleteRecords)
+                covers.removeCover(forBookID: id)
             } catch {
                 let alert = BookAlertController(
                     title: "移除尚未完成",
