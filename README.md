@@ -1,6 +1,6 @@
 # 书灯 · Shudeng
 
-一盏照书的灯。读书时遇到不懂的地方，选中文字直接问；回答先解释，再给出书里的原文依据，点一下能回到那一页。
+一盏照书的灯，AI 照亮你读不懂的地方。
 
 [![使用文档](https://img.shields.io/badge/%E4%BD%BF%E7%94%A8%E6%96%87%E6%A1%A3-5B7DB1)](https://andywang1688.github.io/shudeng/)
 
