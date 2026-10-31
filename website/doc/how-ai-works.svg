@@ -6,7 +6,7 @@
     <text x="123" y="106" text-anchor="middle" font-size="14" fill="#6e665c">问题指向这本书</text>
     <rect x="268" y="58" width="210" height="64" rx="12" fill="#fffaf0" stroke="#c9b998"/>
     <text x="373" y="83" text-anchor="middle">② 在本机查找原文</text>
-    <text x="373" y="106" text-anchor="middle" font-size="14" fill="#6e665c">关键词 + 语义，只取少量片段</text>
+    <text x="373" y="106" text-anchor="middle" font-size="14" fill="#6e665c">关键词 + 语义，最多 8 段</text>
     <rect x="528" y="58" width="210" height="64" rx="12" fill="#fffaf0" stroke="#c9b998"/>
     <text x="633" y="83" text-anchor="middle">③ 发给 AI 服务</text>
     <text x="633" y="106" text-anchor="middle" font-size="14" fill="#6e665c">问题 + 片段 + 必要上下文</text>
