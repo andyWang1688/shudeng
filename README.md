@@ -4,7 +4,7 @@
 
 [![使用文档](https://img.shields.io/badge/%E4%BD%BF%E7%94%A8%E6%96%87%E6%A1%A3-5B7DB1)](https://andywang1688.github.io/shudeng/)
 
-最新版 v0.4.2：安装包约 32MB、启动更快、大 PDF 默认单页；离线语义资料首次使用时下载。[下载](https://github.com/andyWang1688/shudeng/releases/tag/v0.4.2) · [更新说明](docs/releases/v0.4.2.md)
+最新版 v0.4.3：真机与全机型安全区/横屏/大字号修复；PDF 阅读方式与 EPUB 统一为分页/滚动。[下载](https://github.com/andyWang1688/shudeng/releases/tag/v0.4.3) · [更新说明](docs/releases/v0.4.3.md)
 
 ## 安装
 
