@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 180" role="img" aria-label="书灯阅读问答流程">
+  <rect width="960" height="180" rx="18" fill="#f7f3eb"/>
+  <g font-family="Songti SC, STSong, serif" font-size="17" fill="#2c2a26">
+    <rect x="28" y="58" width="190" height="64" rx="12" fill="#fffaf0" stroke="#c9b998"/>
+    <text x="123" y="83" text-anchor="middle">① 你选中文字/提问</text>
+    <text x="123" y="106" text-anchor="middle" font-size="14" fill="#6e665c">问题指向这本书</text>
+    <rect x="268" y="58" width="210" height="64" rx="12" fill="#fffaf0" stroke="#c9b998"/>
+    <text x="373" y="83" text-anchor="middle">② 在本机查找原文</text>
+    <text x="373" y="106" text-anchor="middle" font-size="14" fill="#6e665c">关键词 + 语义，只取少量片段</text>
+    <rect x="528" y="58" width="210" height="64" rx="12" fill="#fffaf0" stroke="#c9b998"/>
+    <text x="633" y="83" text-anchor="middle">③ 发给 AI 服务</text>
+    <text x="633" y="106" text-anchor="middle" font-size="14" fill="#6e665c">问题 + 片段 + 必要上下文</text>
+    <rect x="788" y="58" width="144" height="64" rx="12" fill="#fffaf0" stroke="#c9b998"/>
+    <text x="860" y="83" text-anchor="middle">④ 回答 + 引用</text>
+    <text x="860" y="106" text-anchor="middle" font-size="14" fill="#6e665c">核对后保存</text>
+    <g stroke="#b1873f" stroke-width="2" fill="none">
+      <path d="M218 90h44"/><path d="M478 90h44"/><path d="M738 90h44"/>
+      <path d="M250 83l-7 7 7 7"/><path d="M510 83l-7 7 7 7"/><path d="M770 83l-7 7 7 7"/>
+    </g>
+  </g>
+</svg>

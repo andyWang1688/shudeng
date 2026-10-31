@@ -27,6 +27,7 @@ export default defineConfig({
           { text: '阅读', link: '/reading' },
           { text: '标注与笔记', link: '/annotations' },
           { text: '阅读问答', link: '/reading-qa' },
+          { text: '阅读问答是怎么工作的', link: '/how-reading-ai-works' },
           { text: 'AI 服务', link: '/ai-service' }
         ]
       },

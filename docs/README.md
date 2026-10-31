@@ -2,7 +2,7 @@
 
 书灯是一款以阅读为中心的个人阅读应用：读者遇到不懂的内容，可以直接提问、查看书内依据，并留下能继续讨论的问答记录。
 
-**当前版本：v0.4.5。** 下载、安装、更新内容和验证边界见[新版说明](releases/v0.4.5.md)；[首版说明](releases/v0.1.0.md)保留历史证据。当前提供 Apple Silicon 的 iOS 模拟器包，真机与商店分发尚未验证。
+**当前版本：v0.4.5。** 下载、安装、更新内容和验证边界见[新版说明](releases/v0.4.5.md)；[首版说明](releases/v0.1.0.md)保留历史证据。当前提供 Apple Silicon 的 iOS 模拟器包；真机已用个人 Apple ID 签名安装启动验证，商店分发尚未验证。
 
 ## 从这里开始
 
@@ -29,7 +29,7 @@
 
 | 文档 | 内容与状态 |
 | --- | --- |
-| [阅读问答设计](reading-ai-design.md) | 当前有效：内置 multilingual MiniLM、本地向量与关键词候选合并、一次最终生成；[实施与验收 #21](https://github.com/andyWang1688/shudeng/issues/21) |
+| [阅读问答设计](reading-ai-design.md) | 当前有效：本地 multilingual MiniLM、本地向量与关键词候选合并、一次最终生成；模型作为离线语义资料按需下载，见 [ADR-0018](adr/0018-lightweight-model-and-large-pdf.md)；[实施与验收 #21](https://github.com/andyWang1688/shudeng/issues/21) |
 | [问答架构与开源项目对照](reading-ai-comparison.md) | 历史研究：当前只借鉴本地混合思路；旧补查等建议不属于首发要求 |
 | [iPhone 本地检索候选](ios-rag-options.md) | 历史研究：模型、存储和中文检索的资料核验，不代表当前选型或验收结果 |
 
@@ -60,6 +60,12 @@
 | [移除“仅已读”](adr/0011-remove-only-read-scope.md) | 当前有效：所有问答参考当前整本书，不再保存阅读范围元数据 |
 | [AI 发送说明在配置时确认](adr/0012-confirm-ai-send-scope-on-setup.md) | 当前有效：保存或更换服务时提示，普通问答不逐次弹窗 |
 | [固定正文与覆盖式阅读控件](adr/0013-fixed-reading-viewport-overlay-controls.md) | 当前有效：正文始终满屏，控件淡入淡出，点击不重新分页；取代 ADR-0010 的阅读控件显隐方式 |
+| [系统列表组件](adr/0014-system-list-components.md) | 当前有效：笔记、对话历史、设置等使用系统列表与 diffable snapshots；见 v0.3.0 |
+| [iOS 26 导航栏外观](adr/0015-ios26-navigation-bar-appearance.md) | 当前有效：透明 scroll-edge + 延迟滚动修正，修复搜索取消后大标题消失 |
+| [标注信息架构](adr/0016-annotations-information-architecture.md) | 当前有效：高亮与笔记合并为笔记列表；书签留在阅读器 |
+| [PDF 支持](adr/0017-pdf-support.md) | 当前有效：PDF 阅读、页级书签/搜索/标注与页级 AI 引用；扫描版只读 |
+| [轻量化与离线语义资料](adr/0018-lightweight-model-and-large-pdf.md) | 当前有效：Release 不内置模型，改为按需下载；大 PDF 默认单页；Release strip |
+
 
 ## 怎样阅读文档里的承诺
 
