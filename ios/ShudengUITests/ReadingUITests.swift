@@ -1655,7 +1655,7 @@ extension ReadingUITests {
         attachDesignSurface("pdf-page-1-continuous-375-light", app)
 
         // 切到单页分页并左滑翻到第 2 页。
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.5)
         pdfView.swipeLeft()
         XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10), "左滑应翻到第 2 页")
@@ -2043,7 +2043,7 @@ extension ReadingUITests {
         XCTAssertTrue(bookCell.waitForExistence(timeout: 10))
         bookCell.tap()
         XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.5)
         app.otherElements["pdf-reader-view"].swipeLeft()
         XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
@@ -2161,7 +2161,7 @@ extension ReadingUITests {
         XCTAssertTrue(cell.waitForExistence(timeout: 10))
         cell.tap()
         XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.5)
         app.otherElements["pdf-reader-view"].swipeLeft()
         XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
@@ -2222,7 +2222,7 @@ extension ReadingUITests {
         XCTAssertTrue(cell.waitForExistence(timeout: 10))
         cell.tap()
         XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.5)
         app.otherElements["pdf-reader-view"].swipeLeft()
         XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
@@ -2297,7 +2297,7 @@ extension ReadingUITests {
         XCTAssertTrue(cell.waitForExistence(timeout: 10))
         cell.tap()
         XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.5)
         app.otherElements["pdf-reader-view"].swipeLeft()
         XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
@@ -2406,7 +2406,7 @@ extension ReadingUITests {
         cell.tap()
         XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["pdf-reader-mode"].exists, "单页/连续切换仍在页脚且 id 不变")
+        XCTAssertTrue(app.buttons["pdf-reader-settings"].exists, "阅读设置入口应在顶栏")
 
         // 第 1 页加书签 → 丝带出现。
         let toggle = app.buttons["pdf-bookmark-toggle"]
@@ -2428,7 +2428,7 @@ extension ReadingUITests {
         XCTAssertEqual(toggle.value as? String, "此页已有书签")
 
         // 切单页翻到第 2 页：第 1 页丝带消失。
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.5)
         app.otherElements["pdf-reader-view"].swipeLeft()
         XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
@@ -2927,6 +2927,22 @@ extension ReadingUITests {
         XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 15))
     }
 
+    /// task-89：PDF 阅读方式改为顶栏「阅读设置」sheet；scroll=true 选滚动，false 选分页。
+    private func setPDFReadingMode(_ app: XCUIApplication, scroll: Bool) {
+        let settings = app.buttons["pdf-reader-settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10), "应存在阅读设置入口")
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["阅读设置"].waitForExistence(timeout: 10))
+        let mode = app.segmentedControls["pdf-reading-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        mode.buttons[scroll ? "滚动" : "分页"].tap()
+        let done = app.buttons["pdf-reading-settings-done"].exists
+            ? app.buttons["pdf-reading-settings-done"] : app.buttons["完成"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        done.tap()
+        XCTAssertTrue(app.navigationBars["阅读设置"].waitForNonExistence(timeout: 5))
+    }
+
     private func registerPDFFinalLoopbackAI(_ app: XCUIApplication, address: String, model: String) {
         app.buttons["tab-profile"].tap()
         let profileList = app.collectionViews["profile-list"]
@@ -3002,12 +3018,11 @@ extension ReadingUITests {
     private func assertPDFFooterNotOverlapping(_ app: XCUIApplication, label: String) {
         let ask = app.buttons["pdf-reader-ask"]
         let page = app.staticTexts["pdf-reader-page"]
-        let mode = app.buttons["pdf-reader-mode"]
-        XCTAssertTrue(ask.exists && page.exists && mode.exists, "\(label)：页脚三要素应存在")
+        let settings = app.buttons["pdf-reader-settings"]
+        XCTAssertTrue(ask.exists && page.exists && settings.exists, "\(label)：页脚问书灯/页码与顶栏设置入口应存在")
         XCTAssertFalse(ask.frame.intersects(page.frame), "\(label)：问书灯与页码重叠 ask=\(ask.frame) page=\(page.frame)")
-        XCTAssertFalse(page.frame.intersects(mode.frame), "\(label)：页码与模式重叠 page=\(page.frame) mode=\(mode.frame)")
         XCTAssertGreaterThanOrEqual(ask.frame.minX, 0)
-        XCTAssertLessThanOrEqual(mode.frame.maxX, app.frame.maxX + 0.5)
+        XCTAssertLessThanOrEqual(settings.frame.maxX, app.frame.maxX + 0.5)
     }
 
     func testPDFFinalDarkReaderSurfaces() throws {
@@ -3031,7 +3046,7 @@ extension ReadingUITests {
         XCTAssertTrue(palette.waitForNonExistence(timeout: 5))
 
         // 第 2 页笔记 → 深色笔记编辑器。
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.5)
         app.otherElements["pdf-reader-view"].swipeLeft()
         XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
@@ -3106,7 +3121,7 @@ extension ReadingUITests {
         XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
         assertPDFFooterNotOverlapping(app, label: "横屏连续")
         attachDesignSurface("pdf-final1-landscape-reader-667x375", app)
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.5)
         assertPDFFooterNotOverlapping(app, label: "横屏单页")
         attachDesignSurface("pdf-final1-landscape-single-page-667x375", app)
@@ -3279,7 +3294,7 @@ extension ReadingUITests {
         app.launch()
         openPDFFixture(app)
         // 先把阅读进度推到第 2 页并关闭（关闭 flush 立即落盘）。
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.5)
         app.otherElements["pdf-reader-view"].swipeLeft()
         XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10))
@@ -3695,7 +3710,7 @@ extension ReadingUITests {
         XCTAssertTrue(app.buttons["pdf-bookmark-ribbon"].waitForNonExistence(timeout: 3))
 
         // 单页模式同样：frame 不变、可隐藏/恢复。
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.6)
         let singleFrame = pdfView.frame
         blankTap.tap()
@@ -3794,7 +3809,7 @@ extension ReadingUITests {
         attachDesignSurface("immersive-restored-375", app)
 
         // 单页模式：隐藏/恢复各一次。
-        app.buttons["pdf-reader-mode"].tap()
+        setPDFReadingMode(app, scroll: false)
         Thread.sleep(forTimeInterval: 0.6)
         blankTap.tap()
         Thread.sleep(forTimeInterval: 0.5)
@@ -6344,5 +6359,56 @@ extension ReadingUITests {
         XCTAssertFalse(app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal 91596")).firstMatch.exists)
         XCTAssertTrue(app.collectionViews["question-history"].cells.containing(NSPredicate(format: "label CONTAINS %@", "Removal ad522")).firstMatch.exists)
         evidence("issue16-target-deleted-other-book-retained", app)
+    }
+}
+
+extension ReadingUITests {
+    /// task-89：PDF 顶栏阅读设置（分页/滚动）切换、当前页保持、按书持久化。
+    func testPDFReadingSettingsUI() throws {
+        continueAfterFailure = true
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        openPDFFixture(app)
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["pdf-reader-settings"].exists)
+        XCTAssertFalse(app.buttons["pdf-reader-mode"].exists, "旧页脚模式按钮应移除")
+        attachDesignSurface("pdf-settings-reader-375", app)
+
+        app.buttons["pdf-reader-settings"].tap()
+        XCTAssertTrue(app.navigationBars["阅读设置"].waitForExistence(timeout: 5))
+        let mode = app.segmentedControls["pdf-reading-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertTrue(mode.buttons["滚动"].isSelected, "2 页小 PDF 默认连续（滚动）")
+        attachDesignSurface("pdf-settings-sheet-default-scroll-375", app)
+        mode.buttons["分页"].tap()
+        app.buttons["pdf-reading-settings-done"].tap()
+        XCTAssertTrue(app.navigationBars["阅读设置"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["第 1 / 2 页"].exists, "切换后应保持当前页")
+        app.otherElements["pdf-reader-view"].swipeLeft()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].waitForExistence(timeout: 10), "分页模式左滑到第 2 页")
+        attachDesignSurface("pdf-settings-pagination-page2-375", app)
+
+        app.buttons["pdf-reader-settings"].tap()
+        XCTAssertTrue(app.segmentedControls["pdf-reading-mode"].buttons["分页"].isSelected)
+        app.segmentedControls["pdf-reading-mode"].buttons["滚动"].tap()
+        app.buttons["pdf-reading-settings-done"].tap()
+        XCTAssertTrue(app.staticTexts["第 2 / 2 页"].exists, "切滚动后仍保持第 2 页")
+        app.otherElements["pdf-reader-view"].swipeUp()
+        Thread.sleep(forTimeInterval: 0.5)
+        attachDesignSurface("pdf-settings-scroll-mode-375", app)
+        app.buttons["reader-close"].tap()
+
+        // 重开：保存的滚动模式仍在。
+        let shelf = app.collectionViews["library"]
+        XCTAssertTrue(shelf.waitForExistence(timeout: 10))
+        let cell = shelf.cells.containing(NSPredicate(format: "label CONTAINS %@", "书灯 PDF 示例")).firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 10))
+        cell.tap()
+        XCTAssertTrue(app.otherElements["pdf-reader-view"].waitForExistence(timeout: 15))
+        app.buttons["pdf-reader-settings"].tap()
+        XCTAssertTrue(app.segmentedControls["pdf-reading-mode"].buttons["滚动"].isSelected, "重开应保持滚动")
+        attachDesignSurface("pdf-settings-persisted-scroll-375", app)
     }
 }

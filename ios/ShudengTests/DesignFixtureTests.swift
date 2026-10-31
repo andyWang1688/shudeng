@@ -250,7 +250,7 @@ final class DesignFixtureTests: XCTestCase {
         XCTAssertNotNil(reader.view.allViews.first { $0.accessibilityIdentifier == "pdf-reader-view" })
         XCTAssertNotNil(reader.view.allViews.first { $0.accessibilityIdentifier == "pdf-reader-progress" })
         XCTAssertNotNil(reader.view.allViews.first { $0.accessibilityIdentifier == "reader-close" })
-        XCTAssertNotNil(reader.view.allViews.first { $0.accessibilityIdentifier == "pdf-reader-mode" })
+        XCTAssertNotNil(reader.view.allViews.first { $0.accessibilityIdentifier == "pdf-reader-settings" })
     }
 
     /// PDF M3：书签按钮/丝带、locator 格式（pdf://page/N）、扫描页 excerpt 空、重启持久化。
@@ -1456,12 +1456,12 @@ final class DesignFixtureTests: XCTestCase {
         }
         let ask = try XCTUnwrap(frame("pdf-reader-ask"))
         let page = try XCTUnwrap(frame("pdf-reader-page"))
-        let mode = try XCTUnwrap(frame("pdf-reader-mode"))
+        let settings = try XCTUnwrap(frame("pdf-reader-settings"))
         XCTAssertGreaterThan(ask.width, 0)
         XCTAssertFalse(ask.intersects(page), "问书灯不应与页码重叠：ask=\(ask) page=\(page)")
-        XCTAssertFalse(page.intersects(mode), "页码不应与模式按钮重叠：page=\(page) mode=\(mode)")
         XCTAssertGreaterThanOrEqual(ask.minX, 0)
-        XCTAssertLessThanOrEqual(mode.maxX, reader.view.bounds.width + 0.5)
+        XCTAssertLessThanOrEqual(settings.maxX, reader.view.bounds.width + 0.5)
+        XCTAssertGreaterThan(settings.width, 0, "顶栏阅读设置入口应存在")
         let image = DesignFixture.renderRoot(reader, size: CGSize(width: 375, height: 667), style: .light)
         let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
         attachment.name = "pdf-m6-footer-ask-accessibility-large-375-light"
@@ -2206,11 +2206,13 @@ final class DesignFixtureTests: XCTestCase {
         settleKeyboard()
         let keyboardHeight = card.frame.height
         XCTAssertLessThanOrEqual(keyboardHeight, initialHeight + 0.5, "键盘态卡片不应比初始更高")
+        // task-87 横屏/键盘修复：键盘态高度 = min(54% 基础, 键盘顶部 - 安全顶部 - 8)。
+        let expectedKeyboardHeight = min(initialHeight, 367 - editor.view.safeAreaInsets.top - 8)
         XCTAssertEqual(
             keyboardHeight,
-            min(initialHeight, 367 - 24),
+            expectedKeyboardHeight,
             accuracy: 2,
-            "键盘态卡片高度应为 min(54%基础, 可用高度-24)"
+            "键盘态卡片高度应为 min(54%基础, 键盘顶部-安全顶部-8)"
         )
         XCTAssertGreaterThanOrEqual(card.frame.minY, 16, "键盘态卡片顶部应留白 ≥16（grabber/圆角可见）")
         XCTAssertLessThan(card.frame.minY, initialMinY - 100, "键盘弹出后整卡应上移")
@@ -3278,7 +3280,7 @@ final class DesignFixtureTests: XCTestCase {
         XCTAssertEqual(settingsFrame.width, 44, accuracy: 0.5)
         XCTAssertEqual(settingsFrame.maxX, 362, accuracy: 0.5)
         XCTAssertEqual(titleCenter, 187.5, accuracy: 0.5)
-        XCTAssertEqual(title.font.pointSize, 12, accuracy: 0.5)
+        XCTAssertEqual(title.font.pointSize, 13, accuracy: 0.5, "XXXL 修复后标题用 scaled subheadline 字体")
         XCTAssertEqual(askFrame.height, 36, accuracy: 0.5, "task-34：问问书灯按钮缩到 36pt")
         XCTAssertEqual(askFrame.midX, 187.5, accuracy: 0.5)
 
@@ -4026,92 +4028,64 @@ extension DesignFixtureTests {
     }
 }
 
-// TEMP-TASK88: verification-only class, removed before handoff.
-@MainActor
-final class XXXLFinalCheckTests: XCTestCase {
-    private func makeReaderSession() async throws -> (DesignFixture.Session, Book, Publication) {
-        let request = DesignFixture.Request(scenario: .normal, theme: .light)
-        let session = try DesignFixture.makeSession(request)
+extension DesignFixtureTests {
+    /// task-89：小 PDF 默认连续 / 保存 pdfScroll=false 后单页；210 页默认单页。
+    func testPDFReadingSettingsDefaultAndPersistence() async throws {
+        let session = try DesignFixture.makeSession(.init(scenario: .pdf, theme: .light))
         try await DesignFixture.seed(session)
-        let primary = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.fixtureTitle })
-        let publication = try await session.library.open(primary)
-        return (session, primary, publication)
-    }
+        defer { try? FileManager.default.removeItem(at: session.root) }
+        let pdf = try XCTUnwrap(session.library.books.first { $0.title == DesignFixture.pdfFixtureTitle })
+        let reader = try PDFReaderController(book: pdf, library: session.library)
+        let window = host(reader, size: CGSize(width: 375, height: 667))
+        defer { window.isHidden = true }
+        try await waitForPDFReady(reader)
+        func pdfView(_ reader: PDFReaderController) throws -> PDFView {
+            try XCTUnwrap(reader.view.allViews.compactMap { $0 as? PDFView }.first { $0.accessibilityIdentifier == "pdf-reader-view" })
+        }
+        var view = try pdfView(reader)
+        XCTAssertEqual(view.displayDirection, .vertical, "2 页小 PDF 默认连续滚动")
+        XCTAssertEqual(view.displayMode, .singlePageContinuous)
+        XCTAssertNotNil(reader.view.allViews.first { $0.accessibilityIdentifier == "pdf-reader-settings" })
+        XCTAssertNil(reader.view.allViews.first { $0.accessibilityIdentifier == "pdf-reader-mode" }, "旧页脚模式按钮应移除")
 
-    private func attach(_ name: String, _ image: UIImage) throws {
-        let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
-    }
+        // 保存 pdfScroll=false → 重开应为单页分页。
+        let locator = Locator(
+            href: AnyURL(string: "pdf://page/1")!, mediaType: .pdf, title: "第 1 页",
+            locations: .init(progression: 0, totalProgression: 0, position: 1), text: .init(highlight: "")
+        )
+        try session.library.saveReadingState(locator, settings: ReadingSettings(pdfScroll: false), for: pdf.id)
+        let reloaded = try XCTUnwrap(LibraryStore(root: session.root, secrets: EphemeralSecrets()).books.first { $0.id == pdf.id })
+        let reader2 = try PDFReaderController(book: reloaded, library: session.library)
+        let window2 = host(reader2, size: CGSize(width: 375, height: 667))
+        defer { window2.isHidden = true }
+        try await waitForPDFReady(reader2)
+        view = try pdfView(reader2)
+        XCTAssertEqual(view.displayDirection, .horizontal, "保存 pdfScroll=false 后应单页分页")
+        XCTAssertEqual(view.displayMode, .singlePage)
 
-    func testXXXLFinalReaderChromePortraitAndLandscape() async throws {
-        let (session, primary, publication) = try await makeReaderSession()
-        let sizes: [CGSize] = [
-            CGSize(width: 393, height: 852),
-            CGSize(width: 852, height: 393),
-            CGSize(width: 375, height: 667)
-        ]
-        for category in [UIContentSizeCategory.accessibilityExtraExtraExtraLarge, .large] {
-            let suffix = category == .large ? "normal" : "accessibilityXXXL"
-            for size in sizes {
-                let reader = try ReaderController(book: primary, publication: publication, library: session.library)
-                let image = DesignFixture.renderRoot(
-                    reader,
-                    size: size,
-                    style: .light,
-                    preferredContentSizeCategory: category
-                )
-                try attach("reader-\(suffix)-\(Int(size.width))x\(Int(size.height))", image)
-
-                let views = reader.view.allViews
-                let toolbar = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-toolbar" })
-                let footer = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-footer" })
-                let title = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-title" } as? UILabel)
-                let chapter = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-chapter" } as? UILabel)
-                let progress = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-progress" } as? UILabel)
-                let footerChapter = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-footer-chapter" } as? UILabel)
-                let ask = try XCTUnwrap(views.first { $0.accessibilityIdentifier == "reader-ask-book" })
-
-                let toolbarFrame = toolbar.convert(toolbar.bounds, to: reader.view)
-                let footerFrame = footer.convert(footer.bounds, to: reader.view)
-                let titleFrame = title.convert(title.bounds, to: reader.view)
-                let chapterFrame = chapter.convert(chapter.bounds, to: reader.view)
-                let progressFrame = progress.convert(progress.bounds, to: reader.view)
-                let footerChapterFrame = footerChapter.convert(footerChapter.bounds, to: reader.view)
-                let askFrame = ask.convert(ask.bounds, to: reader.view)
-
-                XCTAssertEqual(toolbarFrame.height, 64, accuracy: 0.5)
-                XCTAssertEqual(title.numberOfLines, 1)
-                XCTAssertEqual(chapter.numberOfLines, 1)
-                XCTAssertLessThanOrEqual(titleFrame.maxY, toolbarFrame.maxY + 0.5, "XXXL 标题越出 toolbar")
-                XCTAssertLessThanOrEqual(chapterFrame.maxY, toolbarFrame.maxY + 0.5, "XXXL 章节名越出 toolbar")
-                XCTAssertGreaterThanOrEqual(progressFrame.minY, footerFrame.minY - 0.5)
-                XCTAssertLessThanOrEqual(progressFrame.maxY, footerFrame.maxY + 0.5)
-                XCTAssertLessThanOrEqual(footerChapterFrame.maxY, footerFrame.maxY + 0.5)
-                XCTAssertFalse(askFrame.intersects(progressFrame), "问问书灯与进度重叠")
-                XCTAssertFalse(askFrame.intersects(footerChapterFrame), "问问书灯与章节重叠")
+        // 210 页合成 PDF：未保存设置时默认单页。
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842))
+        let data = renderer.pdfData { context in
+            for index in 1...210 {
+                context.beginPage()
+                ("大 PDF 第 \(index) 页" as NSString).draw(at: CGPoint(x: 56, y: 64), withAttributes: [.font: UIFont.systemFont(ofSize: 18)])
             }
         }
-    }
-
-    func testXXXLFinalTabBar() throws {
-        let request = DesignFixture.Request(scenario: .normal, theme: .light)
-        let session = try DesignFixture.makeSession(request)
-        let tabs = makeApplicationTabs(library: session.library, root: session.root, secrets: session.secrets)
-        for (category, suffix) in [
-            (UIContentSizeCategory.accessibilityExtraExtraExtraLarge, "accessibilityXXXL"),
-            (.large, "normal")
-        ] {
-            for size in [CGSize(width: 393, height: 852), CGSize(width: 375, height: 667), CGSize(width: 852, height: 393)] {
-                let image = DesignFixture.renderRoot(
-                    tabs,
-                    size: size,
-                    style: .light,
-                    preferredContentSizeCategory: category
-                )
-                try attach("tabbar-\(suffix)-\(Int(size.width))x\(Int(size.height))", image)
-            }
-        }
+        let bigRoot = FileManager.default.temporaryDirectory.appendingPathComponent("PDFBig-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: bigRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bigRoot) }
+        let bigLibrary = try LibraryStore(root: bigRoot, secrets: EphemeralSecrets())
+        var bigBook = Book(id: "big-pdf", title: "210 页合成 PDF", author: "")
+        bigBook.format = .pdf
+        let bigDir = bigRoot.appendingPathComponent("Books", isDirectory: true)
+        try FileManager.default.createDirectory(at: bigDir, withIntermediateDirectories: true)
+        try data.write(to: bigLibrary.fileURL(for: bigBook))
+        let bigReader = try PDFReaderController(book: bigBook, library: bigLibrary)
+        let bigWindow = host(bigReader, size: CGSize(width: 375, height: 667))
+        defer { bigWindow.isHidden = true }
+        try await waitForPDFReady(bigReader)
+        let bigView = try pdfView(bigReader)
+        XCTAssertEqual(bigView.displayMode, .singlePage, "≥200 页默认单页")
+        XCTAssertEqual(bigView.displayDirection, .horizontal)
     }
 }

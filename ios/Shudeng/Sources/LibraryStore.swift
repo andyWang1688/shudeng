@@ -10,6 +10,9 @@ struct ReadingSettings: Codable, Equatable {
     var dark = false
     // Optional for catalogs written before curl mode existed.
     var pageCurl: Bool? = nil
+    /// PDF 阅读方式（按书持久化）：true=连续滚动，false=pageViewController 单页；
+    /// nil=旧数据，按页数走默认（>=200 页单页，否则滚动）。
+    var pdfScroll: Bool? = nil
 }
 
 /// 书籍格式。旧目录没有 format 字段时按 .epub 读取（Codable 兼容）。

@@ -53,10 +53,10 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     /// chrome 显示时盖住顶部安全区（刘海/灵动岛）的纸白背板；不改变 PDFView frame。
     private let chromeTopBackdrop = UIView()
     private let backButton = UIButton(type: .system)
-    private let modeButton = UIButton(type: .system)
     private let bookmarkButton = UIButton(type: .system)
     private let contentsButton = UIButton(type: .system)
     private let helpButton = UIButton(type: .system)
+    private let settingsButton = UIButton(type: .system)
     private let titleLabel = BookDesign.label(nil, font: BookType.serif(15, weight: .semibold, style: .subheadline))
     private let pageLabel = BookDesign.label(nil, font: BookType.subhead, colour: BookDesign.ink2)
     private let progressView = UIProgressView(progressViewStyle: .default)
@@ -92,6 +92,8 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private let targetPage: Int?
     private let askButton = UIButton(type: .system)
     private var activeQuestion: UINavigationController?
+    /// 按书阅读设置（PDF 只用 pdfScroll；保存时整体写回 locator + settings）。
+    private var readingSettings: ReadingSettings
 
     init(book: Book, library: LibraryStore, target: Locator? = nil) throws {
         guard book.resolvedFormat == .pdf else { throw LibraryError.invalid }
@@ -102,6 +104,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         self.book = book
         self.library = library
         self.documentURL = url
+        readingSettings = book.readingSettings ?? ReadingSettings()
         targetPage = target?.pdfPageNumber
         super.init(nibName: nil, bundle: nil)
         // 全屏阅读器自行控制状态栏隐藏（沉浸式）。
@@ -336,25 +339,63 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         }
     }
 
-    /// 文档就绪后按页数选择默认显示模式：大 PDF 用 pageVC 单页（低内存/低 CPU），
-    /// 小 PDF 保持连续；`--pdf-single-page-first` 强制单页。本轮不持久化用户选择，
-    /// 页脚「单页/连续」仍可随时切换。
+    /// 打开时的阅读方式优先级：QA 强制单页参数 > 本书已保存的 pdfScroll > 页数默认
+    /// （>=200 页单页，否则连续滚动）。
     private func applyDefaultDisplayMode(pageCount: Int) {
-        let useSinglePage = Self.singlePageFirstExperiment || pageCount >= Self.largePDFPageThreshold
-        continuousScroll = !useSinglePage
-        if useSinglePage {
-            // PDFKit 要求先启用 page view controller，再在设置 document 后 autoScales 才会按页宽缩放。
+        let scroll: Bool
+        if Self.singlePageFirstExperiment {
+            scroll = false
+        } else if let saved = readingSettings.pdfScroll {
+            scroll = saved
+        } else {
+            scroll = pageCount < Self.largePDFPageThreshold
+        }
+        configureDisplayMode(scroll: scroll)
+    }
+
+    private func configureDisplayMode(scroll: Bool) {
+        continuousScroll = scroll
+        if scroll {
+            pdfView.usePageViewController(false, withViewOptions: nil)
+            pdfView.displayDirection = .vertical
+            pdfView.displayMode = .singlePageContinuous
+        } else {
+            // PDFKit 要求先启用 page view controller，再设置 autoScales 才会缩放到页宽。
             pdfView.usePageViewController(true, withViewOptions: [
                 UIPageViewController.OptionsKey.interPageSpacing: 16
             ])
             pdfView.displayDirection = .horizontal
             pdfView.displayMode = .singlePage
-        } else {
-            pdfView.usePageViewController(false, withViewOptions: nil)
-            pdfView.displayDirection = .vertical
-            pdfView.displayMode = .singlePageContinuous
         }
-        updateModeButton()
+    }
+
+    /// 设置 sheet 切换：立即生效、保持当前页，并按书持久化到 ReadingSettings.pdfScroll。
+    private func applyReadingMode(scroll: Bool) {
+        guard scroll != continuousScroll else { return }
+        let page = currentPageNumber()
+        configureDisplayMode(scroll: scroll)
+        pdfView.autoScales = true
+        clearActiveSelection()
+        goToPage(page)
+        updatePageIndicator()
+        refreshBookmarkUI(animated: false)
+        readingSettings.pdfScroll = scroll
+        persistCurrentReadingSettings(page: page)
+    }
+
+    private func persistCurrentReadingSettings(page explicitPage: Int? = nil) {
+        // 切换显示模式后 PDFView 可能下一轮布局才落页；用切换前捕获的页号，避免把进度写到第 1 页。
+        let page = explicitPage ?? currentPageNumber()
+        let total = totalProgression(for: page)
+        guard let href = AnyURL(string: "pdf://page/\(page)") else { return }
+        let locator = Locator(
+            href: href,
+            mediaType: .pdf,
+            title: "第 \(page) 页",
+            locations: .init(progression: total, totalProgression: total, position: page),
+            text: .init(highlight: "")
+        )
+        try? library.saveReadingState(locator, settings: readingSettings, for: book.id)
     }
 
     private func configureLoadingView() {
@@ -464,6 +505,15 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         // 仅含扫描页的 PDF 才提供说明入口；不自动弹、选字时也不提示。
         helpButton.isHidden = !(book.pdfInfo?.hasScannedPages ?? false)
 
+        var settingsConfig = UIButton.Configuration.plain()
+        settingsConfig.image = BookDesign.symbol("ellipsis", size: 18, weight: .medium)
+        settingsConfig.baseForegroundColor = BookDesign.ink2
+        settingsConfig.contentInsets = NSDirectionalEdgeInsets(top: 13, leading: 13, bottom: 13, trailing: 13)
+        settingsButton.configuration = settingsConfig
+        settingsButton.accessibilityLabel = "阅读设置"
+        settingsButton.accessibilityIdentifier = "pdf-reader-settings"
+        settingsButton.addTarget(self, action: #selector(openReadingSettings), for: .touchUpInside)
+
         titleLabel.text = book.title
         titleLabel.textAlignment = .center
         titleLabel.lineBreakMode = .byTruncatingTail
@@ -478,13 +528,14 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
             child.translatesAutoresizingMaskIntoConstraints = false
             toolbar.addSubview(child)
         }
-        let trailing = UIStackView(arrangedSubviews: [bookmarkButton, contentsButton, helpButton])
+        // 与 EPUB 一致：阅读设置 ellipsis 固定最右；扫描页的「?」在其左侧。
+        let trailing = UIStackView(arrangedSubviews: [bookmarkButton, contentsButton, helpButton, settingsButton])
         trailing.axis = .horizontal
         trailing.alignment = .center
         trailing.spacing = 6
         trailing.translatesAutoresizingMaskIntoConstraints = false
         toolbar.addSubview(trailing)
-        // 居中只是偏好：右侧 3 个按钮 + 长书名时标题向左让位，而不是压扁按钮。
+        // 居中只是偏好：右侧按钮 + 长书名时标题向左让位，而不是压扁按钮。
         let titleCentering = titleLabel.centerXAnchor.constraint(equalTo: toolbar.centerXAnchor)
         titleCentering.priority = .defaultLow
         NSLayoutConstraint.activate([
@@ -532,21 +583,6 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         progressView.accessibilityIdentifier = "pdf-reader-progress"
         progressView.accessibilityLabel = "阅读进度"
 
-        var modeConfig = UIButton.Configuration.plain()
-        modeConfig.baseForegroundColor = BookDesign.ink2
-        modeConfig.contentInsets = .zero
-        modeConfig.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
-            var outgoing = incoming
-            outgoing.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
-                for: .systemFont(ofSize: 12, weight: .medium),
-                maximumPointSize: 16
-            )
-            return outgoing
-        }
-        modeButton.configuration = modeConfig
-        modeButton.accessibilityIdentifier = "pdf-reader-mode"
-        modeButton.addTarget(self, action: #selector(toggleDisplayMode), for: .touchUpInside)
-
         var askConfig = UIButton.Configuration.plain()
         askConfig.title = "问书灯"
         askConfig.image = BookDesign.symbol("lightbulb", size: 14, weight: .medium)
@@ -566,7 +602,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         askButton.accessibilityIdentifier = "pdf-reader-ask"
         askButton.addTarget(self, action: #selector(askCurrentPage), for: .touchUpInside)
 
-        for child in [askButton, pageLabel, progressView, modeButton] as [UIView] {
+        for child in [askButton, pageLabel, progressView] as [UIView] {
             child.translatesAutoresizingMaskIntoConstraints = false
             footer.addSubview(child)
         }
@@ -584,16 +620,12 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
             askButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 14),
             askButton.centerYAnchor.constraint(equalTo: pageLabel.centerYAnchor),
             askButton.heightAnchor.constraint(equalToConstant: 44),
-            pageLabel.trailingAnchor.constraint(lessThanOrEqualTo: modeButton.leadingAnchor, constant: -8),
-            modeButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
-            modeButton.centerYAnchor.constraint(equalTo: pageLabel.centerYAnchor),
-            modeButton.heightAnchor.constraint(equalToConstant: 44),
-            progressView.topAnchor.constraint(equalTo: modeButton.bottomAnchor, constant: 2),
+            pageLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -28),
+            progressView.topAnchor.constraint(equalTo: pageLabel.bottomAnchor, constant: 6),
             progressView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 28),
             progressView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -28),
             progressView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10)
         ])
-        updateModeButton()
     }
 
     // MARK: - 页面书签丝带（页面上沿右侧）
@@ -789,7 +821,7 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
             locations: .init(progression: total, totalProgression: total, position: page),
             text: .init(highlight: "")
         )
-        try? library.saveReadingState(locator, settings: book.readingSettings ?? ReadingSettings(), for: book.id)
+        try? library.saveReadingState(locator, settings: readingSettings, for: book.id)
     }
 
     // MARK: - 页级书签
@@ -1449,32 +1481,19 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         present(alert, animated: true)
     }
 
-    @objc private func toggleDisplayMode() {
-        let page = currentPageNumber()
-        continuousScroll.toggle()
-        if continuousScroll {
-            pdfView.usePageViewController(false, withViewOptions: nil)
-            pdfView.displayDirection = .vertical
-            pdfView.displayMode = .singlePageContinuous
-        } else {
-            // PDFKit 要求先启用 page view controller，再设置 autoScales 才会缩放到页宽。
-            pdfView.usePageViewController(true, withViewOptions: [
-                UIPageViewController.OptionsKey.interPageSpacing: 16
-            ])
-            pdfView.displayDirection = .horizontal
-            pdfView.displayMode = .singlePage
+    /// 与 EPUB 一致的阅读设置入口：纸白大 sheet，只有 分页/滚动 两段，切换立即生效。
+    @objc private func openReadingSettings() {
+        let controller = PDFReadingSettingsController(isScroll: continuousScroll) { [weak self] scroll in
+            self?.applyReadingMode(scroll: scroll)
         }
-        pdfView.autoScales = true
-        clearActiveSelection()
-        goToPage(page)
-        updateModeButton()
-        updatePageIndicator()
-        refreshBookmarkUI(animated: false)
-    }
-
-    private func updateModeButton() {
-        modeButton.configuration?.title = continuousScroll ? "连续" : "单页"
-        modeButton.accessibilityLabel = continuousScroll ? "连续滚动，点按切换单页分页" : "单页分页，点按切换连续滚动"
+        let navigation = UINavigationController(rootViewController: controller)
+        navigation.overrideUserInterfaceStyle = overrideUserInterfaceStyle
+        if let sheet = navigation.sheetPresentationController {
+            sheet.detents = [.large()]
+            sheet.prefersGrabberVisible = true
+            sheet.preferredCornerRadius = BookRadius.sheet
+        }
+        present(navigation, animated: true)
     }
 
     @objc private func close() {
@@ -2333,5 +2352,85 @@ private enum PDFMemoryProbe {
                 log("afterDismiss+\(Int(delay))s")
             }
         }
+    }
+}
+
+// MARK: - PDF 阅读设置（分页 / 滚动，按书持久化）
+
+@MainActor
+private final class PDFReadingSettingsController: UIViewController {
+    private let isScroll: Bool
+    private let onChange: (Bool) -> Void
+    private let mode = UISegmentedControl(items: ["分页", "滚动"])
+
+    init(isScroll: Bool, onChange: @escaping (Bool) -> Void) {
+        self.isScroll = isScroll
+        self.onChange = onChange
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "阅读设置"
+        view.backgroundColor = BookDesign.paper
+        navigationController?.view.backgroundColor = BookDesign.paper
+        if let navigationBar = navigationController?.navigationBar {
+            let appearance = UINavigationBarAppearance()
+            appearance.configureWithOpaqueBackground()
+            appearance.backgroundColor = BookDesign.paper
+            appearance.shadowColor = .clear
+            appearance.titleTextAttributes = [.foregroundColor: BookDesign.ink]
+            navigationBar.standardAppearance = appearance
+            navigationBar.scrollEdgeAppearance = appearance
+            navigationBar.compactAppearance = appearance
+            navigationBar.tintColor = BookDesign.ink2
+        }
+        // 切换即时生效，左侧只做关闭（避免“取消”暗示可撤销）。
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: "关闭", style: .plain, target: self, action: #selector(close)
+        )
+        let done = UIBarButtonItem(title: "完成", style: .done, target: self, action: #selector(close))
+        done.accessibilityIdentifier = "pdf-reading-settings-done"
+        navigationItem.rightBarButtonItem = done
+
+        let heading = BookDesign.label("阅读方式", font: BookType.sans(13, weight: .medium, style: .subheadline), colour: BookDesign.ink2)
+        mode.selectedSegmentIndex = isScroll ? 1 : 0
+        mode.selectedSegmentTintColor = BookDesign.lamp
+        mode.setTitleTextAttributes([.foregroundColor: BookDesign.ink], for: .selected)
+        mode.setTitleTextAttributes([.foregroundColor: BookDesign.ink2], for: .normal)
+        mode.accessibilityIdentifier = "pdf-reading-mode"
+        mode.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        mode.addTarget(self, action: #selector(modeChanged), for: .valueChanged)
+
+        let detail = BookDesign.label(
+            "分页：左右翻页；滚动：上下连续滑动。仅用于本书。",
+            size: 13,
+            colour: BookDesign.ink3,
+            style: .footnote
+        )
+        detail.numberOfLines = 0
+        detail.maximumContentSizeCategory = .extraLarge
+
+        let stack = UIStackView(arrangedSubviews: [heading, mode, detail])
+        stack.axis = .vertical
+        stack.alignment = .fill
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 24),
+            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24)
+        ])
+    }
+
+    @objc private func modeChanged() {
+        onChange(mode.selectedSegmentIndex == 1)
+    }
+
+    @objc private func close() {
+        dismiss(animated: true)
     }
 }
