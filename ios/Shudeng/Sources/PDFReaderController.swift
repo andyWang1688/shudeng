@@ -79,6 +79,9 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
     private var selectionMenuWorkItem: DispatchWorkItem?
     private weak var pageTapGesture: UITapGestureRecognizer?
     private var selectionAtTouchStart = false
+    /// 最近一次拖拽/滑动手势时间：避免快速拖动松手被识别为 tap 而误切换沉浸 chrome。
+    private var lastDragAt: CFTimeInterval = 0
+    private static let dragTapSuppression: CFTimeInterval = 0.4
     private lazy var selectionFeedback = UISelectionFeedbackGenerator()
     /// 大 PDF 默认单页（pageViewController）的页数阈值：>= 200 页默认单页首屏，
     /// 显著降低 PDFKit 连续模式的内存/CPU；用户仍可用页脚按钮切回连续。
@@ -987,6 +990,12 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
         tap.delegate = self
         pageTapGesture = tap
         pdfView.addGestureRecognizer(tap)
+
+        // 与 PDFView 自身滚动/翻页并存的拖拽观察器：只记录“刚刚在拖”，不消费触摸。
+        let drag = UIPanGestureRecognizer(target: self, action: #selector(pdfPanned(_:)))
+        drag.cancelsTouchesInView = false
+        drag.delegate = self
+        pdfView.addGestureRecognizer(drag)
     }
 
     /// 当前书的 PDF 标注（有几何的 note/highlight）；旧笔记无 geometry 不渲染。
@@ -1365,6 +1374,13 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
 
     // MARK: 点击已有标注
 
+    @objc private func pdfPanned(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began, .changed: lastDragAt = CACurrentMediaTime()
+        default: break
+        }
+    }
+
     @objc private func pdfTapped(_ gesture: UITapGestureRecognizer) {
         guard presentedViewController == nil else { return }
         let hadSelectionAtTouchStart = selectionAtTouchStart
@@ -1376,6 +1392,8 @@ final class PDFReaderController: UIViewController, UIGestureRecognizerDelegate {
                 clearActiveSelection()
                 return
             }
+            // 快速拖动/滚动松手后系统仍可能合成 tap：0.4s 内不切换 chrome。
+            guard CACurrentMediaTime() - lastDragAt >= Self.dragTapSuppression else { return }
             toggleImmersiveChrome()
             return
         }

@@ -594,6 +594,13 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
     private var pdfProgressView: PDFImportProgressView?
     private var preparationObserver: NSObjectProtocol?
     private var libraryObserver: NSObjectProtocol?
+    /// 合并 0.25s 内的书库/资料准备通知，避免每个章节进度都刷新书架。
+    private var refreshWorkItem: DispatchWorkItem?
+    /// 上次 reloadData 的书籍顺序；相同时只原地更新可见 cell/header，保留封面。
+    private var lastDisplayedIDs: [String]?
+    private var lastHeaderLayoutKey: String?
+    private var headerContinuationBookID: String?
+    private weak var trackedHeader: ShelfPageHeader?
 
     init(library: LibraryStore) {
         self.library = library
@@ -629,6 +636,7 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
     deinit {
         searchTask?.cancel()
         importTask?.cancel()
+        refreshWorkItem?.cancel()
         if let preparationObserver { NotificationCenter.default.removeObserver(preparationObserver) }
         if let libraryObserver { NotificationCenter.default.removeObserver(libraryObserver) }
     }
@@ -664,14 +672,14 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
             object: library.preparation,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor in self?.scheduleRefresh() }
         }
         libraryObserver = NotificationCenter.default.addObserver(
             forName: LibraryStore.changed,
             object: library,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor in self?.scheduleRefresh() }
         }
         refresh()
     }
@@ -733,6 +741,7 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
         let query = searchBar.text ?? ""
         let allBooks = library.books.filter { showingRemoved ? $0.removal != nil : $0.removal == nil }
         displayed = order.books(allBooks, matching: query)
+        let displayedIDs = displayed.map(\.id)
         let preferred = UserDefaults.standard.string(forKey: "last-read-" + library.root.path)
         let removingSearch = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let continuing = showingRemoved || removingSearch
@@ -789,10 +798,54 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
         )
         latestPresentation = presentation
         latestSortMenu = sortMenu()
+        // header 的结构性变化（准备条/继续阅读/空态/标题）才重新测量高度；进度文字原地更新。
+        let headerLayoutKey = [
+            presentation.title,
+            presentation.sectionTitle,
+            String(presentation.count),
+            presentation.continuation?.book.id ?? "-",
+            presentation.preparation.map { $0.failure ? "failure" : "preparing" } ?? "none",
+            presentation.empty == nil ? "0" : "1",
+            presentation.showsLibraryHeading ? "1" : "0"
+        ].joined(separator: "|")
+        let headerLayoutChanged = headerLayoutKey != lastHeaderLayoutKey
+        lastHeaderLayoutKey = headerLayoutKey
         if let visibleHeader {
             configure(visibleHeader, with: presentation)
+            if headerLayoutChanged {
+                collectionView.collectionViewLayout.invalidateLayout()
+            }
         }
-        collectionView.reloadData()
+        if displayedIDs != lastDisplayedIDs {
+            lastDisplayedIDs = displayedIDs
+            collectionView.reloadData()
+        } else {
+            updateVisibleBookCells()
+        }
+    }
+
+    /// 通知合并：0.25s 内只刷新一次（模型下载完成/资料准备逐章进度/导入完成多次通知）。
+    private func scheduleRefresh() {
+        refreshWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.refreshWorkItem = nil
+            self.refresh()
+        }
+        refreshWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    /// 书籍顺序未变时只更新可见 cell 的文字/状态，不重建 cell、不动封面（封面加载任务继续）。
+    private func updateVisibleBookCells() {
+        for indexPath in collectionView.indexPathsForVisibleItems where indexPath.item < displayed.count {
+            guard let cell = collectionView.cellForItem(at: indexPath) as? ShelfBookCell else { continue }
+            let book = displayed[indexPath.item]
+            cell.update(
+                status: bookStatus(book),
+                preparation: library.preparation.states[book.id]?.message ?? ""
+            )
+        }
     }
 
     private func readingProgress(_ book: Book) -> (chapter: String?, total: Double) {
@@ -908,12 +961,21 @@ final class ShelfController: UICollectionViewController, UIDocumentPickerDelegat
         header.attachSearch(searchBar)
         header.configure(presentation)
         if let latestSortMenu { header.setSortMenu(latestSortMenu) }
-        header.coverTask?.cancel()
-        if let book = presentation.continuation?.book {
-            header.coverTask = Task { [weak header, covers, library] in
-                let image = await covers.image(for: book, library: library)
-                guard !Task.isCancelled else { return }
-                header?.setContinuationCover(image, for: book)
+        let continuationBookID = presentation.continuation?.book.id
+        // header 复用实例可能是新的（滚动出屏后重新 dequeue），必须重新加载封面；
+        // 同一个 header + 同一本书则跳过，避免继续阅读卡片封面每 0.25s 闪一下。
+        let headerInstanceChanged = trackedHeader !== header
+        trackedHeader = header
+        if headerInstanceChanged || continuationBookID != headerContinuationBookID {
+            headerContinuationBookID = continuationBookID
+            header.coverTask?.cancel()
+            header.coverTask = nil
+            if let book = presentation.continuation?.book {
+                header.coverTask = Task { [weak header, covers, library] in
+                    let image = await covers.image(for: book, library: library)
+                    guard !Task.isCancelled else { return }
+                    header?.setContinuationCover(image, for: book)
+                }
             }
         }
     }
@@ -1204,13 +1266,24 @@ private final class ShelfBookCell: UICollectionViewCell {
 
     func configure(_ book: Book, status value: ShelfBookStatus, preparation: String) {
         coverTask?.cancel()
+        let sameBook = represented == book.id
         represented = book.id
         title.text = book.title
         author.text = book.author.isEmpty ? "作者未知" : book.author
+        // 同一本书刷新状态/进度时不要清空封面（否则会先空白再异步加载，造成闪烁）。
+        if !sameBook { cover.configure(book, image: nil) }
+        apply(status: value, preparation: preparation)
+    }
+
+    /// 书架原地刷新：只改文字/无障碍，不动封面与封面加载任务。
+    func update(status value: ShelfBookStatus, preparation: String) {
+        apply(status: value, preparation: preparation)
+    }
+
+    private func apply(status value: ShelfBookStatus, preparation: String) {
         status.text = value.text
         status.textColor = value.accent ? BookDesign.lampInk : BookDesign.ink3
-        cover.configure(book, image: nil)
-        accessibilityLabel = [book.title, author.text ?? "", value.text].joined(separator: "，")
+        accessibilityLabel = [title.text ?? "", author.text ?? "", value.text].joined(separator: "，")
         accessibilityValue = preparation
     }
 
@@ -1457,12 +1530,13 @@ private final class ShelfContinueCard: UIControl {
 
     func configure(_ continuation: ShelfContinuation) {
         coverTask?.cancel()
+        let sameBook = represented == continuation.book.id
         represented = continuation.book.id
         title.text = continuation.book.title
         author.text = continuation.book.author.isEmpty ? "作者未知" : continuation.book.author
         detail.text = continuation.detail
         progress.value = continuation.progress
-        cover.configure(continuation.book, image: nil, compact: true)
+        if !sameBook { cover.configure(continuation.book, image: nil, compact: true) }
         accessibilityLabel = "继续阅读，" + continuation.book.title + "，" + continuation.detail
     }
 

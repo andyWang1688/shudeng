@@ -10,7 +10,7 @@ private func noteWaveCSSColor(_ color: UIColor) -> String {
 }
 
 @MainActor
-final class ReaderController: UIViewController, EPUBNavigatorDelegate {
+final class ReaderController: UIViewController, EPUBNavigatorDelegate, UIGestureRecognizerDelegate {
     private let book: Book
     private let library: LibraryStore
     private let bookRevision: UUID
@@ -18,6 +18,9 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
     private var navigator: EPUBNavigatorViewController
     private var settings: ReadingSettings
     private let content = UIView()
+    /// 最近一次拖拽/滑动手势时间：轻点切换 chrome 前用 ~0.4s 窗口过滤“拖动被识别成 tap”。
+    private var lastDragAt: CFTimeInterval = 0
+    private static let dragTapSuppression: CFTimeInterval = 0.4
     private let toolbar = ReaderToolbarView()
     private let footer = ReaderFooterView()
     private var controlsAnimationGeneration = 0
@@ -194,6 +197,12 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
 
         footer.update(progress: footerProgress, chapter: currentChapter)
         footer.askButton.addTarget(self, action: #selector(askCurrentBook), for: .touchUpInside)
+
+        // 与滚动/翻页并存的拖拽观察器：只记录“刚刚在拖”，不消费触摸、不阻断滚动。
+        let drag = UIPanGestureRecognizer(target: self, action: #selector(readingPanned(_:)))
+        drag.cancelsTouchesInView = false
+        drag.delegate = self
+        content.addGestureRecognizer(drag)
 
         statusPanel.backgroundColor = BookDesign.wash
         statusPanel.layer.cornerRadius = BookRadius.field
@@ -678,6 +687,18 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         guard curl == nil else { return }
         handleReadingTap(at: point)
     }
+    @objc private func readingPanned(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began, .changed: lastDragAt = CACurrentMediaTime()
+        default: break
+        }
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool { true }
+
     private func handleReadingTap(at point: CGPoint) {
         // A long-press release is also delivered as a tap before Readium has
         // finished propagating the selection. Keep the just-presented menu.
@@ -693,6 +714,8 @@ final class ReaderController: UIViewController, EPUBNavigatorDelegate {
         }
         guard !hasSelection else { return }
         guard point.x > content.bounds.width * 0.3, point.x < content.bounds.width * 0.7 else { return }
+        // 快速拖动/滚动松手后系统仍可能合成 tap：0.4s 内不切换 chrome（清理选区/浮层已在上方完成）。
+        guard CACurrentMediaTime() - lastDragAt >= Self.dragTapSuppression else { return }
         toggleToolbar()
     }
     private func setCurlActivationObserver(enabled: Bool) {
