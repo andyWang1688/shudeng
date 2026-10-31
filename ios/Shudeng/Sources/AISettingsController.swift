@@ -111,7 +111,7 @@ final class AISettingsController: UITableViewController {
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         switch section {
         case 0: return "API Key 仅保存在本机 Keychain；点按服务可编辑或检查连接。"
-        case 1: return "用于书内 AI 语义检索；阅读、原文搜索、笔记不受影响。下载约 81MB，需联网一次。"
+        case 1: return "用于书内 AI 语义检索；阅读、原文搜索、笔记不受影响。下载约 81MB，需联网一次；优先使用国内加速线路，失败自动切换。"
         default: return nil
         }
     }

@@ -12,7 +12,24 @@ final class SemanticModelStore: @unchecked Sendable {
     /// 模型安装/移除后发送（UI 与书籍准备逻辑据此刷新状态）。
     static let changed = Notification.Name("SemanticModelStoreChanged")
 
+    /// GitHub release 资源根路径（直连源）。
     static let baseURL = "https://github.com/andyWang1688/shudeng/releases/download/semantic-model-v2/"
+
+    struct DownloadSource: Sendable {
+        let name: String
+        /// 国内加速线路前缀；空字符串表示直连 GitHub。
+        let prefix: String
+        /// 单文件单次尝试超时；nil = 不额外超时（直连 GitHub 最后兜底，尽量让慢速网络也能成功）。
+        let timeout: TimeInterval?
+    }
+
+    /// 下载源优先级（本机实测：gh-proxy ~5.7MB/s、ghfast ~3MB/s、ghproxy.net ~171KB/s、直连 ~85KB/s）。
+    static let sources: [DownloadSource] = [
+        DownloadSource(name: "gh-proxy.com", prefix: "https://gh-proxy.com/", timeout: 60),
+        DownloadSource(name: "ghfast.top", prefix: "https://ghfast.top/", timeout: 60),
+        DownloadSource(name: "ghproxy.net", prefix: "https://ghproxy.net/", timeout: 60),
+        DownloadSource(name: "github", prefix: "", timeout: nil)
+    ]
 
     struct FileSpec: Sendable {
         let name: String
@@ -120,18 +137,51 @@ final class SemanticModelStore: @unchecked Sendable {
         defer { try? fileManager.removeItem(at: staging) }
 
         var completedBytes: Int64 = 0
+        // 本次安装内复用上一个文件成功的源；失败则按优先级换下一个源。
+        var preferredSource = 0
         for spec in Self.files {
             try Task.checkCancellation()
             let destination = staging.appendingPathComponent(spec.name)
-            let completedBeforeFile = completedBytes
-            try await Self.download(spec, to: destination) { writtenFraction in
-                let total = Double(Self.downloadBytes)
-                let fraction = min(1, (Double(completedBeforeFile) + writtenFraction * Double(spec.bytes)) / total)
-                Task { @MainActor in progress(fraction) }
+            var lastError: Error?
+            var succeeded = false
+            let order = [preferredSource] + Self.sources.indices.filter { $0 != preferredSource }
+            for sourceIndex in order {
+                try Task.checkCancellation()
+                try? fileManager.removeItem(at: destination)
+                let source = Self.sources[sourceIndex]
+                let completedBeforeFile = completedBytes
+                let start = CFAbsoluteTimeGetCurrent()
+                do {
+                    try await Self.download(spec, to: destination, source: source) { writtenFraction in
+                        let total = Double(Self.downloadBytes)
+                        let fraction = min(1, (Double(completedBeforeFile) + writtenFraction * Double(spec.bytes)) / total)
+                        Task { @MainActor in progress(fraction) }
+                    }
+                    let actual = try Self.verify(file: destination)
+                    guard actual.bytes == spec.bytes, actual.sha256 == spec.sha256 else {
+                        throw SemanticModelDownloadError.integrity(spec.name)
+                    }
+                    NSLog(
+                        "SEMANTIC_MODEL download file=%@ source=%@ %.1fs",
+                        spec.name, source.name, CFAbsoluteTimeGetCurrent() - start
+                    )
+                    preferredSource = sourceIndex
+                    succeeded = true
+                    break
+                } catch {
+                    if Task.isCancelled { throw CancellationError() }
+                    lastError = error
+                    try? fileManager.removeItem(at: destination)
+                    NSLog(
+                        "SEMANTIC_MODEL fallback file=%@ source=%@ error=%@",
+                        spec.name, source.name, String(describing: error)
+                    )
+                    // 进度回到本文件起点；跨源重试从 0 开始，符合预期。
+                    Task { @MainActor in progress(Double(completedBytes) / Double(Self.downloadBytes)) }
+                }
             }
-            let actual = try Self.verify(file: destination)
-            guard actual.bytes == spec.bytes, actual.sha256 == spec.sha256 else {
-                throw SemanticModelDownloadError.integrity(spec.name)
+            guard succeeded else {
+                throw lastError ?? SemanticModelDownloadError.integrity(spec.name)
             }
             completedBytes += spec.bytes
             Task { @MainActor in progress(Double(completedBytes) / Double(Self.downloadBytes)) }
@@ -197,15 +247,24 @@ final class SemanticModelStore: @unchecked Sendable {
     private static func download(
         _ spec: FileSpec,
         to destination: URL,
+        source: DownloadSource,
         progress: @escaping (Double) -> Void
     ) async throws {
-        guard let url = URL(string: baseURL + spec.name) else {
+        let string = source.prefix.isEmpty ? baseURL + spec.name : source.prefix + baseURL + spec.name
+        guard let url = URL(string: string) else {
             throw SemanticModelDownloadError.invalidURL(spec.name)
         }
         let delegate = DownloadDelegate(destination: destination, onProgress: progress)
         let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
         delegate.session = session
         let task = session.downloadTask(with: url)
+        var timeoutItem: DispatchWorkItem?
+        if let timeout = source.timeout {
+            let item = DispatchWorkItem { task.cancel() }
+            timeoutItem = item
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: item)
+        }
+        defer { timeoutItem?.cancel() }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 delegate.continuation = continuation
