@@ -33,11 +33,16 @@ struct AgentSSEParser {
     mutating func finish() -> AgentSSEEvent? { dispatch() }
 
     private mutating func dispatch() -> AgentSSEEvent? {
-        guard !dataLines.isEmpty else { event = nil; return nil }
-        let value = AgentSSEEvent(event: event, data: dataLines.joined(separator: "\n"))
-        event = nil
-        dataLines = []
-        return value
+        defer {
+            event = nil
+            dataLines = []
+        }
+        guard !dataLines.isEmpty else { return nil }
+        let value = dataLines.joined(separator: "\n")
+        // SSE 规范：data 缓冲为空时不派发事件。部分 OpenAI 兼容网关用 `data:` 空行做心跳，
+        // 若当成事件交给 decoder 会因 JSON 解析失败而中断整次运行。
+        guard !value.isEmpty else { return nil }
+        return AgentSSEEvent(event: event, data: value)
     }
 }
 
@@ -230,6 +235,7 @@ final class AgentOpenAIStreamDecoder: AgentSSEDecoder {
 
     func consume(_ event: AgentSSEEvent) throws -> [AgentModelEvent] {
         let data = event.data.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !data.isEmpty else { return [] }
         if data == "[DONE]" { return try finish() }
         guard let object = try? JSONSerialization.jsonObject(with: Data(data.utf8)) as? [String: Any] else {
             throw AgentModelError.invalidResponse("AI 服务返回了无法解析的流式数据。")
@@ -308,7 +314,9 @@ final class AgentAnthropicStreamDecoder: AgentSSEDecoder {
     private var finished = false
 
     func consume(_ event: AgentSSEEvent) throws -> [AgentModelEvent] {
-        guard let object = try? JSONSerialization.jsonObject(with: Data(event.data.utf8)) as? [String: Any] else {
+        let data = event.data.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !data.isEmpty else { return [] }
+        guard let object = try? JSONSerialization.jsonObject(with: Data(data.utf8)) as? [String: Any] else {
             throw AgentModelError.invalidResponse("AI 服务返回了无法解析的流式数据。")
         }
         let type = event.event ?? (object["type"] as? String) ?? ""

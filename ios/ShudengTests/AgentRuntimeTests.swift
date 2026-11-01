@@ -1095,3 +1095,752 @@ final class AgentPDFCitationVerificationTests: XCTestCase {
         try data.write(to: url)
     }
 }
+
+// MARK: - 对抗性审计：SSE 传输
+
+/// 可配置状态码、分块到达的 URLProtocol；用于 SSE 对抗性测试（分块/错误/非 SSE）。
+private final class AgentAuditURLProtocol: Foundation.URLProtocol, @unchecked Sendable {
+    struct Stub: Sendable {
+        let status: Int
+        let chunks: [Data]
+        let failure: URLError?
+        init(status: Int = 200, chunks: [Data], failure: URLError? = nil) {
+            self.status = status
+            self.chunks = chunks
+            self.failure = failure
+        }
+        init(status: Int = 200, body: String, failure: URLError? = nil) {
+            self.init(status: status, chunks: [Data(body.utf8)], failure: failure)
+        }
+    }
+
+    nonisolated(unsafe) static var stubs: [Stub] = []
+    nonisolated(unsafe) static var requestCount = 0
+
+    override class func canInit(with request: Foundation.URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: Foundation.URLRequest) -> Foundation.URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        let index = Self.requestCount
+        Self.requestCount += 1
+        let stub = Self.stubs.indices.contains(index) ? Self.stubs[index] : Stub(chunks: [])
+        let response = Foundation.HTTPURLResponse(url: request.url!, statusCode: stub.status,
+                                                  httpVersion: "HTTP/1.1",
+                                                  headerFields: ["Content-Type": "text/event-stream",
+                                                                 "Connection": "close"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        for chunk in stub.chunks { client?.urlProtocol(self, didLoad: chunk) }
+        if let failure = stub.failure {
+            client?.urlProtocol(self, didFailWithError: failure)
+            return
+        }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private enum AgentAuditTransport {
+    static func session(_ stubs: [AgentAuditURLProtocol.Stub]) -> URLSession {
+        AgentAuditURLProtocol.stubs = stubs
+        AgentAuditURLProtocol.requestCount = 0
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AgentAuditURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
+    static func openAI(_ session: URLSession) -> AgentOpenAIChatModel {
+        let configuration = AIConfiguration(name: "stub", format: .openAI,
+                                            address: "http://127.0.0.1:18781", model: "stub")
+        return AgentOpenAIChatModel(configuration: configuration, key: "test", session: session)
+    }
+
+    static func anthropic(_ session: URLSession) -> AgentAnthropicChatModel {
+        let configuration = AIConfiguration(name: "stub", format: .anthropic,
+                                            address: "http://127.0.0.1:18781", model: "stub")
+        return AgentAnthropicChatModel(configuration: configuration, key: "test", session: session)
+    }
+
+    static func collect(_ model: any AgentChatModel, tools: [AgentToolSpec] = []) async throws -> [AgentModelEvent] {
+        var events: [AgentModelEvent] = []
+        for try await event in model.stream(messages: [.user("灯是什么意思")], tools: tools,
+                                            options: AgentModelOptions()) { events.append(event) }
+        return events
+    }
+
+    static func json(_ object: [String: Any]) -> String {
+        String(decoding: (try? JSONSerialization.data(withJSONObject: object)) ?? Data(), as: UTF8.self)
+    }
+
+    /// OpenAI SSE：一个 data 事件（自动补空行）。
+    static func data(_ object: [String: Any]) -> String { "data: " + json(object) + "\n\n" }
+
+    static func textChunk(_ text: String) -> String {
+        data(["choices": [["delta": ["content": text]]]])
+    }
+
+    static func toolChunk(index: Int, id: String? = nil, name: String? = nil,
+                          arguments: String? = nil, type: String? = nil) -> String {
+        var function: [String: Any] = [:]
+        if let name { function["name"] = name }
+        if let arguments { function["arguments"] = arguments }
+        var call: [String: Any] = ["index": index]
+        if let id { call["id"] = id }
+        if let type { call["type"] = type }
+        if !function.isEmpty { call["function"] = function }
+        return data(["choices": [["delta": ["tool_calls": [call]]]]])
+    }
+
+    static func finishReason(_ reason: String) -> String {
+        data(["choices": [["delta": [:], "finish_reason": reason]]])
+    }
+
+    static let done = "data: [DONE]\n\n"
+}
+
+final class AgentAdversarialSSETests: XCTestCase {
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = agentTemporaryRoot("audit-sse")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: root)
+        AgentAuditURLProtocol.stubs = []
+        AgentAuditURLProtocol.requestCount = 0
+    }
+
+    func testCRLFCommentsAndKeepAliveDoNotBreakEventDispatch() async throws {
+        let lfPayload = ": keep-alive\n"
+            + AgentAuditTransport.textChunk("书里")
+            + ": ping\n"
+            + AgentAuditTransport.finishReason("stop")
+            + AgentAuditTransport.done
+        let payload = lfPayload.replacingOccurrences(of: "\n", with: "\r\n")
+        let session = AgentAuditTransport.session([.init(body: payload)])
+        let model = AgentAuditTransport.openAI(session)
+        let events = try await AgentAuditTransport.collect(model)
+        XCTAssertEqual(events, [.textDelta("书里"), .finished(.stop)], "CRLF/注释/keep-alive 不应破坏事件派发")
+    }
+
+    func testMultilineDataEventIsJoinedAndDecoded() async throws {
+        // 一个 SSE 事件由多个 data 行组成：行间以 \n 拼接后仍是合法 JSON。
+        let payload = """
+        data: {"choices":[{"delta":
+        data: {"content":"书里"}}]}
+
+        """ + "\n" + AgentAuditTransport.finishReason("stop") + AgentAuditTransport.done
+        let session = AgentAuditTransport.session([.init(body: payload)])
+        let model = AgentAuditTransport.openAI(session)
+        let events = try await AgentAuditTransport.collect(model)
+        XCTAssertEqual(events, [.textDelta("书里"), .finished(.stop)])
+    }
+
+    func testChunkedDeliverySplitsUTF8AndToolArgumentsAcrossChunks() async throws {
+        let payload = AgentAuditTransport.textChunk("灯把书页")
+            + AgentAuditTransport.toolChunk(index: 0, id: "call_1", name: "search_book",
+                                            arguments: #"{"query":"#)
+            + AgentAuditTransport.toolChunk(index: 0, arguments: #""灯"}"#)
+            + AgentAuditTransport.finishReason("tool_calls")
+            + AgentAuditTransport.done
+        // 按 3 字节分块：会切断中文 UTF-8 序列与 JSON/arguments。
+        let data = Data(payload.utf8)
+        var chunks: [Data] = []
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + 3, data.count)
+            chunks.append(data.subdata(in: offset..<end))
+            offset = end
+        }
+        let session = AgentAuditTransport.session([.init(chunks: chunks)])
+        let model = AgentAuditTransport.openAI(session)
+        let events = try await AgentAuditTransport.collect(model)
+        XCTAssertEqual(events, [
+            .textDelta("灯把书页"),
+            .toolCall(AgentToolCall(id: "call_1", name: "search_book", argumentsJSON: #"{"query":"灯"}"#)),
+            .finished(.toolCalls),
+        ], "任意分块边界（含 UTF-8 多字节、tool 参数）都不应丢事件")
+    }
+
+    func testParallelToolCallIndexesAccumulateInOrder() async throws {
+        let payload = AgentAuditTransport.toolChunk(index: 0, id: "call_a", name: "search_book",
+                                                    arguments: #"{"query":"#)
+            + AgentAuditTransport.toolChunk(index: 1, id: "call_b", name: "read_page",
+                                            arguments: #"{"page":"#)
+            + AgentAuditTransport.toolChunk(index: 1, arguments: "1}")
+            + AgentAuditTransport.toolChunk(index: 0, arguments: #""灯"}"#)
+            + AgentAuditTransport.finishReason("tool_calls")
+            + AgentAuditTransport.done
+        let session = AgentAuditTransport.session([.init(body: payload)])
+        let model = AgentAuditTransport.openAI(session)
+        let events = try await AgentAuditTransport.collect(model)
+        XCTAssertEqual(events, [
+            .toolCall(AgentToolCall(id: "call_a", name: "search_book", argumentsJSON: #"{"query":"灯"}"#)),
+            .toolCall(AgentToolCall(id: "call_b", name: "read_page", argumentsJSON: #"{"page":1}"#)),
+            .finished(.toolCalls),
+        ], "并行 index 0/1 应分别累积且按 index 顺序产出")
+    }
+
+    func testStreamWithoutDoneOrFinishReasonStillFlushesToolCalls() async throws {
+        let payload = AgentAuditTransport.textChunk("查书")
+            + AgentAuditTransport.toolChunk(index: 0, id: "call_1", name: "search_book",
+                                            arguments: #"{"query":"灯"}"#)
+        // 无 finish_reason、无 [DONE]、末尾无空行（连接中断形态）。
+        let session = AgentAuditTransport.session([.init(chunks: [Data(payload.utf8)])])
+        let model = AgentAuditTransport.openAI(session)
+        let events = try await AgentAuditTransport.collect(model)
+        XCTAssertEqual(events, [
+            .textDelta("查书"),
+            .toolCall(AgentToolCall(id: "call_1", name: "search_book", argumentsJSON: #"{"query":"灯"}"#)),
+            .finished(.stop),
+        ], "流意外结束也应 flush 已累积的 tool_calls，不能丢调用")
+    }
+
+    func testMalformedJSONEventFailsRunAsInvalidResponse() async throws {
+        let payload = "data: {\"choices\":[{\"delta\":\n\ndata: not-json\n\n"
+        let session = AgentAuditTransport.session([.init(body: payload)])
+        let model = AgentAuditTransport.openAI(session)
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: UUID(), bookID: "book-1", bookTitle: "测试书", messages: [.user("问")])))
+        XCTAssertEqual(agentFailed(events)?.code, .invalidResponse)
+        XCTAssertEqual(AgentAuditURLProtocol.requestCount, 1, "解析失败不应重试")
+    }
+
+    func testInStreamErrorObjectMapsToFailure() async throws {
+        let payload = "data: " + AgentAuditTransport.json(["error": ["message": "rate limit exceeded",
+                                                                    "type": "rate_limit_error"]]) + "\n\n"
+        let session = AgentAuditTransport.session([.init(body: payload)])
+        let model = AgentAuditTransport.openAI(session)
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: UUID(), bookID: "book-1", bookTitle: "测试书", messages: [.user("问")])))
+        XCTAssertEqual(agentFailed(events)?.code, .limited)
+        XCTAssertEqual(AgentAuditURLProtocol.requestCount, 1)
+    }
+
+    func testHTTP429MapsToLimitedWithoutRetry() async throws {
+        let body = AgentAuditTransport.json(["error": ["message": "rate limit", "type": "rate_limit_error"]])
+        let session = AgentAuditTransport.session([.init(status: 429, body: body)])
+        let model = AgentAuditTransport.openAI(session)
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: UUID(), bookID: "book-1", bookTitle: "测试书", messages: [.user("问")])))
+        XCTAssertEqual(agentFailed(events)?.code, .limited)
+        XCTAssertEqual(AgentAuditURLProtocol.requestCount, 1)
+    }
+
+    func testHTTP400ToolsUnsupportedMapsToFallbackSignal() async throws {
+        let body = AgentAuditTransport.json(["error": ["message": "tools is not supported for this model",
+                                                       "type": "invalid_request_error"]])
+        let session = AgentAuditTransport.session([.init(status: 400, body: body)])
+        let model = AgentAuditTransport.openAI(session)
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: UUID(), bookID: "book-1", bookTitle: "测试书", messages: [.user("问")])))
+        XCTAssertEqual(agentFailed(events)?.code, .toolsUnsupported)
+    }
+
+    func testHTTP200NonSSEBodyFailsWithClearError() async throws {
+        let payload = AgentAuditTransport.json(["error": ["message": "not an event stream"]])
+        let session = AgentAuditTransport.session([.init(body: payload)])
+        let model = AgentAuditTransport.openAI(session)
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: UUID(), bookID: "book-1", bookTitle: "测试书", messages: [.user("问")])))
+        XCTAssertEqual(agentFailed(events)?.code, .invalidResponse,
+                       "200 但不是 SSE 时不能静默当成空回答")
+    }
+
+    func testAnthropicTransportDispatchesCRLFEventsAndToolUse() async throws {
+        func event(_ name: String, _ object: [String: Any]) -> String {
+            "event: " + name + "\r\ndata: " + AgentAuditTransport.json(object) + "\r\n\r\n"
+        }
+        let payload = event("content_block_start", ["type": "content_block_start", "index": 0,
+                                                    "content_block": ["type": "text", "text": ""]])
+            + event("content_block_delta", ["type": "content_block_delta", "index": 0,
+                                            "delta": ["type": "text_delta", "text": "书里"]])
+            + event("content_block_start", ["type": "content_block_start", "index": 1,
+                                            "content_block": ["type": "tool_use", "id": "toolu_1",
+                                                              "name": "search_book", "input": [:] as [String: Any]]])
+            + event("content_block_delta", ["type": "content_block_delta", "index": 1,
+                                            "delta": ["type": "input_json_delta", "partial_json": #"{"query":"灯"}"#]])
+            + event("content_block_stop", ["type": "content_block_stop", "index": 1])
+            + event("message_delta", ["type": "message_delta", "delta": ["stop_reason": "tool_use"]])
+            + event("message_stop", ["type": "message_stop"])
+        let session = AgentAuditTransport.session([.init(body: payload)])
+        let model = AgentAuditTransport.anthropic(session)
+        let events = try await AgentAuditTransport.collect(model)
+        XCTAssertEqual(events, [
+            .textDelta("书里"),
+            .toolCall(AgentToolCall(id: "toolu_1", name: "search_book", argumentsJSON: #"{"query":"灯"}"#)),
+            .finished(.toolCalls),
+        ], "Anthropic 事件/CRLF 经真实传输后仍应正确解析")
+    }
+
+    func testEmptyDataHeartbeatEventsAreIgnored() async throws {
+        // 部分 OpenAI 兼容网关用 `data:` 空事件当 keep-alive；SSE 规范规定空 data 不派发事件。
+        let payload = AgentAuditTransport.textChunk("书里")
+            + "data:\n\n"
+            + "data: \n\n"
+            + AgentAuditTransport.finishReason("stop")
+            + AgentAuditTransport.done
+        let session = AgentAuditTransport.session([.init(body: payload)])
+        let model = AgentAuditTransport.openAI(session)
+        let events = try await AgentAuditTransport.collect(model)
+        XCTAssertEqual(events, [.textDelta("书里"), .finished(.stop)],
+                       "空 data 心跳事件应被忽略，不能把整次运行判成无法解析")
+    }
+
+    func testSSEParserDoesNotDispatchEmptyDataEvents() {
+        var parser = AgentSSEParser()
+        XCTAssertNil(parser.consume(line: "data:"))
+        XCTAssertNil(parser.consume(line: ""), "空的 data 事件按 SSE 规范不派发")
+        XCTAssertNil(parser.consume(line: "data: "))
+        XCTAssertNil(parser.consume(line: ""))
+        XCTAssertNil(parser.finish())
+    }
+
+    func testMidStreamNetworkFailureMapsToNetworkError() async throws {
+        let session = AgentAuditTransport.session([
+            .init(body: AgentAuditTransport.textChunk("书里"), failure: URLError(.networkConnectionLost)),
+        ])
+        let model = AgentAuditTransport.openAI(session)
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: UUID(), bookID: "book-1", bookTitle: "测试书", messages: [.user("问")])))
+        XCTAssertEqual(agentFailed(events)?.code, .network)
+    }
+
+    func testStreamTimeoutMapsToTimeoutFailure() async throws {
+        let session = AgentAuditTransport.session([
+            .init(body: AgentAuditTransport.textChunk("书里"), failure: URLError(.timedOut)),
+        ])
+        let model = AgentAuditTransport.openAI(session)
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: UUID(), bookID: "book-1", bookTitle: "测试书", messages: [.user("问")])))
+        XCTAssertEqual(agentFailed(events)?.code, .timeout)
+    }
+}
+
+// MARK: - 对抗性审计：工具循环
+
+private struct AgentAuditThrowingTool: AgentTool {
+    var spec: AgentToolSpec {
+        AgentToolSpec(name: "explode", description: "总是抛错的测试工具", inputSchemaJSON: #"{"type":"object"}"#)
+    }
+    func call(_ arguments: AgentToolArguments, context: AgentToolCallContext) async throws -> AgentToolResult {
+        throw AgentToolError.failed("模拟工具故障")
+    }
+}
+
+/// 检索很慢（100ms）的数据源，用于验证 runTimeout 在步间的兜底。
+private struct AgentAuditSlowBookSource: AgentBookSource {
+    func search(_ query: String, limit: Int) async throws -> [AgentBookExcerpt] {
+        try await Task.sleep(nanoseconds: 100_000_000)
+        return [agentExcerpt("书里的原文句子")]
+    }
+    func page(_ page: Int, maxCharacters: Int) async throws -> AgentBookPassage? { nil }
+    func chapter(_ reference: String, maxCharacters: Int) async throws -> AgentBookPassage? { nil }
+    func tableOfContents() async throws -> [AgentBookTOCEntry] { [] }
+    func chapterList() async throws -> [AgentBookTOCEntry] { [] }
+}
+
+/// 第一次给出工具调用，第二次流式输出后一直挂起，用于「第二步取消」。
+private final class AgentAuditBlockingSecondModel: AgentChatModel, @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+    var modelIdentifier: String { "blocking-second-model" }
+
+    func stream(messages: [AgentMessage], tools: [AgentToolSpec], options: AgentModelOptions)
+        -> AsyncThrowingStream<AgentModelEvent, Error> {
+        lock.lock()
+        let call = calls
+        calls += 1
+        lock.unlock()
+        if call == 0 {
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.toolCall(AgentToolCall(id: "call_1", name: "search_book",
+                                                           argumentsJSON: #"{"query":"原文"}"#)))
+                continuation.yield(.finished(.toolCalls))
+                continuation.finish()
+            }
+        }
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield(.textDelta("思考中"))
+                do { try await Task.sleep(nanoseconds: 30_000_000_000) } catch {
+                    continuation.finish(throwing: CancellationError())
+                    return
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+final class AgentAdversarialToolLoopTests: XCTestCase {
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = agentTemporaryRoot("audit-loop")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func request() -> AgentRunRequest {
+        AgentRunRequest(conversationID: UUID(), bookID: "book-1", bookTitle: "测试书",
+                        messages: [.user("这本书讲了什么？")])
+    }
+
+    private func makeSourceExecutor(model: any AgentChatModel, source: any AgentBookSource,
+                                    configuration: AgentRuntimeConfiguration = AgentRuntimeConfiguration()) -> AgentExecutor {
+        let environment = BookAgentEnvironment(bookID: "book-1", bookTitle: "测试书", source: source,
+                                               notes: [], currentLocation: nil)
+        return AgentExecutor(model: model,
+                             tools: AgentToolRegistry(BookAgentTools.make(environment: environment)),
+                             context: AgentContextManager(),
+                             checkpoints: AgentCheckpointStore(root: root),
+                             verifier: AcceptAllVerifier(),
+                             configuration: configuration)
+    }
+
+    private func makeToolExecutor(model: any AgentChatModel, tools: [any AgentTool],
+                                  configuration: AgentRuntimeConfiguration = AgentRuntimeConfiguration(),
+                                  checkpoints: AgentCheckpointStore? = nil) -> AgentExecutor {
+        AgentExecutor(model: model,
+                      tools: AgentToolRegistry(tools),
+                      context: AgentContextManager(),
+                      checkpoints: checkpoints ?? AgentCheckpointStore(root: root),
+                      verifier: AcceptAllVerifier(),
+                      configuration: configuration)
+    }
+
+    func testMalformedToolArgumentsBecomeErrorResultAndLoopContinues() async throws {
+        let source = StubBookSource(searchResults: [agentExcerpt("书里的原文句子")])
+        let model = ScriptedChatModel([
+            [.toolCall(AgentToolCall(id: "call_1", name: "search_book", argumentsJSON: "not-json")),
+             .finished(.toolCalls)],
+            [.textDelta(#"{"answer":"仍然回答。","citations":[]}"#), .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: source, root: root)
+        let events = await collectEvents(executor.start(request()))
+
+        XCTAssertTrue(events.contains {
+            if case .toolFinished(let finished) = $0 {
+                return finished.isError && finished.call.name == "search_book"
+                    && finished.content.contains("工具执行失败")
+            }
+            return false
+        })
+        let result = try XCTUnwrap(agentCompleted(events), "参数错误不应终止整次运行")
+        XCTAssertEqual(result.answer, "仍然回答。")
+        XCTAssertEqual(model.requests.count, 2)
+        XCTAssertEqual(model.requests[1].last?.role, .tool)
+        XCTAssertTrue(model.requests[1].last?.isError == true)
+    }
+
+    func testTooManyToolCallsExecutesLimitAndReturnsErrorsForRest() async throws {
+        let source = StubBookSource(searchResults: [agentExcerpt("书里的原文句子")])
+        let calls = (0..<8).map { AgentToolCall(id: "call_\($0)", name: "search_book",
+                                                argumentsJSON: #"{"query":"原文"}"#) }
+        let model = ScriptedChatModel([
+            calls.map { AgentModelEvent.toolCall($0) } + [.finished(.toolCalls)],
+            [.textDelta(#"{"answer":"结果过多。","citations":[]}"#), .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: source, root: root)
+        let events = await collectEvents(executor.start(request()))
+
+        let started = events.filter { if case .toolStarted = $0 { return true }; return false }
+        XCTAssertEqual(started.count, 8, "每个调用都应给出 toolStarted（含被拒绝的）")
+        let finished = events.compactMap { event -> AgentToolFinished? in
+            if case .toolFinished(let value) = event { return value }; return nil
+        }
+        XCTAssertEqual(finished.filter { !$0.isError }.count, 6, "单步最多执行 6 个工具")
+        XCTAssertEqual(finished.filter { $0.isError }.count, 2, "超出的调用应回填错误结果")
+        let delivered = try XCTUnwrap(model.requests[1].last(where: { $0.role == .tool }))
+        XCTAssertTrue(delivered.content.contains("单步工具调用过多"))
+        XCTAssertTrue(events.contains { if case .completed = $0 { return true }; return false })
+        // 第二个请求必须为全部 8 个 tool_calls 提供结果，否则 provider 会 400。
+        let toolMessages = model.requests[1].filter { $0.role == .tool }
+        XCTAssertEqual(toolMessages.count, 8)
+        XCTAssertEqual(toolMessages.compactMap(\.toolCallID).count, 8)
+    }
+
+    func testDuplicateToolCallsRegisterOneEvidenceAndBothRun() async throws {
+        let source = StubBookSource(searchResults: [agentExcerpt("书里的原文句子")])
+        let first = AgentToolCall(id: "call_1", name: "search_book", argumentsJSON: #"{"query":"原文"}"#)
+        let second = AgentToolCall(id: "call_2", name: "search_book", argumentsJSON: #"{"query":"原文"}"#)
+        let model = ScriptedChatModel([
+            [.toolCall(first), .toolCall(second), .finished(.toolCalls)],
+            [.textDelta(#"{"answer":"书里说的是原文。","citations":[{"id":"E1","quote":"书里的原文"}]}"#),
+             .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: source, root: root)
+        let events = await collectEvents(executor.start(request()))
+
+        let finished = events.compactMap { event -> AgentToolFinished? in
+            if case .toolFinished(let value) = event { return value }; return nil
+        }
+        XCTAssertEqual(finished.count, 2)
+        XCTAssertTrue(finished.allSatisfy { !$0.isError })
+        XCTAssertTrue(finished.allSatisfy { $0.content.contains("[E1]") }, "相同原文应复用同一个证据 id")
+        let result = try XCTUnwrap(agentCompleted(events))
+        XCTAssertEqual(result.citations.map(\.id), ["E1"])
+        XCTAssertEqual(model.requests[1].filter { $0.role == .tool }.count, 2)
+    }
+
+    func testThrowingToolIsReturnedAsErrorAndRunRecovers() async throws {
+        let model = ScriptedChatModel([
+            [.toolCall(AgentToolCall(id: "call_1", name: "explode", argumentsJSON: "{}")), .finished(.toolCalls)],
+            [.textDelta(#"{"answer":"工具坏了但还能回答。","citations":[]}"#), .finished(.stop)],
+        ])
+        let executor = makeToolExecutor(model: model, tools: [AgentAuditThrowingTool()])
+        let events = await collectEvents(executor.start(request()))
+
+        let failedTool = events.compactMap { event -> AgentToolFinished? in
+            if case .toolFinished(let value) = event { return value }; return nil
+        }.first
+        XCTAssertEqual(failedTool?.isError, true)
+        XCTAssertTrue(failedTool?.content.contains("模拟工具故障") == true)
+        XCTAssertEqual(agentCompleted(events)?.answer, "工具坏了但还能回答。")
+    }
+
+    func testInvalidFinalJSONFallsBackToPlainTextWithWarning() async throws {
+        let model = ScriptedChatModel([
+            [.textDelta("这是纯文本回答，不包含 JSON。"), .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(request()))
+
+        let result = try XCTUnwrap(agentCompleted(events))
+        XCTAssertEqual(result.answer, "这是纯文本回答，不包含 JSON。")
+        XCTAssertTrue(result.citations.isEmpty)
+        XCTAssertTrue(result.warning.contains("未提供可核查格式"), "应提示回答不是可核查 JSON：\(result.warning)")
+    }
+
+    func testEmptyJSONAnswerFailsInsteadOfSilentSuccess() async throws {
+        let model = ScriptedChatModel([
+            [.textDelta(#"{"answer":"   ","citations":[]}"#), .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(request()))
+
+        XCTAssertEqual(agentFailed(events)?.code, .invalidResponse)
+        XCTAssertNil(agentCompleted(events))
+    }
+
+    func testParallelToolCallsInOneStepAreBothExecuted() async throws {
+        let page = AgentBookPassage(title: "第 1 页", page: 1,
+                                    excerpts: [agentExcerpt("第一页原文", title: "第 1 页", page: 1)],
+                                    truncated: false)
+        let source = StubBookSource(searchResults: [agentExcerpt("书里的原文句子")], pages: [1: page])
+        let model = ScriptedChatModel([
+            [.toolCall(AgentToolCall(id: "call_a", name: "search_book", argumentsJSON: #"{"query":"原文"}"#)),
+             .toolCall(AgentToolCall(id: "call_b", name: "read_page", argumentsJSON: #"{"page":1}"#)),
+             .finished(.toolCalls)],
+            [.textDelta(#"{"answer":"两处都读了。","citations":[]}"#), .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: source, root: root)
+        let events = await collectEvents(executor.start(request()))
+
+        let finished = events.compactMap { event -> AgentToolFinished? in
+            if case .toolFinished(let value) = event { return value }; return nil
+        }
+        XCTAssertEqual(Set(finished.map(\.call.name)), ["search_book", "read_page"])
+        XCTAssertTrue(finished.allSatisfy { !$0.isError })
+        let toolMessages = model.requests[1].filter { $0.role == .tool }
+        XCTAssertEqual(toolMessages.compactMap(\.toolCallID), ["call_a", "call_b"])
+    }
+
+    func testResumeCheckpointWithDanglingToolCallBackfillsResult() async throws {
+        let conversationID = UUID()
+        let call = AgentToolCall(id: "call_lost", name: "search_book", argumentsJSON: #"{"query":"原文"}"#)
+        let now = Date()
+        let checkpoint = AgentCheckpoint(
+            conversationID: conversationID, bookID: "book-1", bookTitle: "测试书",
+            createdAt: now, updatedAt: now, status: .running, model: "stub-model",
+            messages: [.user("旧问题"), .assistant("", toolCalls: [call])], steps: 1,
+            result: nil, failure: nil, warnings: [], context: nil)
+        try AgentCheckpointStore(root: root).save(checkpoint)
+
+        let model = ScriptedChatModel([
+            [.textDelta(#"{"answer":"续跑完成。","citations":[]}"#), .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: conversationID, bookID: "book-1", bookTitle: "测试书",
+            messages: [.user("追问")], checkpoint: checkpoint)))
+
+        let sent = model.requests[0]
+        let repairedIndex = try XCTUnwrap(sent.firstIndex { $0.role == .tool && $0.toolCallID == "call_lost" })
+        let assistantIndex = try XCTUnwrap(sent.firstIndex { $0.role == .assistant && !$0.toolCalls.isEmpty })
+        XCTAssertLessThan(assistantIndex, repairedIndex, "补回的工具结果必须在 assistant tool_calls 之后")
+        XCTAssertTrue(sent[repairedIndex].isError, "上次中断的工具应补错误结果")
+        XCTAssertEqual(agentCompleted(events)?.answer, "续跑完成。")
+    }
+
+    func testAnswerTruncationAddsWarningAndEllipsis() async throws {
+        var configuration = AgentRuntimeConfiguration()
+        configuration.maxAnswerCharacters = 10
+        let long = String(repeating: "长", count: 30)
+        let model = ScriptedChatModel([
+            [.textDelta("{\"answer\":\"\(long)\",\"citations\":[]}"), .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root, configuration: configuration)
+        let events = await collectEvents(executor.start(request()))
+
+        let result = try XCTUnwrap(agentCompleted(events))
+        XCTAssertEqual(result.answer, String(long.prefix(10)) + "…")
+        XCTAssertTrue(agentWarnings(events).contains { $0.code == .answerTruncated })
+    }
+
+    func testRunTimeoutIsEnforcedAfterSlowToolReturns() async throws {
+        let model = ScriptedChatModel([
+            [.toolCall(AgentToolCall(id: "call_1", name: "search_book", argumentsJSON: #"{"query":"原文"}"#)),
+             .finished(.toolCalls)],
+            [.textDelta(#"{"answer":"不该走到这里。","citations":[]}"#), .finished(.stop)],
+        ])
+        var configuration = AgentRuntimeConfiguration()
+        configuration.runTimeout = 0.03
+        let executor = makeSourceExecutor(model: model, source: AgentAuditSlowBookSource(),
+                                          configuration: configuration)
+        let started = Date()
+        let events = await collectEvents(executor.start(request()))
+        XCTAssertEqual(agentFailed(events)?.code, .timeout)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "慢工具返回后应立即在步间超时，而不是继续下一轮")
+        XCTAssertEqual(model.requests.count, 1)
+    }
+}
+
+// MARK: - 对抗性审计：上下文与检查点
+
+final class AgentAdversarialContextTests: XCTestCase {
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = agentTemporaryRoot("audit-context")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func request(messages: [AgentMessage] = [.user("这本书讲了什么？")],
+                         checkpoint: AgentCheckpoint? = nil) -> AgentRunRequest {
+        AgentRunRequest(conversationID: UUID(), bookID: "book-1", bookTitle: "测试书",
+                        messages: messages, checkpoint: checkpoint)
+    }
+
+    func testLongHistoryWithoutSummarizerTrimsAndKeepsLastTurn() async {
+        var messages: [AgentMessage] = []
+        for index in 0..<10 {
+            messages.append(.user(String(repeating: "问题\(index)", count: 50)))
+            messages.append(.assistant(String(repeating: "回答\(index)", count: 50)))
+        }
+        let budget = AgentContextBudget(maxContextTokens: 1200, reserveForResponseTokens: 200,
+                                        recentMessagesToKeep: 4)
+        let manager = AgentContextManager(budget: budget)
+        let plan = await manager.prepare(systemPrompt: "规则", messages: messages)
+        XCTAssertFalse(plan.overBudget)
+        XCTAssertGreaterThan(plan.usage.trimmedMessages, 0)
+        XCTAssertTrue(plan.messages.contains { $0.content.contains("问题9") }, "必须保留最后一轮")
+        XCTAssertTrue(plan.actions.contains { if case .trimmedHistory = $0 { return true }; return false })
+    }
+
+    func testContextOverBudgetMidRunFailsExplicitlyAfterOneRequest() async throws {
+        let longText = String(repeating: "原", count: 1200)
+        let source = StubBookSource(searchResults: [agentExcerpt(longText)])
+        let model = ScriptedChatModel([
+            [.toolCall(AgentToolCall(id: "call_1", name: "search_book", argumentsJSON: #"{"query":"原"}"#)),
+             .finished(.toolCalls)],
+            [.textDelta(#"{"answer":"不该走到这里。","citations":[]}"#), .finished(.stop)],
+        ])
+        let budget = AgentContextBudget(maxContextTokens: 800, reserveForResponseTokens: 300)
+        let executor = makeExecutor(model: model, source: source, root: root, budget: budget)
+        let events = await collectEvents(executor.start(request()))
+
+        XCTAssertEqual(agentFailed(events)?.code, .contextBudget)
+        XCTAssertNil(agentCompleted(events))
+        XCTAssertEqual(model.requests.count, 1, "超预算应在第二次模型请求前中止")
+        let snapshots = events.compactMap { event -> AgentContextSnapshot? in
+            if case .context(let value) = event { return value }; return nil
+        }
+        XCTAssertTrue(snapshots.contains { snapshot in
+            snapshot.actions.contains { if case .overBudget = $0 { return true }; return false }
+        })
+    }
+
+    func testSummarizerFailureDuringRunFallsBackToTrimming() async throws {
+        var history: [AgentMessage] = []
+        for index in 0..<6 {
+            history.append(.user(String(repeating: "历史问题\(index)", count: 40)))
+            history.append(.assistant(String(repeating: "历史回答\(index)", count: 40)))
+        }
+        let conversationID = UUID()
+        let now = Date()
+        let checkpoint = AgentCheckpoint(
+            conversationID: conversationID, bookID: "book-1", bookTitle: "测试书",
+            createdAt: now, updatedAt: now, status: .running, model: "stub-model",
+            messages: history, steps: 1, result: nil, failure: nil, warnings: [], context: nil)
+        try AgentCheckpointStore(root: root).save(checkpoint)
+
+        let model = ScriptedChatModel([
+            [.textDelta(#"{"answer":"摘要失败也能答。","citations":[]}"#), .finished(.stop)],
+        ])
+        let budget = AgentContextBudget(maxContextTokens: 1400, reserveForResponseTokens: 200,
+                                        recentMessagesToKeep: 4, summaryTargetCharacters: 100)
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root,
+                                    budget: budget, summarizer: FailingSummarizer())
+        let events = await collectEvents(executor.start(request(messages: [.user("追问")], checkpoint: checkpoint)))
+
+        let result = try XCTUnwrap(agentCompleted(events))
+        XCTAssertEqual(result.answer, "摘要失败也能答。")
+        XCTAssertEqual(model.requests.count, 1)
+        let actions = events.compactMap { event -> [AgentContextAction]? in
+            if case .context(let value) = event { return value.actions }; return nil
+        }.flatMap { $0 }
+        XCTAssertTrue(actions.contains { if case .trimmedHistory = $0 { return true }; return false },
+                      "摘要失败应降级为裁剪：\(actions)")
+    }
+
+    func testCheckpointSaveFailureEmitsWarningAndRunStillCompletes() async throws {
+        let blockedRoot = agentTemporaryRoot("audit-blocked")
+        try Data("not-a-directory".utf8).write(to: blockedRoot)
+        defer { try? FileManager.default.removeItem(at: blockedRoot) }
+
+        let model = ScriptedChatModel([
+            [.textDelta(#"{"answer":"存储失败也能答。","citations":[]}"#), .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: blockedRoot)
+        let events = await collectEvents(executor.start(request()))
+
+        XCTAssertEqual(agentCompleted(events)?.answer, "存储失败也能答。")
+        XCTAssertTrue(agentWarnings(events).contains { $0.code == .checkpointStorage },
+                      "检查点写入失败应给出可见 warning 而不是静默失败")
+    }
+
+    func testCancellationDuringSecondStepSavesCancelledCheckpoint() async throws {
+        let source = StubBookSource(searchResults: [agentExcerpt("书里的原文句子")])
+        let conversationID = UUID()
+        let executor = makeExecutor(model: AgentAuditBlockingSecondModel(), source: source, root: root)
+        let session = executor.start(AgentRunRequest(conversationID: conversationID, bookID: "book-1",
+                                                     bookTitle: "测试书", messages: [.user("问题")]))
+        var sawCancelled = false
+        for await event in session.events {
+            if case .step(let step) = event, step.index == 2 { session.cancel() }
+            if case .cancelled = event { sawCancelled = true }
+        }
+        await session.wait()
+        XCTAssertTrue(sawCancelled)
+        let saved = try XCTUnwrap(try AgentCheckpointStore(root: root).load(conversationID: conversationID))
+        XCTAssertEqual(saved.status, .cancelled)
+    }
+}
