@@ -157,9 +157,10 @@ private func makeExecutor(model: any AgentChatModel, source: StubBookSource, roo
                           verifier: (any AgentCitationVerifier)? = AcceptAllVerifier(),
                           configuration: AgentRuntimeConfiguration = AgentRuntimeConfiguration(),
                           budget: AgentContextBudget = .default,
-                          summarizer: (any AgentHistorySummarizer)? = nil) -> AgentExecutor {
+                          summarizer: (any AgentHistorySummarizer)? = nil,
+                          summaries: AgentContextSummaryStore? = nil) -> AgentExecutor {
     let tools = AgentToolRegistry(BookAgentTools.make(environment: AgentTestEnvironment.make(source)))
-    let context = AgentContextManager(budget: budget, summarizer: summarizer)
+    let context = AgentContextManager(budget: budget, summarizer: summarizer, summaries: summaries)
     let store = AgentCheckpointStore(root: root)
     return AgentExecutor(model: model, tools: tools, context: context, checkpoints: store,
                          verifier: verifier, configuration: configuration)
@@ -353,7 +354,8 @@ final class AgentContextManagerTests: XCTestCase {
         let plan = await manager.prepare(systemPrompt: "规则", messages: messages)
         XCTAssertGreaterThan(plan.usage.summarizedMessages, 0)
         XCTAssertEqual(plan.messages.first?.role, .system)
-        XCTAssertTrue(plan.messages.first?.content.contains("历史摘要") == true)
+        XCTAssertTrue(plan.messages.first?.content.contains("规则") == true, "固定 system 提示必须在最前且不被摘要遮蔽")
+        XCTAssertTrue(plan.messages.contains { $0.role == .system && $0.content.contains("历史摘要") })
         XCTAssertTrue(plan.actions.contains { if case .summarized = $0 { return true }; return false })
         XCTAssertFalse(plan.overBudget)
     }
@@ -379,12 +381,16 @@ final class AgentContextManagerTests: XCTestCase {
         let call = AgentToolCall(id: "call_1", name: "read_page", argumentsJSON: "{}")
         messages.append(.assistant("", toolCalls: [call]))
         messages.append(.tool(call, content: String(repeating: "原", count: 5000)))
-        let budget = AgentContextBudget(maxToolResultCharacters: 200)
+        // 达到阈值才会压缩：用显式小阈值（旧配置语义）触发。
+        let budget = AgentContextBudget(maxContextTokens: 2_000, reserveForResponseTokens: 0,
+                                        maxToolResultCharacters: 200)
         let manager = AgentContextManager(budget: budget)
         let plan = await manager.prepare(systemPrompt: "规则", messages: messages)
         XCTAssertEqual(plan.usage.truncatedToolResults, 1)
-        XCTAssertTrue(plan.messages[2].content.contains("裁剪"))
-        XCTAssertLessThan(plan.messages[2].content.count, 500)
+        XCTAssertEqual(plan.usage.action, .pruned)
+        let toolMessage = try? XCTUnwrap(plan.messages.first { $0.role == .tool })
+        XCTAssertTrue(toolMessage?.content.contains("裁剪") == true)
+        XCTAssertLessThan(toolMessage?.content.count ?? .max, 500)
     }
 
     func testSingleOversizedMessageIsReportedAsOverBudget() async {
@@ -1842,5 +1848,271 @@ final class AgentAdversarialContextTests: XCTestCase {
         XCTAssertTrue(sawCancelled)
         let saved = try XCTUnwrap(try AgentCheckpointStore(root: root).load(conversationID: conversationID))
         XCTAssertEqual(saved.status, .cancelled)
+    }
+}
+
+// MARK: - 上下文窗口 / 阈值压缩 / 摘要持久化
+
+/// 记录摘要调用次数：用于断言「低于阈值零摘要」。
+private final class AgentCountingSummarizer: AgentHistorySummarizer, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private let text: String
+
+    init(text: String = "旧对话摘要内容") { self.text = text }
+
+    var calls: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func summarize(_ messages: [AgentMessage]) async throws -> String {
+        lock.lock()
+        count += 1
+        lock.unlock()
+        return text
+    }
+}
+
+private func agentAuditHistory(turns: Int, characters: Int) -> [AgentMessage] {
+    var messages: [AgentMessage] = []
+    for index in 0..<turns {
+        messages.append(.user("第\(index)问" + String(repeating: "问", count: characters)))
+        messages.append(.assistant("第\(index)答" + String(repeating: "答", count: characters)))
+    }
+    return messages
+}
+
+final class AgentContextManagementTests: XCTestCase {
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = agentTemporaryRoot("context-management")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func testBelowThresholdDoesNotSummarizeOrCompress() async throws {
+        let summarizer = AgentCountingSummarizer()
+        let store = AgentContextSummaryStore(root: root)
+        let budget = AgentContextBudget(contextWindow: 128_000, outputReserveTokens: 1_400)
+        let manager = AgentContextManager(budget: budget, summarizer: summarizer, summaries: store)
+        let conversationID = UUID()
+
+        let plan = await manager.prepare(conversationID: conversationID, systemPrompt: "只依据书内材料",
+                                         messages: agentAuditHistory(turns: 3, characters: 50))
+        XCTAssertEqual(plan.usage.action, .none, "低于阈值不应压缩/摘要")
+        XCTAssertEqual(summarizer.calls, 0, "低于阈值不应调用摘要模型")
+        XCTAssertEqual(plan.usage.contextWindow, 128_000)
+        XCTAssertEqual(plan.usage.thresholdTokens, 102_400)
+        XCTAssertEqual(plan.usage.limitTokens, plan.usage.thresholdTokens)
+        XCTAssertEqual(plan.usage.systemTokens, AgentTokenEstimator().estimate("只依据书内材料"))
+        XCTAssertEqual(plan.usage.toolTokens, 0)
+        XCTAssertEqual(plan.usage.estimatedTokens,
+                       plan.usage.systemTokens + plan.usage.historyTokens + plan.usage.toolTokens + plan.usage.summaryTokens)
+        XCTAssertLessThan(plan.usage.percent, plan.usage.thresholdPercent)
+        XCTAssertEqual(plan.usage.thresholdPercent, 0.8, accuracy: 0.001)
+        XCTAssertEqual(plan.messages.first, .system("只依据书内材料"), "system 提示必须始终发送且在最先")
+        XCTAssertNil(store.load(conversationID))
+        XCTAssertTrue(plan.actions.contains(.withinBudget))
+    }
+
+    func testThresholdCompactionSummarizesOldAndKeepsRecent() async throws {
+        let summarizer = AgentCountingSummarizer(text: "旧对话摘要内容")
+        let store = AgentContextSummaryStore(root: root)
+        let budget = AgentContextBudget(contextWindow: 4_000, outputReserveTokens: 500, headroomTokens: 500)
+        XCTAssertEqual(budget.thresholdTokens, 3_000)
+        let manager = AgentContextManager(budget: budget, summarizer: summarizer, summaries: store)
+        let conversationID = UUID()
+        let history = agentAuditHistory(turns: 8, characters: 200)
+
+        let plan = await manager.prepare(conversationID: conversationID, systemPrompt: "规则", messages: history)
+        XCTAssertEqual(summarizer.calls, 1, "达到阈值才压缩一次")
+        XCTAssertEqual(plan.usage.action, .compacted)
+        XCTAssertGreaterThan(plan.usage.summarizedMessages, 0)
+        XCTAssertLessThanOrEqual(plan.usage.estimatedTokens, budget.thresholdTokens)
+        XCTAssertGreaterThan(plan.usage.summaryTokens, 0)
+        XCTAssertGreaterThan(plan.usage.historyTokens, 0)
+        XCTAssertTrue(plan.messages.contains { $0.role == .system && $0.content.contains("旧对话摘要内容") })
+        XCTAssertTrue(plan.messages.contains { $0.content.contains("第7问") }, "必须保留最近一轮")
+        XCTAssertFalse(plan.messages.contains { $0.content.contains("第0问") }, "最旧历史应被摘要替代")
+        XCTAssertEqual(plan.messages.first, .system("规则"))
+        // 保留区不得拆开 assistant tool_calls 与工具结果。
+        for (index, message) in plan.messages.enumerated() where message.role == .tool {
+            let previous = index > 0 ? plan.messages[index - 1].role : nil
+            XCTAssertTrue(previous == .assistant || previous == .tool, "工具结果必须跟在其调用之后")
+        }
+        let stored = try XCTUnwrap(store.load(conversationID))
+        XCTAssertEqual(stored.text, "旧对话摘要内容")
+        XCTAssertGreaterThan(stored.summarizedMessages, 0)
+        XCTAssertEqual(plan.summaryReference?.summarizedMessages, stored.summarizedMessages)
+    }
+
+    func testPersistedSummaryIsUsedNextTurnWithoutResummarizing() async throws {
+        let summarizer = AgentCountingSummarizer(text: "旧对话摘要内容")
+        let store = AgentContextSummaryStore(root: root)
+        let budget = AgentContextBudget(contextWindow: 4_000, outputReserveTokens: 500, headroomTokens: 500)
+        let manager = AgentContextManager(budget: budget, summarizer: summarizer, summaries: store)
+        let conversationID = UUID()
+        let history = agentAuditHistory(turns: 8, characters: 200)
+        let first = await manager.prepare(conversationID: conversationID, systemPrompt: "规则", messages: history)
+        XCTAssertEqual(first.usage.action, .compacted)
+        let stored = try XCTUnwrap(store.load(conversationID))
+
+        // 下一轮：历史仍带完整消息（checkpoint 语义），但已摘要前缀应跳过、摘要作为 system 前缀复用。
+        let nextMessages = history + [.user("追问：继续"), .assistant("继续回答")]
+        let next = await manager.prepare(conversationID: conversationID, systemPrompt: "规则", messages: nextMessages)
+        XCTAssertEqual(summarizer.calls, 1, "已持久化的摘要不应再次摘要")
+        XCTAssertEqual(next.usage.action, .none)
+        XCTAssertTrue(next.messages.contains { $0.role == .system && $0.content.contains("旧对话摘要内容") })
+        XCTAssertTrue(next.messages.contains { $0.content.contains("追问：继续") })
+        XCTAssertFalse(next.messages.contains { $0.content.contains("第0问") }, "已摘要的历史前缀不应重复发送")
+        XCTAssertEqual(next.messages.filter { $0.role == .system && $0.content.contains("旧对话摘要内容") }.count, 1)
+        XCTAssertEqual(store.load(conversationID)?.summarizedMessages, stored.summarizedMessages)
+    }
+
+    func testSummaryFailureFallsBackToTrimming() async throws {
+        let store = AgentContextSummaryStore(root: root)
+        let budget = AgentContextBudget(contextWindow: 4_000, outputReserveTokens: 500, headroomTokens: 500)
+        let manager = AgentContextManager(budget: budget, summarizer: FailingSummarizer(), summaries: store)
+        let conversationID = UUID()
+
+        let plan = await manager.prepare(conversationID: conversationID, systemPrompt: "规则",
+                                         messages: agentAuditHistory(turns: 8, characters: 200))
+        XCTAssertEqual(plan.usage.action, .trimmed)
+        XCTAssertGreaterThan(plan.usage.trimmedMessages, 0)
+        XCTAssertEqual(plan.usage.summarizedMessages, 0)
+        XCTAssertLessThanOrEqual(plan.usage.estimatedTokens, budget.thresholdTokens)
+        XCTAssertFalse(plan.overBudget)
+        XCTAssertNil(store.load(conversationID), "摘要失败不应写入空摘要")
+        XCTAssertTrue(plan.messages.contains { $0.content.contains("第7问") })
+    }
+
+    func testUnsatisfiableWindowReportsOverBudgetAfterRetry() async throws {
+        let budget = AgentContextBudget(contextWindow: 4_000, outputReserveTokens: 500, headroomTokens: 500)
+        let manager = AgentContextManager(budget: budget)
+        let plan = await manager.prepare(systemPrompt: "规则",
+                                         messages: [.user(String(repeating: "超长问题", count: 1_000))])
+        XCTAssertTrue(plan.overBudget)
+        XCTAssertEqual(plan.usage.action, .none)
+        XCTAssertGreaterThan(plan.usage.estimatedTokens, budget.thresholdTokens)
+        XCTAssertTrue(plan.actions.contains { if case .overBudget = $0 { return true }; return false })
+    }
+
+    func testOversizedToolResultsArePrunedBeforeSummarizing() async throws {
+        let summarizer = AgentCountingSummarizer()
+        let budget = AgentContextBudget(contextWindow: 4_000, outputReserveTokens: 500, headroomTokens: 500,
+                                        maxToolResultCharacters: 200)
+        let manager = AgentContextManager(budget: budget, summarizer: summarizer)
+        let call = AgentToolCall(id: "call_1", name: "read_page", argumentsJSON: "{}")
+        let messages: [AgentMessage] = [
+            .user("问题"),
+            .assistant("", toolCalls: [call]),
+            .tool(call, content: String(repeating: "原", count: 5_000)),
+        ]
+        let plan = await manager.prepare(systemPrompt: "规则", messages: messages)
+        XCTAssertEqual(plan.usage.action, .pruned)
+        XCTAssertEqual(plan.usage.truncatedToolResults, 1)
+        XCTAssertEqual(summarizer.calls, 0, "仅裁剪工具结果即可回到阈值内时不应摘要")
+        let toolMessage = try XCTUnwrap(plan.messages.first { $0.role == .tool })
+        XCTAssertTrue(toolMessage.content.contains("裁剪"))
+        XCTAssertLessThan(toolMessage.content.count, 500)
+    }
+
+    func testSummaryStorePersistsAndDeletes() throws {
+        let store = AgentContextSummaryStore(root: root)
+        let conversationID = UUID()
+        let summary = AgentContextSummary(conversationID: conversationID, text: "摘要正文",
+                                          summarizedMessages: 6, updatedAt: Date())
+        try store.save(summary)
+        let loaded = try XCTUnwrap(store.load(conversationID))
+        XCTAssertEqual(loaded.conversationID, conversationID)
+        XCTAssertEqual(loaded.text, "摘要正文")
+        XCTAssertEqual(loaded.summarizedMessages, 6)
+        // iso8601 落盘会丢失亚秒精度，按秒比较。
+        XCTAssertEqual(loaded.updatedAt.timeIntervalSince1970,
+                       summary.updatedAt.timeIntervalSince1970, accuracy: 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL(conversationID: conversationID).path))
+        store.delete(conversationID)
+        XCTAssertNil(store.load(conversationID))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.fileURL(conversationID: conversationID).path))
+    }
+
+    func testUsageDecodesLegacyJSONWithoutNewFields() throws {
+        let legacy = Data(#"{"estimatedTokens":123,"characterCount":456,"limitTokens":8400,"summarizedMessages":1,"trimmedMessages":2,"truncatedToolResults":3}"#.utf8)
+        let usage = try JSONDecoder().decode(AgentContextUsage.self, from: legacy)
+        XCTAssertEqual(usage.estimatedTokens, 123)
+        XCTAssertEqual(usage.characterCount, 456)
+        XCTAssertEqual(usage.limitTokens, 8_400)
+        XCTAssertEqual(usage.thresholdTokens, 8_400, "旧数据没有阈值字段时回退 limitTokens")
+        XCTAssertEqual(usage.contextWindow, 0)
+        XCTAssertEqual(usage.summarizedMessages, 1)
+        XCTAssertEqual(usage.trimmedMessages, 2)
+        XCTAssertEqual(usage.truncatedToolResults, 3)
+        XCTAssertEqual(usage.action, .none)
+        XCTAssertGreaterThan(usage.utilization, 0)
+    }
+
+    func testEffectiveContextWindowDefaultsAndOverrides() throws {
+        let openAI = AIConfiguration(name: "o", format: .openAI, address: "https://example.com", model: "m")
+        XCTAssertNil(openAI.contextWindow)
+        XCTAssertEqual(openAI.effectiveContextWindow, 128_000)
+        let anthropic = AIConfiguration(name: "a", format: .anthropic, address: "https://example.com", model: "m")
+        XCTAssertEqual(anthropic.effectiveContextWindow, 200_000)
+        var custom = AIConfiguration(name: "c", format: .openAI, address: "https://example.com", model: "m")
+        custom.provider = .custom
+        XCTAssertEqual(custom.effectiveContextWindow, 128_000)
+        custom.contextWindow = 64_000
+        XCTAssertEqual(custom.effectiveContextWindow, 64_000, "显式窗口优先")
+        XCTAssertEqual(AIConfiguration.deepSeek.effectiveContextWindow, 128_000)
+        // 旧目录 JSON 没有 contextWindow 字段也能读。
+        let json = Data(#"{"id":"00000000-0000-0000-0000-000000000001","name":"旧服务","format":"OpenAI","address":"https://example.com","model":"m"}"#.utf8)
+        let decoded = try JSONDecoder().decode(AIConfiguration.self, from: json)
+        XCTAssertNil(decoded.contextWindow)
+        XCTAssertEqual(decoded.effectiveContextWindow, 128_000)
+    }
+
+    func testExecutorEmitsRealWindowAndPersistsSummaryReference() async throws {
+        let summarizer = AgentCountingSummarizer(text: "旧对话摘要内容")
+        let summaries = AgentContextSummaryStore(root: root)
+        let budget = AgentContextBudget(contextWindow: 4_000, outputReserveTokens: 500, headroomTokens: 500)
+        let model = ScriptedChatModel([
+            [.textDelta(#"{"answer":"继续回答。","citations":[]}"#), .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root, budget: budget,
+                                    summarizer: summarizer, summaries: summaries)
+        let conversationID = UUID()
+        let now = Date()
+        let checkpoint = AgentCheckpoint(
+            conversationID: conversationID, bookID: "book-1", bookTitle: "测试书",
+            createdAt: now, updatedAt: now, status: .running, model: "stub-model",
+            messages: agentAuditHistory(turns: 8, characters: 200), steps: 0,
+            result: nil, failure: nil, warnings: [], context: nil)
+        try AgentCheckpointStore(root: root).save(checkpoint)
+
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: conversationID, bookID: "book-1", bookTitle: "测试书",
+            messages: [], checkpoint: checkpoint)))
+        let result = try XCTUnwrap(agentCompleted(events), "应完成回答，事件：\(events)")
+        XCTAssertEqual(result.answer, "继续回答。")
+        let snapshots = events.compactMap { event -> AgentContextSnapshot? in
+            if case .context(let value) = event { return value }; return nil
+        }
+        let snapshot = try XCTUnwrap(snapshots.last)
+        XCTAssertEqual(snapshot.usage.contextWindow, 4_000, "事件必须带真实窗口，而不是固定 10k")
+        XCTAssertEqual(snapshot.usage.thresholdTokens, budget.thresholdTokens)
+        XCTAssertEqual(snapshot.usage.action, .compacted)
+        XCTAssertEqual(summarizer.calls, 1)
+        let firstMessage = try XCTUnwrap(model.requests.first?.first)
+        XCTAssertEqual(firstMessage.role, .system)
+        XCTAssertTrue(firstMessage.content.contains("书灯"), "固定 system 规则必须真实发送给模型")
+        let saved = try XCTUnwrap(try AgentCheckpointStore(root: root).load(conversationID: conversationID))
+        XCTAssertNotNil(saved.summary, "checkpoint 应记录摘要引用")
+        XCTAssertEqual(saved.summary?.summarizedMessages, saved.context?.summarizedMessages ?? 0)
+        XCTAssertNotNil(summaries.load(conversationID))
     }
 }

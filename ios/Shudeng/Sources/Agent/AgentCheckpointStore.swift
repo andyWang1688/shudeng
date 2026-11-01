@@ -22,6 +22,8 @@ struct AgentCheckpoint: Codable, Sendable, Equatable {
     var failure: AgentFailure?
     var warnings: [String]
     var context: AgentContextUsage?
+    /// 已持久化的压缩摘要引用；摘要正文在 AgentContextSummaryStore 里，避免检查点重复存储。
+    var summary: AgentContextSummaryReference? = nil
 }
 
 enum AgentCheckpointError: Error, LocalizedError, Equatable {
@@ -80,6 +82,78 @@ struct AgentCheckpointStore: Sendable {
         return files.filter { $0.pathExtension == "json" }
             .compactMap { try? Self.decoder().decode(AgentCheckpoint.self, from: Data(contentsOf: $0)) }
             .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private static func encoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }
+
+    private static func decoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+}
+
+// MARK: - 跨轮压缩摘要
+
+/// 压缩后的历史摘要：按 conversationID 一条 JSON，跨轮作为 system 前缀继续使用。
+struct AgentContextSummary: Codable, Sendable, Equatable {
+    let conversationID: UUID
+    var text: String
+    /// 已被摘要覆盖的历史消息数量（下轮从历史前缀中跳过，避免重复发送）。
+    var summarizedMessages: Int
+    var updatedAt: Date
+}
+
+/// checkpoint 里的摘要引用；正文不入检查点（避免重复存储/膨胀）。
+struct AgentContextSummaryReference: Codable, Sendable, Equatable {
+    let conversationID: UUID
+    let summarizedMessages: Int
+    let updatedAt: Date
+
+    init(_ summary: AgentContextSummary) {
+        conversationID = summary.conversationID
+        summarizedMessages = summary.summarizedMessages
+        updatedAt = summary.updatedAt
+    }
+}
+
+/// `<书灯 root>/agent-summaries/<conversationID>.json`，原子写入。
+/// 删除对话时调用 delete(_:) 清理；损坏文件按无摘要处理（load 返回 nil）。
+struct AgentContextSummaryStore: Sendable {
+    let directory: URL
+
+    init(root: URL) {
+        directory = root.appendingPathComponent("agent-summaries", isDirectory: true)
+    }
+
+    func fileURL(conversationID: UUID) -> URL {
+        directory.appendingPathComponent(conversationID.uuidString + ".json")
+    }
+
+    func load(_ conversationID: UUID) -> AgentContextSummary? {
+        let url = fileURL(conversationID: conversationID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try? Self.decoder().decode(AgentContextSummary.self, from: Data(contentsOf: url))
+    }
+
+    func save(_ summary: AgentContextSummary) throws {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Self.encoder().encode(summary).write(to: fileURL(conversationID: summary.conversationID), options: .atomic)
+        } catch {
+            throw AgentCheckpointError.storage
+        }
+    }
+
+    func delete(_ conversationID: UUID) {
+        let url = fileURL(conversationID: conversationID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     private static func encoder() -> JSONEncoder {

@@ -213,10 +213,13 @@ final class QuestionStore: NSObject {
             try JSONEncoder().encode(committed.filter { !ids.contains($0.id) }).write(to: file, options: .atomic)
             committed.removeAll { ids.contains($0.id) }; pending = pending.filter { !ids.contains($0.key) }
             emptyDrafts = emptyDrafts.filter { !ids.contains($0.key) }
+            let root = file.deletingLastPathComponent()
             for id in ids {
                 streaming.removeValue(forKey: id); agentSessions.removeValue(forKey: id)
-                try? AgentCheckpointStore(root: file.deletingLastPathComponent()).remove(conversationID: id)
+                try? AgentCheckpointStore(root: root).remove(conversationID: id)
             }
+            // 上下文摘要按 conversation 存；删除对话时一并清理，避免残留用户内容。
+            AgentContextSummaryStore(root: root).delete(conversation.id)
             notify(); return true
         } catch { notify(); return false }
     }

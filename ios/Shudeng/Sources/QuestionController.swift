@@ -130,6 +130,9 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     private let retry = UIButton(type: .system)
     private let retryGeneration = UIButton(type: .system)
     private let materials = UIButton(type: .system)
+    private let contextUsageButton = UIButton(type: .system)
+    private let contextDetails = UIStackView()
+    private var contextDetailsExpanded = false
     private var observer: NSObjectProtocol?
     private var expanded: Set<UUID> = []
     /// 已展开工具步骤的轮次；默认收起，流式时也不打断阅读。
@@ -260,11 +263,44 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         serviceHint.contentHorizontalAlignment = .leading
         serviceHint.accessibilityIdentifier = "question-ai-service"
         serviceHint.addTarget(self, action: #selector(openAISettings), for: .touchUpInside)
+        var contextConfiguration = UIButton.Configuration.plain()
+        contextConfiguration.title = "上下文"
+        contextConfiguration.image = contextRingImage(0)
+        contextConfiguration.imagePadding = 6
+        contextConfiguration.baseForegroundColor = BookDesign.ink2
+        contextConfiguration.contentInsets = .zero
+        contextConfiguration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookType.caption
+            return outgoing
+        }
+        contextUsageButton.configuration = contextConfiguration
+        contextUsageButton.contentHorizontalAlignment = .leading
+        contextUsageButton.accessibilityIdentifier = "question-context-usage"
+        contextUsageButton.accessibilityLabel = "上下文用量"
+        contextUsageButton.accessibilityHint = "查看本次对话的容量明细"
+        contextUsageButton.isHidden = true
+        contextUsageButton.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.contextDetailsExpanded.toggle()
+            self.refresh()
+            if self.contextDetailsExpanded {
+                UIAccessibility.post(notification: .layoutChanged, argument: self.contextDetails)
+            }
+        }, for: .touchUpInside)
+        contextDetails.axis = .vertical
+        contextDetails.spacing = 3
+        contextDetails.isHidden = true
+        contextDetails.accessibilityIdentifier = "question-context-details"
+
         composer.addArrangedSubview(composerContext)
         composer.addArrangedSubview(serviceHint)
         composer.addArrangedSubview(field)
+        composer.addArrangedSubview(contextUsageButton)
+        composer.addArrangedSubview(contextDetails)
         composer.addArrangedSubview(cancel)
         composer.addArrangedSubview(retry)
+        composer.setCustomSpacing(4, after: contextUsageButton)
         composerDivider.backgroundColor = BookDesign.line
         for child in [sheetHeader, scroll, composerDivider, composer] {
             child.translatesAutoresizingMaskIntoConstraints = false
@@ -351,6 +387,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         statusBox.isHidden = idleDraft || succeeded
         materials.isHidden = record.evidence.isEmpty
         retryGeneration.isHidden = record.state != .incomplete || record.failure == nil
+        updateContextUsage(record)
         let turns = library.questions.conversation(record.conversation)?.turns ?? [record]
         let signature = turns.map { turn -> String in
             let steps = turn.agent?.steps ?? []
@@ -551,6 +588,120 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         }
         messages.addArrangedSubview(reply)
     }
+    // MARK: - 上下文用量（圆环 + 明细）
+
+    /// 输入区下方的上下文用量：圆环 + 百分比；点按展开明细，无数据时隐藏。
+    private func updateContextUsage(_ record: ReadingQuestion) {
+        guard let context = record.agent?.context, context.contextWindow > 0 else {
+            contextUsageButton.isHidden = true
+            contextDetails.isHidden = true
+            return
+        }
+        let percent = min(max(context.percent, 0), 1)
+        let percentText: String
+        if percent > 0, percent < 0.01 {
+            percentText = String(format: "%.1f", percent * 100)
+        } else {
+            percentText = String(Int((percent * 100).rounded()))
+        }
+        var configuration = contextUsageButton.configuration ?? .plain()
+        configuration.image = contextRingImage(percent)
+        configuration.title = "上下文 \(percentText)%"
+        contextUsageButton.configuration = configuration
+        contextUsageButton.accessibilityValue = "\(percentText)%"
+        contextUsageButton.isHidden = false
+
+        contextDetails.isHidden = !contextDetailsExpanded
+        guard contextDetailsExpanded else { return }
+        for child in contextDetails.arrangedSubviews {
+            contextDetails.removeArrangedSubview(child)
+            child.removeFromSuperview()
+        }
+        let summary = BookDesign.label(
+            "已用约 \(Self.humanContextSize(context.estimatedTokens)) / 窗口约 \(Self.humanContextSize(context.contextWindow))",
+            font: BookType.caption,
+            colour: BookDesign.ink3
+        )
+        summary.numberOfLines = 0
+        summary.accessibilityIdentifier = "question-context-summary"
+        contextDetails.addArrangedSubview(summary)
+
+        let used = max(context.estimatedTokens, 1)
+        func share(_ tokens: Int) -> Int { Int((Double(tokens) / Double(used) * 100).rounded()) }
+        var parts: [String] = []
+        if context.historyTokens > 0 { parts.append("对话历史 \(share(context.historyTokens))%") }
+        if context.toolTokens > 0 { parts.append("书内资料 \(share(context.toolTokens))%") }
+        if context.summaryTokens > 0 { parts.append("摘要 \(share(context.summaryTokens))%") }
+        if context.systemTokens > 0 { parts.append("系统提示 \(share(context.systemTokens))%") }
+        if !parts.isEmpty {
+            let breakdown = BookDesign.label("构成：" + parts.joined(separator: " · "), font: BookType.caption, colour: BookDesign.ink3)
+            breakdown.numberOfLines = 0
+            breakdown.accessibilityIdentifier = "question-context-breakdown"
+            contextDetails.addArrangedSubview(breakdown)
+        }
+
+        let status: String
+        switch context.action {
+        case .compacted:
+            status = "本次对话已接近上限，已自动整理较早对话"
+        case .pruned:
+            status = "更早的对话已为本次回答收起"
+        case .trimmed:
+            status = "部分书内资料已精简后使用"
+        case .none:
+            if context.summarizedMessages > 0 {
+                status = "本次对话已接近上限，已自动整理较早对话"
+            } else if context.trimmedMessages > 0 {
+                status = "更早的对话已为本次回答收起"
+            } else if context.truncatedToolResults > 0 {
+                status = "部分书内资料已精简后使用"
+            } else {
+                status = "内容仍在上限内，暂未自动整理"
+            }
+        }
+        let statusLabel = BookDesign.label(status, font: BookType.caption, colour: BookDesign.ink3)
+        statusLabel.numberOfLines = 0
+        statusLabel.accessibilityIdentifier = "question-context-status"
+        contextDetails.addArrangedSubview(statusLabel)
+    }
+
+    private static func humanContextSize(_ count: Int) -> String {
+        if count >= 10000 {
+            return String(format: "%.1f 万字", Double(count) / 10000)
+        }
+        if count >= 1000 {
+            return String(format: "%.1f 千字", Double(count) / 1000)
+        }
+        return "\(count) 字"
+    }
+
+    /// 16pt 圆环：轨道 book line + 进度暖灯；接近上限转朱红警示。
+    private func contextRingImage(_ progress: Double) -> UIImage {
+        let size = CGSize(width: 16, height: 16)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            let lineWidth: CGFloat = 2.4
+            let radius: CGFloat = 6.4
+            let center = CGPoint(x: 8, y: 8)
+            let track = UIBezierPath(ovalIn: CGRect(x: 8 - radius, y: 8 - radius, width: radius * 2, height: radius * 2))
+            track.lineWidth = lineWidth
+            BookDesign.line.setStroke()
+            track.stroke()
+            let clamped = min(max(progress, 0), 1)
+            guard clamped > 0.001 else { return }
+            let arc = UIBezierPath(
+                arcCenter: center,
+                radius: radius,
+                startAngle: -.pi / 2,
+                endAngle: -.pi / 2 + 2 * .pi * clamped,
+                clockwise: true
+            )
+            arc.lineWidth = lineWidth
+            arc.lineCapStyle = .round
+            (clamped >= 0.8 ? BookDesign.error : BookDesign.lampInk).setStroke()
+            arc.stroke()
+        }
+    }
+
     // MARK: - Agent 工具步骤（渐进披露）
 
     private func agentStepsView(_ turn: ReadingQuestion) -> UIView? {

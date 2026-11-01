@@ -400,4 +400,10 @@ enum AgentPrompts {
     static func toolResultError(_ message: String) -> String {
         "工具执行失败：\(message)。请修正参数或换一种方式继续；不要假设工具返回了内容。"
     }
+
+    /// 持久压缩摘要的 system 前缀（下一轮继续沿用，明确不是书内原文）。
+    static let contextSummaryPrefix = "[此前对话摘要，仅作背景，不是书内原文]\n"
+
+    /// 单条工具结果超长裁剪标记。
+    static let toolResultTrimmedSuffix = "\n…（工具结果过长已裁剪；如需要请重新调用工具读取更小范围）"
 }

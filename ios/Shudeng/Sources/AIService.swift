@@ -19,9 +19,21 @@ struct AIConfiguration: Codable, Identifiable, Equatable {
     var secretID: String?
     // Optional so catalogs saved before service presets remain readable.
     var provider: AIProvider?
+    /// 模型上下文窗口（tokens）。nil 时按服务格式回退（Anthropic 200k，其余 128k）；旧 JSON 无此字段。
+    var contextWindow: Int? = nil
 
     static var deepSeek: AIConfiguration {
-        AIConfiguration(name: "DeepSeek", format: .openAI, address: "https://api.deepseek.com", model: "deepseek-flash", provider: .deepSeek)
+        AIConfiguration(name: "DeepSeek", format: .openAI, address: "https://api.deepseek.com",
+                        model: "deepseek-flash", provider: .deepSeek, contextWindow: Self.defaultContextWindow)
+    }
+
+    static let defaultContextWindow = 128_000
+    static let anthropicContextWindow = 200_000
+
+    /// 实际窗口：显式设置优先；Anthropic 默认 200k，OpenAI/DeepSeek/自定义默认 128k。
+    var effectiveContextWindow: Int {
+        if let contextWindow, contextWindow >= 1_000 { return contextWindow }
+        return format == .anthropic ? Self.anthropicContextWindow : Self.defaultContextWindow
     }
 }
 

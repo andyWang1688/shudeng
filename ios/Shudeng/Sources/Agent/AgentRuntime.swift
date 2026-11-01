@@ -134,8 +134,12 @@ final class AgentExecutor: Sendable {
         history.append(contentsOf: request.messages)
         var steps = request.checkpoint?.steps ?? 0
         var warnings: [String] = []
-        var lastUsage = AgentContextUsage(estimatedTokens: 0, characterCount: 0, limitTokens: 0,
-                                          summarizedMessages: 0, trimmedMessages: 0, truncatedToolResults: 0)
+        let budget = context.budget
+        var lastUsage = AgentContextUsage(
+            limitTokens: budget.thresholdTokens, contextWindow: budget.contextWindow,
+            thresholdTokens: budget.thresholdTokens,
+            thresholdPercent: budget.contextWindow > 0
+                ? min(1, Double(budget.thresholdTokens) / Double(budget.contextWindow)) : 0)
         let allocator = AgentEvidenceAllocator()
         let systemPrompt = AgentPrompts.system(base: request.systemPrompt)
 
@@ -202,14 +206,16 @@ final class AgentExecutor: Sendable {
                 let finalStep = steps == configuration.maxSteps - 1
                 emit(.step(AgentStepStarted(index: steps + 1, finalStep: finalStep)))
 
-                // 1. 上下文：裁剪工具结果 → 摘要旧轮次 → 必要时裁剪；全部通过事件告知 UI。
-                let plan = await context.prepare(systemPrompt: systemPrompt, messages: history)
+                // 1. 上下文：低于阈值原样发送；达到阈值才裁工具结果 → 摘要旧历史 → 再评估。
+                let plan = await context.prepare(conversationID: request.conversationID,
+                                                 systemPrompt: systemPrompt, messages: history)
                 try Task.checkCancellation()
                 lastUsage = plan.usage
+                checkpoint.summary = plan.summaryReference
                 emit(.context(AgentContextSnapshot(usage: plan.usage, actions: plan.actions)))
                 if plan.overBudget {
                     throw AgentFailure(code: .contextBudget,
-                                       message: "本次对话已超出模型上下文容量（约 \(plan.usage.estimatedTokens) tokens，上限 \(plan.usage.limitTokens)）；请新建对话或缩短问题后重试。")
+                                       message: "本次对话已超出模型上下文窗口（约 \(plan.usage.estimatedTokens) tokens，窗口 \(plan.usage.contextWindow)，压缩阈值 \(plan.usage.thresholdTokens)）；请新建对话或缩短问题后重试。")
                 }
                 var requestMessages = plan.messages
                 if finalStep {
@@ -457,13 +463,14 @@ struct AgentBookRuntime: Sendable {
     let environment: BookAgentEnvironment
     let executor: AgentExecutor
     let checkpoints: AgentCheckpointStore
+    let summaries: AgentContextSummaryStore
 
     static func make(book: Book, index: BookIndex,
                      configuration: AIConfiguration, key: String,
                      checkpointRoot: URL,
                      currentLocation: Locator? = nil, progress: String? = nil,
                      runtimeConfiguration: AgentRuntimeConfiguration = AgentRuntimeConfiguration(),
-                     contextBudget: AgentContextBudget = .default,
+                     contextBudget: AgentContextBudget? = nil,
                      externalTools: [any AgentTool] = []) -> AgentBookRuntime {
         make(environment: BookAgentEnvironment.make(book: book, index: index,
                                                     currentLocation: currentLocation, progress: progress),
@@ -476,7 +483,7 @@ struct AgentBookRuntime: Sendable {
                      configuration: AIConfiguration, key: String,
                      checkpointRoot: URL,
                      runtimeConfiguration: AgentRuntimeConfiguration = AgentRuntimeConfiguration(),
-                     contextBudget: AgentContextBudget = .default,
+                     contextBudget: AgentContextBudget? = nil,
                      externalTools: [any AgentTool] = []) -> AgentBookRuntime {
         let model: any AgentChatModel
         switch configuration.format {
@@ -485,15 +492,24 @@ struct AgentBookRuntime: Sendable {
         }
         // 书内只读工具始终启用；外部工具由宿主显式传入（已过用户白名单/确认），默认空。
         let tools = AgentToolRegistry(BookAgentTools.make(environment: environment) + externalTools)
-        let summarizer = AgentModelHistorySummarizer(model: model,
-                                                    maxCharacters: contextBudget.summaryTargetCharacters)
-        let context = AgentContextManager(budget: contextBudget, summarizer: summarizer)
+        // 预算按真实模型窗口动态计算（旧调用方也可显式传入覆盖）。
+        let budget = contextBudget ?? AgentContextBudget(
+            contextWindow: configuration.effectiveContextWindow,
+            outputReserveTokens: runtimeConfiguration.modelOptions.maxTokens)
+        let summarizer = AgentModelHistorySummarizer(
+            model: model,
+            maxCharacters: budget.summaryTargetCharacters,
+            options: AgentModelOptions(maxTokens: min(budget.summaryTargetCharacters, AgentContextBudget.defaultSummaryCharacters),
+                                       timeout: 45))
+        let summaries = AgentContextSummaryStore(root: checkpointRoot)
+        let context = AgentContextManager(budget: budget, summarizer: summarizer, summaries: summaries)
         let store = AgentCheckpointStore(root: checkpointRoot)
         let verifier = BookIndexCitationVerifier(index: index, bookID: environment.bookID)
         let executor = AgentExecutor(model: model, tools: tools, context: context,
                                      checkpoints: store, verifier: verifier,
                                      configuration: runtimeConfiguration)
-        return AgentBookRuntime(environment: environment, executor: executor, checkpoints: store)
+        return AgentBookRuntime(environment: environment, executor: executor, checkpoints: store,
+                                summaries: summaries)
     }
 
     /// iOS 17+ 宿主可用：先发现已启用的外部 MCP 工具，再组装运行时。
@@ -504,7 +520,7 @@ struct AgentBookRuntime: Sendable {
                      checkpointRoot: URL,
                      currentLocation: Locator? = nil, progress: String? = nil,
                      runtimeConfiguration: AgentRuntimeConfiguration = AgentRuntimeConfiguration(),
-                     contextBudget: AgentContextBudget = .default,
+                     contextBudget: AgentContextBudget? = nil,
                      mcpServers: [MCPServerConfiguration],
                      mcpManager: MCPClientManager = .shared) async -> AgentBookRuntime {
         let externalTools = await MCPAgentToolProvider.makeTools(servers: mcpServers, manager: mcpManager)
@@ -538,5 +554,10 @@ struct AgentBookRuntime: Sendable {
 
     func loadCheckpoint(conversationID: UUID) -> AgentCheckpoint? {
         try? checkpoints.load(conversationID: conversationID)
+    }
+
+    /// 删除对话时清理持久摘要，避免旧摘要污染新对话。
+    func deleteConversationSummary(conversationID: UUID) {
+        summaries.delete(conversationID)
     }
 }

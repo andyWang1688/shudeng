@@ -6588,3 +6588,100 @@ extension ReadingUITests {
         print("AGENT_MCP entry=true addRow=\(mcp.exists) existingServers=\(app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "mcp-server-")).count)")
     }
 }
+
+extension ReadingUITests {
+    private func contextAttach(_ name: String) {
+        Thread.sleep(forTimeInterval: 0.4)
+        let a = XCTAttachment(image: XCUIScreen.main.screenshot().image); a.name = name; a.lifetime = .keepAlways; add(a)
+    }
+
+    /// task-79：Agent 问答上下文圆环 + 明细。
+    func testContextUsageRingAndDetailsPDF() throws {
+        try requireAgentStub()
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        try setAgentService(app, format: "OpenAI", model: "agent-stub", port: 18781)
+        askAgentPDF(app)
+        let toggle = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "question-agent-toggle-")).firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 45))
+        let answer = app.staticTexts["question-answer"]
+        let status = app.staticTexts["question-status"]
+        let done = NSPredicate { _, _ in !status.exists && answer.exists }
+        expectation(for: done, evaluatedWith: app); waitForExpectations(timeout: 60)
+        let usage = app.buttons["question-context-usage"]
+        XCTAssertTrue(usage.waitForExistence(timeout: 10), "完成态应显示上下文圆环")
+        print("CONTEXT_QA usageValue=\(usage.value as? String ?? "-") label=\(usage.label)")
+        contextAttach("agent-context-ring-375-light")
+        usage.tap()
+        let summary = app.staticTexts["question-context-summary"]
+        let breakdown = app.staticTexts["question-context-breakdown"]
+        let contextStatus = app.staticTexts["question-context-status"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+        XCTAssertTrue(breakdown.waitForExistence(timeout: 5))
+        XCTAssertTrue(contextStatus.waitForExistence(timeout: 5))
+        print("CONTEXT_QA summary=\(summary.label) breakdown=\(breakdown.label) status=\(contextStatus.label)")
+        contextAttach("agent-context-details-375-light")
+        let usageValue = usage.value as? String ?? ""
+        app.buttons["question-close"].tap()
+        let readerClose = app.buttons["reader-close"]
+        if readerClose.waitForExistence(timeout: 5) { readerClose.tap() }
+        _ = app.buttons["tab-library"].waitForExistence(timeout: 10)
+        // 历史回看：对话页打开同一条 Agent 记录，上下文应持久化显示。
+        tab("tab-conversations", label: "对话", in: app).tap()
+        let history = app.collectionViews["question-history"]
+        XCTAssertTrue(history.waitForExistence(timeout: 10))
+        let header = history.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "conversations-book-")).firstMatch
+        if !history.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "question-")).firstMatch.exists, header.exists { header.tap(); Thread.sleep(forTimeInterval: 0.5) }
+        let row = history.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "question-")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
+        XCTAssertTrue(app.buttons["question-context-usage"].waitForExistence(timeout: 10), "历史回看应保留上下文圆环")
+        XCTAssertEqual(app.buttons["question-context-usage"].value as? String, usageValue, "历史回看上下文百分比应持久化")
+    }
+
+    /// task-79：AI 高级设置上下文窗口字段默认值/保存。
+    func testAIContextWindowField() throws {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        app.buttons["tab-profile"].tap()
+        let profileList = app.collectionViews["profile-list"]
+        XCTAssertTrue(profileList.waitForExistence(timeout: 10))
+        let aiRow = profileList.cells.containing(NSPredicate(format: "label CONTAINS %@", "AI 服务")).firstMatch
+        for _ in 0..<4 where !aiRow.exists { profileList.swipeUp() }
+        XCTAssertTrue(aiRow.waitForExistence(timeout: 10), "我的页应有 AI 服务入口")
+        aiRow.tap()
+        XCTAssertTrue(app.tables["ai-services"].waitForExistence(timeout: 10))
+        let config = app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "ai-config-")).firstMatch
+        XCTAssertTrue(config.waitForExistence(timeout: 10)); config.tap()
+        let advanced = app.cells["ai-advanced"]
+        XCTAssertTrue(advanced.waitForExistence(timeout: 5)); advanced.tap()
+        XCTAssertTrue(app.tables["ai-advanced-editor"].waitForExistence(timeout: 5))
+        let field = app.textFields["ai-context-window"]
+        for _ in 0..<6 where !field.exists { app.tables["ai-advanced-editor"].swipeUp() }
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "应有上下文窗口字段")
+        print("CONTEXT_QA fieldPlaceholder=\(field.placeholderValue ?? "-") value=\(field.value as? String ?? "-")")
+        contextAttach("agent-context-window-field-375-light")
+        field.tap(); field.typeText("200000")
+        app.navigationBars["高级设置"].buttons.element(boundBy: 0).tap()
+        let save = app.navigationBars["编辑服务"].buttons["保存"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5), "编辑服务页应有保存")
+        save.tap()
+        if app.otherElements["AI 服务发送说明"].firstMatch.exists {
+            app.otherElements["AI 服务发送说明"].firstMatch.buttons["同意并保存"].tap()
+        }
+        if app.otherElements["已保存"].firstMatch.exists { app.otherElements["已保存"].firstMatch.buttons["完成"].tap() }
+        XCTAssertTrue(app.tables["ai-services"].waitForExistence(timeout: 10))
+        let config2 = app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "ai-config-")).firstMatch
+        XCTAssertTrue(config2.waitForExistence(timeout: 10)); config2.tap()
+        let advanced2 = app.cells["ai-advanced"]
+        if advanced2.waitForExistence(timeout: 5) { advanced2.tap() }
+        let field2 = app.textFields["ai-context-window"]
+        XCTAssertTrue(field2.waitForExistence(timeout: 10))
+        XCTAssertEqual(field2.value as? String, "200000", "上下文窗口保存后应保留")
+        print("CONTEXT_QA savedValue=\(field2.value as? String ?? "-")")
+        contextAttach("agent-context-window-saved-375-light")
+    }
+}

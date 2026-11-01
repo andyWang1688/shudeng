@@ -890,6 +890,7 @@ private final class AIAdvancedController: UITableViewController {
     private var draft: AIConfiguration
     private let changed: (AIConfiguration) -> Void
     private let name = UITextField(), address = UITextField(), model = UITextField()
+    private let contextWindow = UITextField()
     init(configuration: AIConfiguration, changed: @escaping (AIConfiguration) -> Void) {
         draft = configuration; self.changed = changed
         super.init(style: .insetGrouped)
@@ -906,7 +907,8 @@ private final class AIAdvancedController: UITableViewController {
         for (field, label, value, id) in [
             (name, "服务名称", draft.name, "ai-name"),
             (address, "API 根地址或完整端点", draft.address, "ai-address"),
-            (model, "自定义模型 ID", draft.model, "ai-model")
+            (model, "自定义模型 ID", draft.model, "ai-model"),
+            (contextWindow, "上下文窗口", draft.contextWindow.map(String.init) ?? "", "ai-context-window")
         ] {
             field.text = value; field.placeholder = label; field.accessibilityLabel = label; field.accessibilityIdentifier = id
             field.font = .preferredFont(forTextStyle: .body); field.adjustsFontForContentSizeCategory = true
@@ -915,17 +917,27 @@ private final class AIAdvancedController: UITableViewController {
             field.addTarget(self, action: #selector(finishEditing), for: .editingDidEndOnExit)
         }
         address.keyboardType = .URL
+        contextWindow.keyboardType = .numberPad
+        updateContextWindowPlaceholder()
     }
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 4 }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 5 }
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        "支持 OpenAI Chat Completions、Anthropic Messages 非流式文字接口。HTTPS 地址；本机测试可用 HTTP。地址中不要填写密钥。空路径使用 /v1，其余根路径追加文字端点。"
+        "支持 OpenAI Chat Completions、Anthropic Messages 非流式文字接口。HTTPS 地址；本机测试可用 HTTP。地址中不要填写密钥。空路径使用 /v1，其余根路径追加文字端点。上下文窗口填写模型一次能看多少内容（数字），不确定就留空，会按服务自动使用合适的默认值。"
+    }
+    private func updateContextWindowPlaceholder() {
+        let defaultText: String
+        switch draft.format {
+        case .anthropic: defaultText = "约 20 万"
+        default: defaultText = "约 12.8 万"
+        }
+        contextWindow.placeholder = "留空用默认（\(defaultText)）"
     }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        if indexPath.row < 3 {
+        if indexPath.row < 4 {
             let cell = tableView.dequeueReusableCell(withIdentifier: "ai-field", for: indexPath) as! AIFieldCell
             cell.configure(
-                label: ["服务名称", "地址", "自定义模型"][indexPath.row],
-                field: [name, address, model][indexPath.row]
+                label: ["服务名称", "地址", "自定义模型", "上下文窗口"][indexPath.row],
+                field: [name, address, model, contextWindow][indexPath.row]
             )
             return cell
         }
@@ -936,13 +948,15 @@ private final class AIAdvancedController: UITableViewController {
     }
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard indexPath.row == 3 else { return }
+        guard indexPath.row == 4 else { return }
         view.endEditing(true)
         let alert = BookAlertController(title: "接口格式", message: "仅支持非流式文字请求", preferredStyle: .actionSheet)
         for format in AIFormat.allCases {
             alert.addAction(BookAlertAction(title: format.rawValue, style: .default) { [weak self] _ in
                 guard let self else { return }
-                self.draft.format = format; self.changed(self.draft); self.tableView.reloadRows(at: [indexPath], with: .none)
+                self.draft.format = format; self.changed(self.draft)
+                self.updateContextWindowPlaceholder()
+                self.tableView.reloadRows(at: [indexPath], with: .none)
             })
         }
         alert.addAction(BookAlertAction(title: "取消", style: .cancel))
@@ -953,6 +967,14 @@ private final class AIAdvancedController: UITableViewController {
         draft.name = name.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         draft.address = address.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         draft.model = model.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let windowText = contextWindow.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if windowText.isEmpty {
+            draft.contextWindow = nil
+        } else if let value = Int(windowText), value >= 1000 {
+            draft.contextWindow = value
+        } else {
+            draft.contextWindow = nil
+        }
         changed(draft)
     }
     @objc private func finishEditing() { view.endEditing(true) }
