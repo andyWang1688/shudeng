@@ -44,6 +44,7 @@ final class AISettingsController: UITableViewController {
     private var semanticGeneration = 0
     private var lastProgressAt = Date.distantPast
     private var lastProgressValue: Double = -1
+    private var mcpServers: [MCPServerConfiguration] = []
 
     init(root: URL, secrets: AISecrets = KeychainSecrets(), semanticStore: SemanticModelStore = .shared) {
         self.root = root; self.secrets = secrets; self.semanticStore = semanticStore
@@ -84,6 +85,7 @@ final class AISettingsController: UITableViewController {
         navigationController?.setNavigationBarHidden(false, animated: false)
         refreshSemanticState()
         updateSemanticRow()
+        refreshMCPServers()
     }
     private var configurations: [AIConfiguration] {
         guard let store else { return [] }
@@ -97,14 +99,20 @@ final class AISettingsController: UITableViewController {
         navigationItem.rightBarButtonItems?.last?.isEnabled = !configurations.isEmpty
         tableView.reloadData()
     }
-    override func numberOfSections(in tableView: UITableView) -> Int { 3 }
+    override func numberOfSections(in tableView: UITableView) -> Int {
+        if #available(iOS 17.0, *) { return 4 }
+        return 3
+    }
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        section == 0 ? max(configurations.count, 1) : 1
+        if section == 0 { return max(configurations.count, 1) }
+        if #available(iOS 17.0, *), section == 3 { return mcpServers.count + 1 }
+        return 1
     }
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         switch section {
         case 0: return "服务"
         case 1: return "离线语义资料"
+        case 3: return "外部工具"
         default: return nil
         }
     }
@@ -112,11 +120,15 @@ final class AISettingsController: UITableViewController {
         switch section {
         case 0: return "API Key 仅保存在本机 Keychain；点按服务可编辑或检查连接。"
         case 1: return "用于书内 AI 语义检索；阅读、原文搜索、笔记不受影响。下载约 81MB，需联网一次；优先使用国内加速线路，失败自动切换。"
+        case 3: return "外部工具来自你添加的 MCP 服务，默认关闭；只有打开白名单的工具才会交给 AI，首次调用前会再次确认。不会向外部服务发送书库或 AI Key。"
         default: return nil
         }
     }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "ai-value", for: indexPath)
+        if #available(iOS 17.0, *), indexPath.section == 3 {
+            return configureMCPCell(cell, at: indexPath)
+        }
         if indexPath.section == 1 {
             configureSemanticCell(cell)
         } else if indexPath.section == 2 {
@@ -150,6 +162,14 @@ final class AISettingsController: UITableViewController {
     }
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
+        if #available(iOS 17.0, *), indexPath.section == 3 {
+            if indexPath.row < mcpServers.count {
+                presentMCPEditor(server: mcpServers[indexPath.row], isNew: false)
+            } else {
+                presentMCPEditor(server: .makeNew(), isNew: true)
+            }
+            return
+        }
         if indexPath.section == 1 {
             handleSemanticTap()
             return
@@ -160,6 +180,58 @@ final class AISettingsController: UITableViewController {
         }
         guard store != nil else { load(); return }
         if !configurations.isEmpty { edit(configurations[indexPath.row]) }
+    }
+
+    // MARK: - 外部工具（iOS 17+）
+
+    private func refreshMCPServers() {
+        if #available(iOS 17.0, *) {
+            mcpServers = MCPServerStore.shared.load()
+        } else {
+            mcpServers = []
+        }
+        guard tableView.numberOfSections > 3 else { return }
+        tableView.reloadSections(IndexSet(integer: 3), with: .none)
+    }
+
+    @available(iOS 17.0, *)
+    private func configureMCPCell(_ cell: UITableViewCell, at indexPath: IndexPath) -> UITableViewCell {
+        var content = UIListContentConfiguration.subtitleCell()
+        content.textProperties.font = BookType.body
+        content.textProperties.color = BookDesign.ink
+        content.secondaryTextProperties.font = BookType.footnote
+        content.secondaryTextProperties.color = BookDesign.ink3
+        content.secondaryTextProperties.numberOfLines = 2
+        if indexPath.row < mcpServers.count {
+            let server = mcpServers[indexPath.row]
+            content.text = server.name
+            content.secondaryText = (server.isEnabled ? "已启用" : "未启用")
+                + " · \(server.displayHost)"
+                + (server.allowedTools.isEmpty ? " · 尚无授权工具" : " · \(server.allowedTools.count) 个工具")
+            content.image = BookDesign.symbol(server.isEnabled ? "point.3.connected.trianglepath.dotted" : "point.3.filled.connected.trianglepath.dotted", size: 18)
+            content.imageProperties.tintColor = server.isEnabled ? BookDesign.lampInk : BookDesign.ink3
+            cell.accessoryType = .disclosureIndicator
+            cell.accessibilityIdentifier = "mcp-server-" + server.id.uuidString
+            cell.accessibilityValue = content.secondaryText
+        } else {
+            content.text = "添加外部工具…"
+            content.textProperties.color = BookDesign.lampInk
+            content.secondaryText = "iOS 17+；默认关闭"
+            content.image = BookDesign.symbol("plus.circle", size: 18)
+            content.imageProperties.tintColor = BookDesign.lampInk
+            cell.accessoryType = .none
+            cell.accessibilityIdentifier = "mcp-add-server"
+        }
+        cell.contentConfiguration = content
+        cell.backgroundColor = BookDesign.surface
+        return cell
+    }
+
+    @available(iOS 17.0, *)
+    private func presentMCPEditor(server: MCPServerConfiguration, isNew: Bool) {
+        let editor = MCPServerEditorController(server: server, isNew: isNew,
+                                               store: MCPServerStore.shared)
+        navigationController?.pushViewController(editor, animated: true)
     }
 
     // MARK: - 离线语义资料

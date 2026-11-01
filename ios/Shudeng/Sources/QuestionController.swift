@@ -9,10 +9,15 @@ enum QuestionSheetPresentation {
     static func configure(_ navigation: UINavigationController) {
         navigation.modalPresentationStyle = .pageSheet
         guard let sheet = navigation.sheetPresentationController else { return }
+        // 在主线程读取窗口屏幕高度，避免 detent resolver 访问 MainActor 隔离属性。
+        let windowHeight = screenHeight
         sheet.detents = [
-            // 以 sheet 可用最大高度为基准：竖屏为屏高 76%，横屏/大屏也不会超过上下文上限。
+            // 竖屏保留原有“屏高 76%”视觉：优先按 windowScene 屏幕高度计算，再受 sheet 可用上限约束；
+            // 无法取到窗口屏幕（极早期/横屏边界）时退回 maximumDetentValue 比例。
             .custom(identifier: .init("shudeng.question.76")) { context in
-                context.maximumDetentValue * heightFraction
+                let target = windowHeight.map { $0 * heightFraction }
+                    ?? (context.maximumDetentValue * heightFraction)
+                return min(context.maximumDetentValue, target)
             },
             .large()
         ]
@@ -20,6 +25,14 @@ enum QuestionSheetPresentation {
         sheet.preferredCornerRadius = cornerRadius
         // 向上拖动内容或把手可展开到全屏。
         sheet.prefersScrollingExpandsWhenScrolledToEdge = true
+    }
+
+    /// 当前窗口屏幕高度；不使用已弃用的 UIScreen.main。
+    private static var screenHeight: CGFloat? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }?
+            .screen.bounds.height
     }
 }
 
@@ -119,6 +132,8 @@ final class QuestionController: UIViewController, UITextViewDelegate {
     private let materials = UIButton(type: .system)
     private var observer: NSObjectProtocol?
     private var expanded: Set<UUID> = []
+    /// 已展开工具步骤的轮次；默认收起，流式时也不打断阅读。
+    private var expandedSteps: Set<UUID> = []
     private var rendered = ""
     private var referenceFocus: (identifier: String, range: NSRange?)?
     private var serviceHintLoaded = false
@@ -337,7 +352,24 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         materials.isHidden = record.evidence.isEmpty
         retryGeneration.isHidden = record.state != .incomplete || record.failure == nil
         let turns = library.questions.conversation(record.conversation)?.turns ?? [record]
-        let signature = turns.map { "\($0.id)|\($0.question)|\($0.answer)|\($0.state)|\($0.citations)|\(expanded.contains($0.id))" }.joined()
+        let signature = turns.map { turn -> String in
+            let steps = turn.agent?.steps ?? []
+            let stepsSignature = steps.map { "\($0.id):\($0.finished ? 1 : 0):\($0.isError ? 1 : 0):\($0.preview.count)" }.joined(separator: ",")
+            return [
+                turn.id.uuidString,
+                turn.question,
+                turn.answer,
+                turn.state.rawValue,
+                String(turn.citations.count),
+                turn.agent?.summary ?? "",
+                String(steps.count),
+                stepsSignature,
+                String(turn.agent?.warnings.count ?? 0),
+                String(turn.agent?.context?.characterCount ?? -1),
+                expanded.contains(turn.id) ? "1" : "0",
+                expandedSteps.contains(turn.id) ? "1" : "0"
+            ].joined(separator: "|")
+        }.joined()
         if signature != rendered {
             rendered = signature
             let offset = scroll.contentOffset
@@ -439,15 +471,37 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         let heading = UIStackView(arrangedSubviews: [lamp, identity, UIView()])
         heading.spacing = 7
         heading.alignment = .center
-        let body = CitationAnswerView(answer: turn.answer, citations: turn.citations) { [weak self] evidence, text, range in
-            self?.referenceFocus = (text.accessibilityIdentifier ?? "", range)
-            self?.open(evidence, origin: turn)
+        // Agent 回答是纯文本（引用在下方独立可点按钮中），用 UILabel 展示更贴近语义；
+        // 旧的单次 RAG 回答仍用 CitationAnswerView 以保留行内引用标记点击。
+        let answerView: UIView
+        if turn.agent != nil {
+            let label = UILabel()
+            label.numberOfLines = 0
+            label.adjustsFontForContentSizeCategory = true
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineSpacing = 4
+            label.attributedText = NSAttributedString(
+                string: turn.answer,
+                attributes: [.font: BookType.body, .foregroundColor: BookDesign.ink, .paragraphStyle: paragraph]
+            )
+            label.isHidden = turn.answer.isEmpty
+            label.accessibilityIdentifier = latest ? "question-answer" : "question-answer-\(turn.id)"
+            answerView = label
+        } else {
+            let body = CitationAnswerView(answer: turn.answer, citations: turn.citations) { [weak self] evidence, text, range in
+                self?.referenceFocus = (text.accessibilityIdentifier ?? "", range)
+                self?.open(evidence, origin: turn)
+            }
+            body.textContainerInset = .zero; body.textContainer.lineFragmentPadding = 0
+            body.font = BookType.body; body.adjustsFontForContentSizeCategory = true; body.textColor = BookDesign.ink
+            body.isHidden = turn.answer.isEmpty
+            body.accessibilityIdentifier = latest ? "question-answer" : "question-answer-\(turn.id)"
+            answerView = body
         }
-        body.textContainerInset = .zero; body.textContainer.lineFragmentPadding = 0
-        body.font = BookType.body; body.adjustsFontForContentSizeCategory = true; body.textColor = BookDesign.ink
-        body.isHidden = turn.answer.isEmpty
-        body.accessibilityIdentifier = latest ? "question-answer" : "question-answer-\(turn.id)"
-        let reply = UIStackView(arrangedSubviews: [heading, body]); reply.axis = .vertical; reply.spacing = 9
+        let reply = UIStackView(); reply.axis = .vertical; reply.spacing = 9
+        reply.addArrangedSubview(heading)
+        if let steps = agentStepsView(turn) { reply.addArrangedSubview(steps) }
+        reply.addArrangedSubview(answerView)
         for (index, evidence) in turn.citations.enumerated() {
             let button = UIButton(type: .system)
             var configuration = UIButton.Configuration.plain()
@@ -474,7 +528,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             }, for: .touchUpInside)
             reply.addArrangedSubview(button)
         }
-        if latest && (turn.state == .preparing || turn.state == .generating) {
+        if latest, turn.state == .preparing || turn.state == .generating, turn.answer.isEmpty {
             reply.addArrangedSubview(QuestionSkeletonView(identifier: "question-skeleton"))
         }
         if !turn.answer.isEmpty {
@@ -497,6 +551,146 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         }
         messages.addArrangedSubview(reply)
     }
+    // MARK: - Agent 工具步骤（渐进披露）
+
+    private func agentStepsView(_ turn: ReadingQuestion) -> UIView? {
+        guard let transcript = turn.agent else { return nil }
+        // 无工具步骤但有警告（例如模型不支持工具已回退普通问答）时仍要显示提示行。
+        guard !transcript.steps.isEmpty || !transcript.warnings.isEmpty else { return nil }
+        let isExpanded = expandedSteps.contains(turn.id)
+        let running = turn.state == .preparing || turn.state == .generating
+        let finished = transcript.steps.filter(\.finished).count
+        let problems = transcript.steps.filter(\.isError).count
+        var title: String
+        if running {
+            title = "正在查书 · 已完成 \(finished) 步"
+        } else if !transcript.summary.isEmpty {
+            title = transcript.summary
+        } else {
+            title = "查书 \(transcript.steps.count) 步"
+        }
+        if problems > 0 { title += " · \(problems) 步未完成" }
+
+        let toggle = UIButton(type: .system)
+        var configuration = UIButton.Configuration.plain()
+        configuration.title = title
+        configuration.image = BookDesign.symbol(isExpanded ? "chevron.down" : "chevron.right", size: 12, weight: .semibold)
+        configuration.imagePlacement = .trailing
+        configuration.imagePadding = 6
+        configuration.baseForegroundColor = BookDesign.ink2
+        configuration.contentInsets = .zero
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookType.footnote
+            return outgoing
+        }
+        toggle.configuration = configuration
+        toggle.contentHorizontalAlignment = .leading
+        toggle.accessibilityIdentifier = "question-agent-toggle-\(turn.id)"
+        toggle.accessibilityValue = isExpanded ? "已展开" : "已收起"
+        toggle.accessibilityHint = "展开或收起查书步骤"
+        toggle.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            if self.expandedSteps.contains(turn.id) {
+                self.expandedSteps.remove(turn.id)
+            } else {
+                self.expandedSteps.insert(turn.id)
+            }
+            self.refresh()
+        }, for: .touchUpInside)
+
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.spacing = 6
+        if !transcript.steps.isEmpty {
+            stack.addArrangedSubview(toggle)
+            if isExpanded {
+                for (index, step) in transcript.steps.enumerated() {
+                    stack.addArrangedSubview(agentStepRow(step, index: index, turnID: turn.id))
+                }
+                if let usage = transcript.context {
+                    let context = BookDesign.label(
+                        "本次参考约 \(usage.characterCount) 字 · 查书 \(max(1, transcript.stepsUsed)) 步",
+                        font: BookType.caption,
+                        colour: BookDesign.ink3
+                    )
+                    context.numberOfLines = 0
+                    context.accessibilityIdentifier = "question-agent-context-\(turn.id)"
+                    stack.addArrangedSubview(context)
+                }
+            }
+        }
+        if !transcript.warnings.isEmpty {
+            if transcript.steps.isEmpty {
+                stack.addArrangedSubview(agentWarningBanner(transcript.warnings.joined(separator: "\n"), turnID: turn.id))
+            } else {
+                let warning = BookDesign.label(
+                    transcript.warnings.joined(separator: "\n"),
+                    font: BookType.caption,
+                    colour: BookDesign.ink2
+                )
+                warning.numberOfLines = 0
+                warning.accessibilityIdentifier = "question-agent-warning-\(turn.id)"
+                stack.addArrangedSubview(warning)
+            }
+        }
+        return stack
+    }
+
+    /// 无工具步骤时的纸白提示行（例如“已改用普通问答完成”），保持无障碍 id 一致。
+    private func agentWarningBanner(_ text: String, turnID: UUID) -> UIView {
+        let container = UIView()
+        container.backgroundColor = BookDesign.paperDeep
+        container.layer.cornerRadius = BookRadius.field
+        let label = BookDesign.label(text, font: BookType.caption, colour: BookDesign.ink2)
+        label.numberOfLines = 0
+        label.accessibilityIdentifier = "question-agent-warning-\(turnID)"
+        label.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 2),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -2),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -10)
+        ])
+        return container
+    }
+
+    private func agentStepRow(_ step: AgentTranscript.Step, index: Int, turnID: UUID) -> UIView {
+        let dot = UIView()
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        dot.layer.cornerRadius = 3
+        dot.backgroundColor = step.isError ? BookDesign.error : (step.finished ? BookDesign.lamp : BookDesign.ink3)
+        dot.widthAnchor.constraint(equalToConstant: 6).isActive = true
+        dot.heightAnchor.constraint(equalToConstant: 6).isActive = true
+        dot.setContentHuggingPriority(.required, for: .horizontal)
+
+        var title = step.title
+        if !step.detail.isEmpty { title += " · " + step.detail }
+        let titleLabel = BookDesign.label(title, font: BookType.footnote, colour: step.isError ? BookDesign.error : BookDesign.ink)
+        titleLabel.numberOfLines = 0
+        let row = UIStackView(arrangedSubviews: [dot, titleLabel])
+        row.axis = .horizontal
+        row.alignment = .top
+        row.spacing = 8
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = .init(top: 0, left: 2, bottom: 0, right: 0)
+        row.accessibilityIdentifier = "question-agent-step-\(turnID)-\(index)"
+        row.accessibilityLabel = title
+
+        let container = UIStackView(arrangedSubviews: [row])
+        container.axis = .vertical
+        container.spacing = 3
+        if !step.preview.isEmpty {
+            let preview = BookDesign.label(step.preview, font: BookType.caption, colour: BookDesign.ink3)
+            preview.numberOfLines = 3
+            container.addArrangedSubview(preview)
+        }
+        container.isLayoutMarginsRelativeArrangement = true
+        container.layoutMargins = .init(top: 0, left: 16, bottom: 0, right: 0)
+        return container
+    }
+
     func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
         if library.questions.record(id)?.state == .complete {
             guard createFollowUp() else { return false }

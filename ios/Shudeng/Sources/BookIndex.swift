@@ -758,3 +758,147 @@ final class IndexDatabase {
         return Set(rows.compactMap { Int($0[0]) })
     }
 }
+
+// MARK: - Agent 只读查询（原生 Agent Runtime 用）
+
+/// EPUB 的一章 / PDF 的一页。PDF 的 chapter 就是页（ordinal = page - 1）。
+struct BookChapterInfo: Sendable, Equatable {
+    let ordinal: Int
+    let href: String
+    let title: String
+    /// PDF 1-based 页号；EPUB 为 nil。
+    let page: Int?
+}
+
+/// 扁平化目录项；depth 0 为顶层。PDF 没有目录时为空。
+struct BookTOCEntry: Sendable, Equatable {
+    let title: String
+    let href: String
+    let depth: Int
+}
+
+/// 一段可引用的原文（一条已提交 fragment）及其 locator JSON。
+struct BookSourceText: Sendable, Equatable {
+    let chapter: Int
+    let ordinal: Int
+    let title: String
+    let page: Int?
+    let locatorJSON: String
+    let text: String
+}
+
+/// 一章/一页的原文片段；truncated 表示还有内容没有返回（受 maxCharacters 限制）。
+struct BookChapterText: Sendable, Equatable {
+    let chapter: Int
+    let title: String
+    let page: Int?
+    let fragments: [BookSourceText]
+    let truncated: Bool
+}
+
+extension BookIndex {
+    /// 阅读顺序章节列表：EPUB 来自已提交章节；PDF 每页一条。
+    func agentChapters(bookID: String) throws -> [BookChapterInfo] {
+        try IndexDatabase(url: url)
+            .rows("SELECT ordinal,href,title FROM chapters WHERE book_id=? ORDER BY ordinal", [bookID])
+            .compactMap { row -> BookChapterInfo? in
+                guard row.count >= 3, let ordinal = Int(row[0]) else { return nil }
+                return BookChapterInfo(ordinal: ordinal, href: row[1], title: row[2], page: Self.agentPDFPage(row[1]))
+            }
+    }
+
+    /// 扁平化目录。Readium 章节标题层级保留在 depth 中；PDF 目录为空数组。
+    func agentTableOfContents(bookID: String) throws -> [BookTOCEntry] {
+        guard let json = try IndexDatabase(url: url).rows("SELECT links FROM contents WHERE book_id=?", [bookID]).first?.first,
+              let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) else { return [] }
+        var entries: [BookTOCEntry] = []
+        func walk(_ value: Any, depth: Int) {
+            guard depth <= 6, entries.count < 500 else { return }
+            if let items = value as? [Any] {
+                for item in items { walk(item, depth: depth) }
+                return
+            }
+            guard let object = value as? [String: Any] else { return }
+            let href = object["href"] as? String ?? ""
+            let title = (object["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty || !href.isEmpty {
+                entries.append(BookTOCEntry(title: title, href: href, depth: depth))
+            }
+            for child in object["children"] as? [Any] ?? [] {
+                walk(child, depth: depth + 1)
+            }
+        }
+        walk(root, depth: 0)
+        return entries
+    }
+
+    /// 单条已提交 fragment 的完整原文；检索摘录靠它升级成可引用依据。
+    func agentFragment(bookID: String, chapter: Int, ordinal: Int) throws -> BookSourceText? {
+        let db = try IndexDatabase(url: url)
+        guard let info = try agentChapterInfo(db: db, bookID: bookID, chapter: chapter),
+              let row = try db.rows("SELECT original,locator FROM fragments WHERE book_id=? AND chapter=? AND ordinal=?",
+                                    [bookID, String(chapter), String(ordinal)]).first,
+              row.count >= 2 else { return nil }
+        return BookSourceText(chapter: chapter, ordinal: ordinal, title: info.title, page: info.page,
+                              locatorJSON: row[1], text: row[0])
+    }
+
+    /// 一章/一页的原文。maxCharacters 限制返回正文字符总量；单条超长 fragment 仍完整返回，
+    /// 以保证引用校验拿到的是原文而不是截断后的展示文本。
+    func agentChapterText(bookID: String, chapter: Int, maxCharacters: Int) throws -> BookChapterText? {
+        let db = try IndexDatabase(url: url)
+        guard let info = try agentChapterInfo(db: db, bookID: bookID, chapter: chapter) else { return nil }
+        let rows = try db.rows("SELECT ordinal,original,locator FROM fragments WHERE book_id=? AND chapter=? ORDER BY ordinal",
+                               [bookID, String(chapter)])
+        var fragments: [BookSourceText] = []
+        var characters = 0
+        var truncated = false
+        for row in rows {
+            guard row.count >= 3, let ordinal = Int(row[0]) else { continue }
+            let text = row[1]
+            if !fragments.isEmpty, characters + text.count > maxCharacters {
+                truncated = true
+                break
+            }
+            fragments.append(BookSourceText(chapter: chapter, ordinal: ordinal, title: info.title, page: info.page,
+                                            locatorJSON: row[2], text: text))
+            characters += text.count
+        }
+        return BookChapterText(chapter: chapter, title: info.title, page: info.page, fragments: fragments, truncated: truncated)
+    }
+
+    /// 按 1-based 序号、href 或标题匹配章节；找不到返回 nil。
+    func agentChapterMatch(bookID: String, reference: String) throws -> BookChapterInfo? {
+        let reference = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reference.isEmpty else { return nil }
+        let chapters = try agentChapters(bookID: bookID)
+        guard !chapters.isEmpty else { return nil }
+        if let number = Int(reference), number >= 1 {
+            return chapters.first { $0.ordinal == number - 1 }
+        }
+        func stripFragment(_ href: String) -> String {
+            String(href.split(separator: "#", maxSplits: 1).first ?? "")
+        }
+        let target = stripFragment(reference)
+        if let exact = chapters.first(where: { $0.href == reference || stripFragment($0.href) == target || $0.href.hasSuffix(reference) }) {
+            return exact
+        }
+        let folded = reference.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        return chapters.first {
+            $0.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX")).contains(folded)
+        }
+    }
+
+    private func agentChapterInfo(db: IndexDatabase, bookID: String, chapter: Int) throws -> BookChapterInfo? {
+        guard let row = try db.rows("SELECT href,title FROM chapters WHERE book_id=? AND ordinal=?", [bookID, String(chapter)]).first,
+              row.count >= 2 else { return nil }
+        return BookChapterInfo(ordinal: chapter, href: row[0], title: row[1], page: Self.agentPDFPage(row[0]))
+    }
+
+    /// PDF 页章节的 href 约定为 `pdf://page/N`。
+    private static func agentPDFPage(_ href: String) -> Int? {
+        guard href.hasPrefix("pdf://page/") else { return nil }
+        return Int(href.dropFirst("pdf://page/".count))
+    }
+}

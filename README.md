@@ -4,7 +4,7 @@
 
 [![使用文档](https://img.shields.io/badge/%E4%BD%BF%E7%94%A8%E6%96%87%E6%A1%A3-5B7DB1)](https://andywang1688.github.io/shudeng/)
 
-最新版 v0.4.5：书架封面不再闪，滚动阅读快速拖拽不再误触工具栏；离线语义资料国内加速约 7 秒。[下载](https://github.com/andyWang1688/shudeng/releases/tag/v0.4.5) · [更新说明](docs/releases/v0.4.5.md)
+最新版 v0.4.6：阅读问答升级为原生 Agent，可在书内多步查证、读章节、核对引用；无需服务器，app 约 33MB。[下载](https://github.com/andyWang1688/shudeng/releases/tag/v0.4.6) · [更新说明](docs/releases/v0.4.6.md)
 
 ## 安装
 

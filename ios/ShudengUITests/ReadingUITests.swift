@@ -5817,8 +5817,11 @@ extension ReadingUITests {
 
 extension ReadingUITests {
     private func questionService(_ app: XCUIApplication, format: String, model: String = "test-model", address: String = "http://127.0.0.1:18769/v1") {
-        app.tabBars.buttons["我的"].tap()
-        if !app.tables["ai-services"].exists { app.buttons["AI 服务"].tap() }
+        tab("tab-profile", label: "我的", in: app).tap()
+        let serviceRow = settingsRow("profile-ai-service", in: app)
+        XCTAssertTrue(serviceRow.waitForExistence(timeout: 15), "我的页应有 AI 服务入口")
+        serviceRow.tap()
+        XCTAssertTrue(app.tables["ai-services"].waitForExistence(timeout: 10))
         app.buttons["添加"].tap()
         let name = "I9-" + format + "-" + model + "-" + UUID().uuidString.prefix(6)
         app.cells["ai-provider"].tap(); app.buttons["自定义服务"].tap()
@@ -5837,10 +5840,17 @@ extension ReadingUITests {
         XCTAssertTrue(app.otherElements["已保存"].firstMatch.waitForExistence(timeout: 5))
         app.otherElements["已保存"].firstMatch.buttons["完成"].tap()
         app.navigationBars.buttons["切换"].tap()
-        app.sheets["切换服务"].buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch.tap()
-        XCTAssertTrue(app.otherElements["已切换服务"].firstMatch.waitForExistence(timeout: 5))
+        // 当前版本是自定义 BookAlertController（book-dialog），不是系统 sheet。
+        let choice = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 10), "切换服务列表应包含新服务：\(name)")
+        choice.tap()
+        XCTAssertTrue(app.otherElements["已切换服务"].firstMatch.waitForExistence(timeout: 10))
         app.otherElements["已切换服务"].firstMatch.buttons["完成"].tap()
-        app.tabBars.buttons["书架"].tap()
+        if app.buttons["tab-library"].exists {
+            app.buttons["tab-library"].tap()
+        } else {
+            app.tabBars.buttons["书架"].tap()
+        }
     }
     private func questionSelection(_ app: XCUIApplication) {
         app.collectionViews["library"].cells[searchBookID].tap()
@@ -6410,5 +6420,171 @@ extension ReadingUITests {
         app.buttons["pdf-reader-settings"].tap()
         XCTAssertTrue(app.segmentedControls["pdf-reading-mode"].buttons["滚动"].isSelected, "重开应保持滚动")
         attachDesignSurface("pdf-settings-persisted-scroll-375", app)
+    }
+}
+
+extension ReadingUITests {
+    private func agentAttach(_ name: String) {
+        Thread.sleep(forTimeInterval: 0.4)
+        let a = XCTAttachment(image: XCUIScreen.main.screenshot().image); a.name = name; a.lifetime = .keepAlways; add(a)
+    }
+    private func askAgent(_ app: XCUIApplication, question: String = "灯在书里是什么意思？") {
+        XCTAssertTrue(app.buttons["continue-reading"].waitForExistence(timeout: 15))
+        app.buttons["continue-reading"].tap()
+        waitForBody(app)
+        let ask = app.buttons["reader-ask-book"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 15)); ask.tap()
+        let input = app.textViews["question-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap(); input.typeText(question)
+        app.buttons["question-send"].tap()
+    }
+    private func askAgentPDF(_ app: XCUIApplication, question: String = "灯在书里是什么意思？") {
+        openPDFFixture(app)
+        let ask = app.buttons["pdf-reader-ask"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 15)); ask.tap()
+        let input = app.textViews["question-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap(); input.typeText(question)
+        app.buttons["question-send"].tap()
+    }
+    /// Agent UI 用例依赖本地 stub（默认 127.0.0.1:18781）；未显式开启时跳过，
+    /// 避免没有 stub 的 CI/全量 UI 运行变红。
+    private func requireAgentStub() throws {
+        guard ProcessInfo.processInfo.environment["SHUDENG_AGENT_STUB"] == "1" else {
+            throw XCTSkip("未设置 SHUDENG_AGENT_STUB=1，跳过依赖本地 stub 的 Agent UI 用例")
+        }
+    }
+    private func setAgentService(_ app: XCUIApplication, format: String, model: String, port: Int) throws {
+        try requireAgentStub()
+        questionService(app, format: format, model: model, address: "http://127.0.0.1:\(port)/v1")
+    }
+
+    func testAgentOpenAIToolLoopUI() throws {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        try setAgentService(app, format: "OpenAI", model: "agent-stub", port: 18781)
+        askAgentPDF(app)
+        let toggle = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "question-agent-toggle-")).firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 30), "应出现 Agent 步骤入口")
+        let status = app.staticTexts["question-status"]
+        let answer = app.staticTexts["question-answer"]
+        let done = NSPredicate { _, _ in !status.exists && answer.exists }
+        expectation(for: done, evaluatedWith: app)
+        waitForExpectations(timeout: 60)
+        let toggleTitle = toggle.label
+        print("AGENT_QA toggle=\(toggleTitle) answer=\(answer.label.prefix(40))")
+        XCTAssertTrue(toggleTitle.contains("查书"), "完成态应显示查书摘要：\(toggleTitle)")
+        XCTAssertFalse(answer.label.isEmpty)
+        agentAttach("agent-openai-answer")
+        toggle.tap()
+        let context = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "question-agent-context-")).firstMatch
+        XCTAssertTrue(context.waitForExistence(timeout: 5), "展开应显示本次参考上下文")
+        let step = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "question-agent-step-")).firstMatch
+        XCTAssertTrue(step.waitForExistence(timeout: 5), "展开应显示工具步骤")
+        print("AGENT_QA context=\(context.label) step=\(step.label)")
+        let warning = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "question-agent-warning-")).firstMatch
+        print("AGENT_QA warningExists=\(warning.exists) warning=\(warning.exists ? warning.label : "-")")
+        XCTAssertTrue(app.buttons["question-reference-0"].waitForExistence(timeout: 5), "修复后应有可跳转引用")
+        XCTAssertFalse(warning.exists, "内核/PDF 引用核验修复后不应有 warning")
+        agentAttach("agent-openai-expanded")
+    }
+
+    func testAgentNoToolsFallbackUI() throws {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        try setAgentService(app, format: "OpenAI", model: "no-tools", port: 18781)
+        askAgentPDF(app)
+        let answer = app.staticTexts["question-answer"]
+        XCTAssertTrue(answer.waitForExistence(timeout: 45), "无工具服务应回退普通 RAG 并返回回答")
+        XCTAssertTrue(answer.label.contains("普通问答完成") || answer.label.contains("依据原文"), answer.label)
+        let warning = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "question-agent-warning-")).firstMatch
+        print("AGENT_QA fallback answer=\(answer.label.prefix(60)) warningExists=\(warning.exists) warning=\(warning.exists ? warning.label : "-")")
+        XCTAssertFalse(app.staticTexts["question-status"].exists, "成功回退不应显示错误状态")
+        agentAttach("agent-no-tools-fallback")
+    }
+
+    func testAgentCancelUI() throws {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        try setAgentService(app, format: "OpenAI", model: "slow-agent", port: 18781)
+        askAgentPDF(app)
+        let toggle = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "question-agent-toggle-")).firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 20), "取消前应已出现工具步骤")
+        let cancel = app.buttons["取消生成"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
+        let status = app.staticTexts["question-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        XCTAssertTrue(status.label.contains("回答未完成"), "取消后状态：\(status.label)")
+        XCTAssertTrue(toggle.exists, "取消后半成品步骤应保留可回看")
+        agentAttach("agent-cancel-incomplete")
+        app.buttons["question-close"].tap()
+    }
+
+    func testAgentAuthFailureFriendlyUI() throws {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        try setAgentService(app, format: "OpenAI", model: "auth-fail", port: 18781)
+        askAgentPDF(app)
+        let status = app.staticTexts["question-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 30), "鉴权失败应显示状态")
+        XCTAssertTrue(status.label.contains("鉴权失败") || status.label.contains("AI 服务"), status.label)
+        print("AGENT_QA authStatus=\(status.label)")
+        XCTAssertFalse(status.label.lowercased().contains("http"), "不应显示技术词")
+        agentAttach("agent-auth-failure")
+    }
+}
+
+
+extension ReadingUITests {
+    /// 真实端到端冒烟：PDF 夹具已 ready，走 Agent 工具循环，而不是 normal 夹具的未准备回退路径。
+    func testAgentPDFToolLoopSmoke() throws {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=pdf", "--design-theme=light"]
+        app.launch()
+        try setAgentService(app, format: "OpenAI", model: "agent-stub", port: 18781)
+        openPDFFixture(app)
+        let ask = app.buttons["pdf-reader-ask"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 10)); ask.tap()
+        let input = app.textViews["question-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap()
+        input.typeText("灯在书里是什么意思？")
+        app.buttons["question-send"].tap()
+        let toggle = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "question-agent-toggle-")).firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 45), "PDF ready 书应进入 Agent 工具循环")
+        let answer = app.staticTexts["question-answer"]
+        let status = app.staticTexts["question-status"]
+        let done = NSPredicate { _, _ in !status.exists && answer.exists }
+        expectation(for: done, evaluatedWith: app); waitForExpectations(timeout: 60)
+        print("AGENT_PDF_SMOKE toggle=\(toggle.label) answer=\(answer.label.prefix(80))")
+        XCTAssertTrue(toggle.label.contains("查书"), "应有查书步骤摘要")
+        XCTAssertFalse(answer.label.isEmpty)
+        agentAttach("agent-pdf-smoke")
+    }
+}
+
+extension ReadingUITests {
+    func testAgentMCPEntryVisibilityIOS17() throws {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--design-fixture=normal", "--design-theme=light"]
+        app.launch()
+        tab("tab-profile", label: "我的", in: app).tap()
+        settingsRow("profile-ai-service", in: app).tap()
+        XCTAssertTrue(app.tables["ai-services"].waitForExistence(timeout: 10))
+        let mcp = app.cells["mcp-add-server"]
+        for _ in 0..<6 where !mcp.exists { app.tables["ai-services"].swipeUp() }
+        XCTAssertTrue(mcp.waitForExistence(timeout: 10), "iOS17+ 应显示外部工具入口")
+        XCTAssertTrue(app.staticTexts["外部工具"].exists)
+        let attachment = XCTAttachment(image: XCUIScreen.main.screenshot().image)
+        attachment.name = "agent-mcp-entry-default-off"; attachment.lifetime = .keepAlways; add(attachment)
+        print("AGENT_MCP entry=true addRow=\(mcp.exists) existingServers=\(app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "mcp-server-")).count)")
     }
 }
