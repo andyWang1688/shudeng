@@ -384,7 +384,9 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         // 回答成功时隐藏整条系统状态条（“回答已保存/部分引用未核验”属内部日志）；
         // 保存失败、原书不可用、失败/未完成等需要用户行动的状态仍保留状态条与操作入口。
         let succeeded = record.state == .complete && !unsaved && record.failure == nil && available
-        statusBox.isHidden = idleDraft || succeeded
+        // 生成中用思考区/工具步骤/答案骨架表达进度，不再显示灰色“正在生成”条。
+        let isGenerating = record.state == .generating && record.failure == nil && !unsaved
+        statusBox.isHidden = idleDraft || succeeded || isGenerating
         materials.isHidden = record.evidence.isEmpty
         retryGeneration.isHidden = record.state != .incomplete || record.failure == nil
         updateContextUsage(record)
@@ -402,6 +404,9 @@ final class QuestionController: UIViewController, UITextViewDelegate {
                 String(steps.count),
                 stepsSignature,
                 String(turn.agent?.warnings.count ?? 0),
+                String(turn.agent?.reasoning?.count ?? 0),
+                turn.agent?.reasoningExpanded.map { $0 ? "1" : "0" } ?? "-",
+                turn.agent?.reasoningDuration.map { String(format: "%.2f", $0) } ?? "-",
                 String(turn.agent?.context?.characterCount ?? -1),
                 expanded.contains(turn.id) ? "1" : "0",
                 expandedSteps.contains(turn.id) ? "1" : "0"
@@ -515,12 +520,9 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             let label = UILabel()
             label.numberOfLines = 0
             label.adjustsFontForContentSizeCategory = true
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = 4
-            label.attributedText = NSAttributedString(
-                string: turn.answer,
-                attributes: [.font: BookType.body, .foregroundColor: BookDesign.ink, .paragraphStyle: paragraph]
-            )
+            // Agent 回答允许 Markdown：渲染标题/列表/加粗，隐藏模型可能带出的 [E#] 标记；
+            // 引用仍由下方已核对的 citation 按钮承载。
+            label.attributedText = Self.agentAnswerText(turn.answer)
             label.isHidden = turn.answer.isEmpty
             label.accessibilityIdentifier = latest ? "question-answer" : "question-answer-\(turn.id)"
             answerView = label
@@ -537,7 +539,9 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         }
         let reply = UIStackView(); reply.axis = .vertical; reply.spacing = 9
         reply.addArrangedSubview(heading)
-        if let steps = agentStepsView(turn) { reply.addArrangedSubview(steps) }
+        let processView = agentProcessView(turn)
+        let hasProcess = processView != nil
+        if let processView { reply.addArrangedSubview(processView) }
         reply.addArrangedSubview(answerView)
         for (index, evidence) in turn.citations.enumerated() {
             let button = UIButton(type: .system)
@@ -565,7 +569,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             }, for: .touchUpInside)
             reply.addArrangedSubview(button)
         }
-        if latest, turn.state == .preparing || turn.state == .generating, turn.answer.isEmpty {
+        if latest, turn.state == .preparing || turn.state == .generating, turn.answer.isEmpty, !hasProcess {
             reply.addArrangedSubview(QuestionSkeletonView(identifier: "question-skeleton"))
         }
         if !turn.answer.isEmpty {
@@ -588,11 +592,80 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         }
         messages.addArrangedSubview(reply)
     }
+    /// Agent 回答的轻量 Markdown 渲染：标题、列表、加粗和段距；不引入第三方渲染器。
+    /// 正文里的 [E#] 是模型内部依据标记，显示时移除，避免读者看到裸 ID。
+    private static func agentAnswerText(_ raw: String) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let bodyFont = BookType.serif(15)
+        let bodyColor = BookDesign.ink
+        let lines = raw.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        var previousHadContent = false
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                if previousHadContent { result.append(NSAttributedString(string: "\n")) }
+                previousHadContent = false
+                continue
+            }
+            let body: String
+            let font: UIFont
+            let spacingBefore: CGFloat
+            if trimmed.hasPrefix("### ") {
+                body = String(trimmed.dropFirst(4)); font = BookType.serif(16, weight: .semibold); spacingBefore = 10
+            } else if trimmed.hasPrefix("## ") {
+                body = String(trimmed.dropFirst(3)); font = BookType.serif(19, weight: .semibold); spacingBefore = 14
+            } else if trimmed.hasPrefix("# ") {
+                body = String(trimmed.dropFirst(2)); font = BookType.serif(22, weight: .semibold); spacingBefore = 16
+            } else if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                body = "•  " + String(trimmed.dropFirst(2)); font = bodyFont; spacingBefore = 3
+            } else if trimmed.range(of: #"^\d+[.)]\s"#, options: .regularExpression) != nil {
+                body = trimmed; font = bodyFont; spacingBefore = 3
+            } else {
+                body = trimmed; font = bodyFont; spacingBefore = previousHadContent ? 5 : 0
+            }
+            if previousHadContent { result.append(NSAttributedString(string: "\n")) }
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineSpacing = 5
+            paragraph.paragraphSpacingBefore = spacingBefore
+            paragraph.firstLineHeadIndent = 0
+            paragraph.headIndent = (trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ")) ? 16 : 0
+            let cleaned = body.replacingOccurrences(of: #"\[E\d+\]"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: "  ", with: " ")
+            let attributed = NSMutableAttributedString(string: cleaned, attributes: [.font: font, .foregroundColor: bodyColor, .paragraphStyle: paragraph])
+            let bold = try? NSRegularExpression(pattern: #"\*\*(.+?)\*\*"#)
+            // 从后往前删 **，避免前一次删除让后面的 range 偏移。
+            for match in (bold?.matches(in: cleaned, range: NSRange(location: 0, length: (cleaned as NSString).length)) ?? []).reversed() {
+                guard match.range.length >= 4 else { continue }
+                let inner = NSRange(location: match.range.location + 2, length: match.range.length - 4)
+                attributed.addAttribute(.font, value: BookType.serif(15, weight: .semibold), range: inner)
+                attributed.deleteCharacters(in: NSRange(location: NSMaxRange(match.range) - 2, length: 2))
+                attributed.deleteCharacters(in: NSRange(location: match.range.location, length: 2))
+            }
+            result.append(attributed)
+            previousHadContent = true
+        }
+        return result
+    }
+
     // MARK: - 上下文用量（圆环 + 明细）
 
     /// 输入区下方的上下文用量：圆环 + 百分比；点按展开明细，无数据时隐藏。
     private func updateContextUsage(_ record: ReadingQuestion) {
-        guard let context = record.agent?.context, context.contextWindow > 0 else {
+        // Agent 回答会带真实 usage；旧对话/回退普通问答没有记录时，按当前服务窗口显示 0%，
+        // 避免用户以为“没有上下文管理”。
+        let context: AgentContextUsage
+        if let saved = record.agent?.context, saved.contextWindow > 0 {
+            context = saved
+        } else if let store = try? AIConfigurationStore(root: library.root),
+                  let configuration = store.configurations.first(where: { $0.id == store.selectedID }) {
+            let window = configuration.effectiveContextWindow
+            let threshold = AgentContextBudget(contextWindow: window).thresholdTokens
+            context = AgentContextUsage(
+                estimatedTokens: 0, characterCount: 0, limitTokens: threshold,
+                contextWindow: window, thresholdTokens: threshold, percent: 0,
+                thresholdPercent: window > 0 ? Double(threshold) / Double(window) : 0,
+                action: .none)
+        } else {
             contextUsageButton.isHidden = true
             contextDetails.isHidden = true
             return
@@ -702,14 +775,124 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         }
     }
 
-    // MARK: - Agent 工具步骤（渐进披露）
+    // MARK: - 思考过程 + 工具步骤（同一个过程容器）
 
-    private func agentStepsView(_ turn: ReadingQuestion) -> UIView? {
+    /// 一个过程容器：思考标题 +（展开时）思考正文 + 工具步骤；最终答案在容器外。
+    private func agentProcessView(_ turn: ReadingQuestion) -> UIView? {
         guard let transcript = turn.agent else { return nil }
-        // 无工具步骤但有警告（例如模型不支持工具已回退普通问答）时仍要显示提示行。
-        guard !transcript.steps.isEmpty || !transcript.warnings.isEmpty else { return nil }
-        let isExpanded = expandedSteps.contains(turn.id)
+        let reasoning = transcript.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hasReasoning = !reasoning.isEmpty
+        let hasSteps = !transcript.steps.isEmpty
+        let hasWarnings = !transcript.warnings.isEmpty
+        guard hasReasoning || hasSteps || hasWarnings else { return nil }
+
         let running = turn.state == .preparing || turn.state == .generating
+        // 读者手动展开后不再自动改变；未手动时生成中默认展开、完成后默认收起。
+        let thinkingExpanded = transcript.reasoningExpanded ?? running
+        let stepsExpanded = expandedSteps.contains(turn.id)
+        let container = UIStackView()
+        container.axis = .vertical
+        container.spacing = 6
+
+        if hasReasoning {
+            container.addArrangedSubview(thinkingHeader(turn: turn, transcript: transcript, expanded: thinkingExpanded, running: running))
+        }
+        if hasSteps {
+            container.addArrangedSubview(stepsHeader(turn: turn, transcript: transcript, expanded: stepsExpanded, running: running))
+        }
+
+        let showReasoning = hasReasoning && thinkingExpanded
+        let showSteps = hasSteps && stepsExpanded
+        if showReasoning || showSteps {
+            let box = UIView()
+            box.backgroundColor = BookDesign.paperDeep
+            box.layer.cornerRadius = BookRadius.field
+            let content = UIStackView()
+            content.axis = .vertical
+            content.spacing = 8
+            content.translatesAutoresizingMaskIntoConstraints = false
+            if showReasoning {
+                content.addArrangedSubview(reasoningLabel(reasoning, turnID: turn.id))
+            }
+            if showSteps {
+                for (index, step) in transcript.steps.enumerated() {
+                    content.addArrangedSubview(agentStepRow(step, index: index, turnID: turn.id))
+                }
+            }
+            if let usage = transcript.context {
+                let context = BookDesign.label(
+                    "本次参考约 \(usage.characterCount) 字 · 查书 \(max(1, transcript.stepsUsed)) 步",
+                    font: BookType.caption,
+                    colour: BookDesign.ink3
+                )
+                context.numberOfLines = 0
+                context.accessibilityIdentifier = "question-agent-context-\(turn.id)"
+                content.addArrangedSubview(context)
+            }
+            box.addSubview(content)
+            NSLayoutConstraint.activate([
+                content.topAnchor.constraint(equalTo: box.topAnchor, constant: 10),
+                content.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 12),
+                content.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -12),
+                content.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -10)
+            ])
+            container.addArrangedSubview(box)
+        }
+
+        if hasWarnings {
+            if hasSteps {
+                let warning = BookDesign.label(
+                    transcript.warnings.joined(separator: "\n"),
+                    font: BookType.caption,
+                    colour: BookDesign.ink2
+                )
+                warning.numberOfLines = 0
+                warning.accessibilityIdentifier = "question-agent-warning-\(turn.id)"
+                container.addArrangedSubview(warning)
+            } else {
+                container.addArrangedSubview(agentWarningBanner(transcript.warnings.joined(separator: "\n"), turnID: turn.id))
+            }
+        }
+        return container
+    }
+
+    private func thinkingHeader(turn: ReadingQuestion, transcript: AgentTranscript,
+                                expanded: Bool, running: Bool) -> UIView {
+        let button = UIButton(type: .system)
+        var configuration = UIButton.Configuration.plain()
+        configuration.title = thinkingTitle(turn: turn, transcript: transcript, running: running)
+        configuration.image = BookDesign.symbol(expanded ? "chevron.down" : "chevron.right", size: 12, weight: .semibold)
+        configuration.imagePlacement = .trailing
+        configuration.imagePadding = 6
+        configuration.baseForegroundColor = BookDesign.ink3
+        configuration.contentInsets = .zero
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = BookType.sans(13, weight: .medium, style: .footnote)
+            return outgoing
+        }
+        button.configuration = configuration
+        button.contentHorizontalAlignment = .leading
+        button.accessibilityIdentifier = "question-thinking-toggle-\(turn.id)"
+        button.accessibilityLabel = configuration.title
+        button.accessibilityValue = expanded ? "已展开" : "已收起"
+        button.accessibilityHint = "展开或收起思考过程"
+        button.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.library.questions.setThinkingExpanded(turn.id, expanded: !expanded)
+            if UIAccessibility.isReduceMotionEnabled {
+                self.refresh()
+            } else {
+                UIView.transition(with: self.messages, duration: 0.22, options: [.transitionCrossDissolve]) {
+                    self.refresh()
+                }
+            }
+        }, for: .touchUpInside)
+        return button
+    }
+
+    private func stepsHeader(turn: ReadingQuestion, transcript: AgentTranscript,
+                             expanded: Bool, running: Bool) -> UIView {
         let finished = transcript.steps.filter(\.finished).count
         let problems = transcript.steps.filter(\.isError).count
         var title: String
@@ -725,7 +908,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         let toggle = UIButton(type: .system)
         var configuration = UIButton.Configuration.plain()
         configuration.title = title
-        configuration.image = BookDesign.symbol(isExpanded ? "chevron.down" : "chevron.right", size: 12, weight: .semibold)
+        configuration.image = BookDesign.symbol(expanded ? "chevron.down" : "chevron.right", size: 12, weight: .semibold)
         configuration.imagePlacement = .trailing
         configuration.imagePadding = 6
         configuration.baseForegroundColor = BookDesign.ink2
@@ -738,7 +921,7 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         toggle.configuration = configuration
         toggle.contentHorizontalAlignment = .leading
         toggle.accessibilityIdentifier = "question-agent-toggle-\(turn.id)"
-        toggle.accessibilityValue = isExpanded ? "已展开" : "已收起"
+        toggle.accessibilityValue = expanded ? "已展开" : "已收起"
         toggle.accessibilityHint = "展开或收起查书步骤"
         toggle.addAction(UIAction { [weak self] _ in
             guard let self else { return }
@@ -749,46 +932,41 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             }
             self.refresh()
         }, for: .touchUpInside)
-
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.spacing = 6
-        if !transcript.steps.isEmpty {
-            stack.addArrangedSubview(toggle)
-            if isExpanded {
-                for (index, step) in transcript.steps.enumerated() {
-                    stack.addArrangedSubview(agentStepRow(step, index: index, turnID: turn.id))
-                }
-                if let usage = transcript.context {
-                    let context = BookDesign.label(
-                        "本次参考约 \(usage.characterCount) 字 · 查书 \(max(1, transcript.stepsUsed)) 步",
-                        font: BookType.caption,
-                        colour: BookDesign.ink3
-                    )
-                    context.numberOfLines = 0
-                    context.accessibilityIdentifier = "question-agent-context-\(turn.id)"
-                    stack.addArrangedSubview(context)
-                }
-            }
-        }
-        if !transcript.warnings.isEmpty {
-            if transcript.steps.isEmpty {
-                stack.addArrangedSubview(agentWarningBanner(transcript.warnings.joined(separator: "\n"), turnID: turn.id))
-            } else {
-                let warning = BookDesign.label(
-                    transcript.warnings.joined(separator: "\n"),
-                    font: BookType.caption,
-                    colour: BookDesign.ink2
-                )
-                warning.numberOfLines = 0
-                warning.accessibilityIdentifier = "question-agent-warning-\(turn.id)"
-                stack.addArrangedSubview(warning)
-            }
-        }
-        return stack
+        return toggle
     }
 
-    /// 无工具步骤时的纸白提示行（例如“已改用普通问答完成”），保持无障碍 id 一致。
+    private func thinkingTitle(turn: ReadingQuestion, transcript: AgentTranscript, running: Bool) -> String {
+        if running { return "正在思考" }
+        if turn.state == .incomplete {
+            let failure = turn.failure ?? ""
+            if failure.contains("取消") || failure.contains("停止") { return "已停止思考" }
+            return "思考失败"
+        }
+        guard let duration = transcript.reasoningDuration, duration >= 1 else { return "已思考" }
+        return "已思考（用时 \(Int(duration.rounded())) 秒）"
+    }
+
+    /// 思考正文：sans 13 灰字、行高约 1.7；不显示 [E#] 等内部标记。
+    private func reasoningLabel(_ text: String, turnID: UUID) -> UIView {
+        let label = UILabel()
+        label.numberOfLines = 0
+        label.adjustsFontForContentSizeCategory = true
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 4
+        let clean = text
+            .replacingOccurrences(of: #"\[E\d+\]"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\*\*(.+?)\*\*"#, with: "$1", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        label.attributedText = NSAttributedString(
+            string: clean,
+            attributes: [.font: BookType.sans(13, weight: .regular, style: .footnote),
+                         .foregroundColor: BookDesign.ink3,
+                         .paragraphStyle: paragraph]
+        )
+        label.accessibilityIdentifier = "question-thinking-\(turnID)"
+        return label
+    }
+
     private func agentWarningBanner(_ text: String, turnID: UUID) -> UIView {
         let container = UIView()
         container.backgroundColor = BookDesign.paperDeep
@@ -805,6 +983,24 @@ final class QuestionController: UIViewController, UITextViewDelegate {
             label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -10)
         ])
         return container
+    }
+
+    /// 工具结果只展示读者可读的原文摘要：隐藏内部依据 id、工具提示词和原始结果头部。
+    private static func readerStepPreview(_ text: String) -> String {
+        var kept: [String] = []
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if trimmed.contains("引用时必须") || trimmed.contains("可以换关键词") { continue }
+            if trimmed.range(of: #"^\[E\d+\]"#, options: .regularExpression) != nil { continue }
+            if trimmed.hasPrefix("search_book") || trimmed.hasPrefix("book_toc") || trimmed.hasPrefix("read_page") || trimmed.hasPrefix("read_chapter") { continue }
+            kept.append(trimmed)
+        }
+        let joined = kept.joined(separator: " · ")
+            .replacingOccurrences(of: #"\[E\d+\]"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard joined.count > 80 else { return joined }
+        return String(joined.prefix(80)) + "…"
     }
 
     private func agentStepRow(_ step: AgentTranscript.Step, index: Int, turnID: UUID) -> UIView {
@@ -832,8 +1028,9 @@ final class QuestionController: UIViewController, UITextViewDelegate {
         let container = UIStackView(arrangedSubviews: [row])
         container.axis = .vertical
         container.spacing = 3
-        if !step.preview.isEmpty {
-            let preview = BookDesign.label(step.preview, font: BookType.caption, colour: BookDesign.ink3)
+        let previewText = Self.readerStepPreview(step.preview)
+        if !previewText.isEmpty {
+            let preview = BookDesign.label(previewText, font: BookType.caption, colour: BookDesign.ink3)
             preview.numberOfLines = 3
             container.addArrangedSubview(preview)
         }

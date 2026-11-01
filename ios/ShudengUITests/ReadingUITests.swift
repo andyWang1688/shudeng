@@ -6488,6 +6488,22 @@ extension ReadingUITests {
         XCTAssertTrue(app.buttons["question-reference-0"].waitForExistence(timeout: 5), "修复后应有可跳转引用")
         XCTAssertFalse(warning.exists, "内核/PDF 引用核验修复后不应有 warning")
         agentAttach("agent-openai-expanded")
+
+        // task-83：原生 reasoning 的思考区：完成默认收起，点开显示真实思考正文。
+        let thinkingToggle = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "question-thinking-toggle-")
+        ).firstMatch
+        XCTAssertTrue(thinkingToggle.waitForExistence(timeout: 10), "原生 reasoning 应显示思考区")
+        XCTAssertTrue(thinkingToggle.label.contains("已思考"), "完成态标题：\(thinkingToggle.label)")
+        let thinkingBody = app.staticTexts.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "question-thinking-")
+        ).firstMatch
+        XCTAssertFalse(thinkingBody.exists, "完成后默认收起思考正文")
+        thinkingToggle.tap()
+        XCTAssertTrue(thinkingBody.waitForExistence(timeout: 5), "点开应显示真实思考正文")
+        XCTAssertTrue(thinkingBody.label.contains("查原文核对") || thinkingBody.label.contains("查到原文"),
+                      "思考正文应来自原生 reasoning：\(thinkingBody.label)")
+        agentAttach("agent-thinking-expanded")
     }
 
     func testAgentNoToolsFallbackUI() throws {
@@ -6659,12 +6675,15 @@ extension ReadingUITests {
         let advanced = app.cells["ai-advanced"]
         XCTAssertTrue(advanced.waitForExistence(timeout: 5)); advanced.tap()
         XCTAssertTrue(app.tables["ai-advanced-editor"].waitForExistence(timeout: 5))
-        let field = app.textFields["ai-context-window"]
-        for _ in 0..<6 where !field.exists { app.tables["ai-advanced-editor"].swipeUp() }
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "应有上下文窗口字段")
-        print("CONTEXT_QA fieldPlaceholder=\(field.placeholderValue ?? "-") value=\(field.value as? String ?? "-")")
+        let row = app.cells["ai-context-window"]
+        for _ in 0..<6 where !row.exists { app.tables["ai-advanced-editor"].swipeUp() }
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "应有上下文窗口设置项")
+        print("CONTEXT_QA fieldDetail=\(row.label)")
         contextAttach("agent-context-window-field-375-light")
-        field.tap(); field.typeText("200000")
+        row.tap()
+        let option = app.buttons["200K"]
+        XCTAssertTrue(option.waitForExistence(timeout: 5), "上下文窗口应为下拉选项")
+        option.tap()
         app.navigationBars["高级设置"].buttons.element(boundBy: 0).tap()
         let save = app.navigationBars["编辑服务"].buttons["保存"]
         XCTAssertTrue(save.waitForExistence(timeout: 5), "编辑服务页应有保存")
@@ -6678,10 +6697,10 @@ extension ReadingUITests {
         XCTAssertTrue(config2.waitForExistence(timeout: 10)); config2.tap()
         let advanced2 = app.cells["ai-advanced"]
         if advanced2.waitForExistence(timeout: 5) { advanced2.tap() }
-        let field2 = app.textFields["ai-context-window"]
-        XCTAssertTrue(field2.waitForExistence(timeout: 10))
-        XCTAssertEqual(field2.value as? String, "200000", "上下文窗口保存后应保留")
-        print("CONTEXT_QA savedValue=\(field2.value as? String ?? "-")")
+        let row2 = app.cells["ai-context-window"]
+        XCTAssertTrue(row2.waitForExistence(timeout: 10))
+        XCTAssertTrue(row2.label.contains("200K"), "上下文窗口保存后应保留：\(row2.label)")
+        print("CONTEXT_QA savedDetail=\(row2.label)")
         contextAttach("agent-context-window-saved-375-light")
     }
 }

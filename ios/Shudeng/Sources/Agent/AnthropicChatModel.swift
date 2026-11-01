@@ -28,8 +28,9 @@ final class AgentAnthropicChatModel: AgentChatModel {
                     var request = baseRequest
                     var body = try AgentAnthropicRequestEncoder.body(
                         messages: messages, tools: tools, options: options, model: configuration.model)
-                    // 复用 AIConnection 对 deepseek-flash 的 thinking 关闭设置（Anthropic 格式的自定义地址）。
-                    if let thinking = baseBody["thinking"] { body["thinking"] = thinking }
+                    // 不再复制 AIConnection 的 thinking:disabled；Anthropic 思考回传需完整 thinking blocks，
+                    // 本轮只做 DeepSeek/OpenAI 格式，Anthropic 路径保持现有行为（不发 thinking 参数）。
+                    _ = baseBody
                     try AgentProviderRequest.attach(body, to: &request)
                     for try await event in client.stream(request: request, makeDecoder: { AgentAnthropicStreamDecoder() }) {
                         continuation.yield(event)

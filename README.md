@@ -4,7 +4,7 @@
 
 [![使用文档](https://img.shields.io/badge/%E4%BD%BF%E7%94%A8%E6%96%87%E6%A1%A3-5B7DB1)](https://andywang1688.github.io/shudeng/)
 
-最新版 v0.4.7：上下文管理补完整，按模型窗口约 80% 才自动压缩，问答区显示上下文圆环；Agent 无需服务器。[下载](https://github.com/andyWang1688/shudeng/releases/tag/v0.4.7) · [更新说明](docs/releases/v0.4.7.md)
+最新版 v0.4.8：DeepSeek 真流式思考（已思考用时）、Markdown 回答层级、上下文圆环与窗口下拉；无需服务器。[下载](https://github.com/andyWang1688/shudeng/releases/tag/v0.4.8) · [更新说明](docs/releases/v0.4.8.md)
 
 ## 安装
 

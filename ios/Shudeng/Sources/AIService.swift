@@ -32,7 +32,7 @@ struct AIConfiguration: Codable, Identifiable, Equatable {
 
     /// 实际窗口：显式设置优先；Anthropic 默认 200k，OpenAI/DeepSeek/自定义默认 128k。
     var effectiveContextWindow: Int {
-        if let contextWindow, contextWindow >= 1_000 { return contextWindow }
+        if let contextWindow, contextWindow >= 1_000 { return min(contextWindow, 1_000_000) }
         return format == .anthropic ? Self.anthropicContextWindow : Self.defaultContextWindow
     }
 }

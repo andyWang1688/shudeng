@@ -20,16 +20,27 @@ final class AgentOpenAIChatModel: AgentChatModel {
         let configuration = configuration
         let key = key
         let client = client
+        let deepSeekThinking = configuration.agentUsesDeepSeekThinking
+        var options = options
+        if deepSeekThinking {
+            // 思考+回答共用 max_tokens；1400 会被思考吃满导致正文为空。
+            options.maxTokens = max(options.maxTokens, AgentThinkingBudget.maxTokens)
+            options.timeout = max(options.timeout, AgentThinkingBudget.timeout)
+        }
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let (baseRequest, baseBody) = try AgentProviderRequest.make(
+                    let (baseRequest, _) = try AgentProviderRequest.make(
                         configuration: configuration, key: key, timeout: options.timeout)
                     var request = baseRequest
                     var body = try AgentOpenAIRequestEncoder.body(
                         messages: messages, tools: tools, options: options, model: configuration.model)
-                    // 复用 AIConnection 对 deepseek-flash 的 thinking 关闭设置。
-                    if let thinking = baseBody["thinking"] { body["thinking"] = thinking }
+                    // Agent 路径不再复制 AIConnection 的 thinking:disabled：DeepSeek 显式开启原生思考，
+                    // 其它 provider 不发任何 thinking 参数（普通 RAG 路径不受影响）。
+                    if deepSeekThinking {
+                        body["thinking"] = ["type": "enabled"]
+                        body["reasoning_effort"] = "high"
+                    }
                     try AgentProviderRequest.attach(body, to: &request)
                     for try await event in client.stream(request: request, makeDecoder: { AgentOpenAIStreamDecoder() }) {
                         continuation.yield(event)
@@ -41,6 +52,26 @@ final class AgentOpenAIChatModel: AgentChatModel {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+}
+
+/// DeepSeek 原生思考的 Agent 端预算（不影响普通 RAG 路径）。
+enum AgentThinkingBudget {
+    /// 思考+回答共用输出预算。
+    static let maxTokens = 16_384
+    /// 单次流式请求超时。
+    static let timeout: TimeInterval = 180
+}
+
+extension AIConfiguration {
+    /// Agent 路径是否使用 DeepSeek 原生思考：预置 provider、模型名或官方域名。
+    /// Anthropic 兼容格式暂不开启（需要回传 thinking blocks，本任务不覆盖）。
+    var agentUsesDeepSeekThinking: Bool {
+        guard format == .openAI else { return false }
+        if provider == .deepSeek { return true }
+        if model.lowercased().hasPrefix("deepseek") { return true }
+        let host = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased()
+        return host == "api.deepseek.com"
     }
 }
 
@@ -79,6 +110,10 @@ enum AgentOpenAIRequestEncoder {
         case .assistant:
             var value: [String: Any] = ["role": "assistant"]
             value["content"] = message.content.isEmpty ? NSNull() : message.content
+            // DeepSeek 带 tools 的后续请求必须原样回传每轮 assistant 的 reasoning_content。
+            if let reasoning = message.reasoningContent, !reasoning.isEmpty {
+                value["reasoning_content"] = reasoning
+            }
             if !message.toolCalls.isEmpty {
                 value["tool_calls"] = message.toolCalls.map { call in
                     [

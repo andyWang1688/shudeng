@@ -236,7 +236,7 @@ struct AgentTokenEstimator: Sendable {
     }
 
     func estimate(_ message: AgentMessage) -> Int {
-        4 + estimate(message.content)
+        4 + estimate(message.content) + estimate(message.reasoningContent ?? "")
             + message.toolCalls.reduce(0) { $0 + 4 + estimate($1.name) + estimate($1.argumentsJSON) }
     }
 }
@@ -453,7 +453,8 @@ final class AgentContextManager: Sendable {
         var toolTokens = 0
         var characters = systemPrompt.count + (summaryText?.count ?? 0)
         for message in messages {
-            characters += message.content.count + message.toolCalls.reduce(0) { $0 + $1.argumentsJSON.count }
+            characters += message.content.count + (message.reasoningContent?.count ?? 0)
+                + message.toolCalls.reduce(0) { $0 + $1.argumentsJSON.count }
             switch message.role {
             case .tool: toolTokens += estimator.estimate(message)
             case .system, .user, .assistant: historyTokens += estimator.estimate(message)

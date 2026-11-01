@@ -890,7 +890,6 @@ private final class AIAdvancedController: UITableViewController {
     private var draft: AIConfiguration
     private let changed: (AIConfiguration) -> Void
     private let name = UITextField(), address = UITextField(), model = UITextField()
-    private let contextWindow = UITextField()
     init(configuration: AIConfiguration, changed: @escaping (AIConfiguration) -> Void) {
         draft = configuration; self.changed = changed
         super.init(style: .insetGrouped)
@@ -907,8 +906,7 @@ private final class AIAdvancedController: UITableViewController {
         for (field, label, value, id) in [
             (name, "服务名称", draft.name, "ai-name"),
             (address, "API 根地址或完整端点", draft.address, "ai-address"),
-            (model, "自定义模型 ID", draft.model, "ai-model"),
-            (contextWindow, "上下文窗口", draft.contextWindow.map(String.init) ?? "", "ai-context-window")
+            (model, "自定义模型 ID", draft.model, "ai-model")
         ] {
             field.text = value; field.placeholder = label; field.accessibilityLabel = label; field.accessibilityIdentifier = id
             field.font = .preferredFont(forTextStyle: .body); field.adjustsFontForContentSizeCategory = true
@@ -917,28 +915,48 @@ private final class AIAdvancedController: UITableViewController {
             field.addTarget(self, action: #selector(finishEditing), for: .editingDidEndOnExit)
         }
         address.keyboardType = .URL
-        contextWindow.keyboardType = .numberPad
-        updateContextWindowPlaceholder()
     }
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 5 }
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        "支持 OpenAI Chat Completions、Anthropic Messages 非流式文字接口。HTTPS 地址；本机测试可用 HTTP。地址中不要填写密钥。空路径使用 /v1，其余根路径追加文字端点。上下文窗口填写模型一次能看多少内容（数字），不确定就留空，会按服务自动使用合适的默认值。"
+        "支持 OpenAI Chat Completions、Anthropic Messages 非流式文字接口。HTTPS 地址；本机测试可用 HTTP。地址中不要填写密钥。空路径使用 /v1，其余根路径追加文字端点。上下文窗口从常用值中选择；不确定选“自动”，会按服务使用合适的默认值。"
     }
-    private func updateContextWindowPlaceholder() {
-        let defaultText: String
-        switch draft.format {
-        case .anthropic: defaultText = "约 20 万"
-        default: defaultText = "约 12.8 万"
+    private var contextWindowOptions: [(String, Int?)] {
+        [("自动（推荐）", nil), ("32K", 32_000), ("64K", 64_000),
+         ("128K", 128_000), ("200K", 200_000), ("400K", 400_000), ("1M", 1_000_000)]
+    }
+    private var contextWindowDetail: String {
+        guard let value = draft.contextWindow else { return "自动" }
+        if value >= 1_000_000 { return "1M" }
+        return "\(value / 1000)K"
+    }
+    private func chooseContextWindow(from cell: UITableViewCell) {
+        let alert = BookAlertController(title: "上下文窗口", message: "模型一次能看多少内容；不确定选自动。", preferredStyle: .actionSheet)
+        for (title, value) in contextWindowOptions {
+            let selected = draft.contextWindow == value
+            alert.addAction(BookAlertAction(title: selected ? title + " ✓" : title, style: .default) { [weak self] _ in
+                guard let self else { return }
+                self.draft.contextWindow = value
+                self.changed(self.draft)
+                self.tableView.reloadRows(at: [IndexPath(row: 3, section: 0)], with: .none)
+            })
         }
-        contextWindow.placeholder = "留空用默认（\(defaultText)）"
+        alert.addAction(BookAlertAction(title: "取消", style: .cancel))
+        alert.bookPopover.sourceView = cell
+        present(alert, animated: true)
     }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        if indexPath.row < 4 {
+        if indexPath.row < 3 {
             let cell = tableView.dequeueReusableCell(withIdentifier: "ai-field", for: indexPath) as! AIFieldCell
             cell.configure(
-                label: ["服务名称", "地址", "自定义模型", "上下文窗口"][indexPath.row],
-                field: [name, address, model, contextWindow][indexPath.row]
+                label: ["服务名称", "地址", "自定义模型"][indexPath.row],
+                field: [name, address, model][indexPath.row]
             )
+            return cell
+        }
+        if indexPath.row == 3 {
+            let cell = tableView.dequeueReusableCell(withIdentifier: "ai-value", for: indexPath)
+            configureAICell(cell, title: "上下文窗口", detail: contextWindowDetail, accessory: .disclosureIndicator)
+            cell.accessibilityIdentifier = "ai-context-window"
             return cell
         }
         let cell = tableView.dequeueReusableCell(withIdentifier: "ai-value", for: indexPath)
@@ -948,14 +966,16 @@ private final class AIAdvancedController: UITableViewController {
     }
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard indexPath.row == 4 else { return }
+        guard indexPath.row == 4 else {
+            if indexPath.row == 3 { chooseContextWindow(from: tableView.cellForRow(at: indexPath) ?? UITableViewCell()) }
+            return
+        }
         view.endEditing(true)
         let alert = BookAlertController(title: "接口格式", message: "仅支持非流式文字请求", preferredStyle: .actionSheet)
         for format in AIFormat.allCases {
             alert.addAction(BookAlertAction(title: format.rawValue, style: .default) { [weak self] _ in
                 guard let self else { return }
                 self.draft.format = format; self.changed(self.draft)
-                self.updateContextWindowPlaceholder()
                 self.tableView.reloadRows(at: [indexPath], with: .none)
             })
         }
@@ -967,14 +987,6 @@ private final class AIAdvancedController: UITableViewController {
         draft.name = name.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         draft.address = address.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         draft.model = model.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let windowText = contextWindow.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if windowText.isEmpty {
-            draft.contextWindow = nil
-        } else if let value = Int(windowText), value >= 1000 {
-            draft.contextWindow = value
-        } else {
-            draft.contextWindow = nil
-        }
         changed(draft)
     }
     @objc private func finishEditing() { view.endEditing(true) }

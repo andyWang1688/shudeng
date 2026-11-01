@@ -1122,6 +1122,8 @@ private final class AgentAuditURLProtocol: Foundation.URLProtocol, @unchecked Se
 
     nonisolated(unsafe) static var stubs: [Stub] = []
     nonisolated(unsafe) static var requestCount = 0
+    nonisolated(unsafe) static var requestBodies: [Data] = []
+    nonisolated(unsafe) static var requestTimeouts: [TimeInterval] = []
 
     override class func canInit(with request: Foundation.URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: Foundation.URLRequest) -> Foundation.URLRequest { request }
@@ -1130,6 +1132,21 @@ private final class AgentAuditURLProtocol: Foundation.URLProtocol, @unchecked Se
     override func startLoading() {
         let index = Self.requestCount
         Self.requestCount += 1
+        Self.requestTimeouts.append(request.timeoutInterval)
+        if let body = request.httpBody {
+            Self.requestBodies.append(body)
+        } else if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4_096)
+            while true {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                data.append(buffer, count: count)
+            }
+            Self.requestBodies.append(data)
+        }
         let stub = Self.stubs.indices.contains(index) ? Self.stubs[index] : Stub(chunks: [])
         let response = Foundation.HTTPURLResponse(url: request.url!, statusCode: stub.status,
                                                   httpVersion: "HTTP/1.1",
@@ -1149,6 +1166,8 @@ private enum AgentAuditTransport {
     static func session(_ stubs: [AgentAuditURLProtocol.Stub]) -> URLSession {
         AgentAuditURLProtocol.stubs = stubs
         AgentAuditURLProtocol.requestCount = 0
+        AgentAuditURLProtocol.requestBodies = []
+        AgentAuditURLProtocol.requestTimeouts = []
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [AgentAuditURLProtocol.self]
         return URLSession(configuration: configuration)
@@ -1182,6 +1201,19 @@ private enum AgentAuditTransport {
 
     static func textChunk(_ text: String) -> String {
         data(["choices": [["delta": ["content": text]]]])
+    }
+
+    static func reasoningChunk(_ text: String) -> String {
+        data(["choices": [["delta": ["reasoning_content": text]]]])
+    }
+
+    static func deepSeekConfiguration() -> AIConfiguration {
+        AIConfiguration(name: "DeepSeek", format: .openAI, address: "https://api.deepseek.com",
+                        model: "deepseek-flash", provider: .deepSeek)
+    }
+
+    static func deepSeekModel(_ session: URLSession) -> AgentOpenAIChatModel {
+        AgentOpenAIChatModel(configuration: deepSeekConfiguration(), key: "test", session: session)
     }
 
     static func toolChunk(index: Int, id: String? = nil, name: String? = nil,
@@ -2114,5 +2146,206 @@ final class AgentContextManagementTests: XCTestCase {
         XCTAssertNotNil(saved.summary, "checkpoint 应记录摘要引用")
         XCTAssertEqual(saved.summary?.summarizedMessages, saved.context?.summarizedMessages ?? 0)
         XCTAssertNotNil(summaries.load(conversationID))
+    }
+}
+
+// MARK: - DeepSeek 原生思考（task-82）
+
+final class AgentThinkingTests: XCTestCase {
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = agentTemporaryRoot("thinking")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func testReasoningContentChunksBecomeReasoningDeltas() async throws {
+        let payload = AgentAuditTransport.reasoningChunk("先查")
+            + AgentAuditTransport.reasoningChunk("书内原文")
+            + AgentAuditTransport.textChunk("答案")
+            + AgentAuditTransport.finishReason("stop")
+            + AgentAuditTransport.done
+        // 任意分块边界（含切在 reasoning_content 中间）不应丢思考增量。
+        let data = Data(payload.utf8)
+        var chunks: [Data] = []
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + 5, data.count)
+            chunks.append(data.subdata(in: offset..<end))
+            offset = end
+        }
+        let session = AgentAuditTransport.session([.init(chunks: chunks)])
+        let model = AgentAuditTransport.openAI(session)
+        let events = try await AgentAuditTransport.collect(model)
+        XCTAssertEqual(events, [
+            .reasoningDelta("先查"),
+            .reasoningDelta("书内原文"),
+            .textDelta("答案"),
+            .finished(.stop),
+        ])
+    }
+
+    func testToolLoopSecondRequestCarriesReasoningContent() async throws {
+        let searchCall = AgentToolCall(id: "call_1", name: "search_book", argumentsJSON: #"{"query":"原文"}"#)
+        let first = AgentAuditTransport.reasoningChunk("先查书内原文")
+            + AgentAuditTransport.toolChunk(index: 0, id: searchCall.id, name: searchCall.name,
+                                            arguments: searchCall.argumentsJSON)
+            + AgentAuditTransport.finishReason("tool_calls")
+            + AgentAuditTransport.done
+        let second = AgentAuditTransport.textChunk(#"{"answer":"书里说的是原文。","citations":[]}"#)
+            + AgentAuditTransport.finishReason("stop")
+            + AgentAuditTransport.done
+        let session = AgentAuditTransport.session([.init(body: first), .init(body: second)])
+        let model = AgentAuditTransport.deepSeekModel(session)
+        let source = StubBookSource(searchResults: [agentExcerpt("书里的原文句子")])
+        let executor = makeExecutor(model: model, source: source, root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: UUID(), bookID: "book-1", bookTitle: "测试书", messages: [.user("书里说了什么")])))
+
+        XCTAssertEqual(agentCompleted(events)?.answer, "书里说的是原文。", "事件：\(events)")
+        XCTAssertEqual(AgentAuditURLProtocol.requestCount, 2, "工具结果应触发第二轮请求")
+        // 第一轮请求：DeepSeek 原生思考参数。
+        let firstRequestData = try XCTUnwrap(AgentAuditURLProtocol.requestBodies.first)
+        let firstBody = try XCTUnwrap(JSONSerialization.jsonObject(with: firstRequestData) as? [String: Any])
+        XCTAssertEqual(firstBody["thinking"] as? [String: String], ["type": "enabled"])
+        XCTAssertEqual(firstBody["reasoning_effort"] as? String, "high")
+        XCTAssertEqual(firstBody["max_tokens"] as? Int, 16_384)
+        XCTAssertGreaterThanOrEqual(AgentAuditURLProtocol.requestTimeouts.first ?? 0, 180)
+        // 第二轮请求：assistant 历史必须原样回传 reasoning_content（否则 DeepSeek 带 tools 会 400）。
+        let secondRequestData = try XCTUnwrap(AgentAuditURLProtocol.requestBodies.dropFirst().first)
+        let secondBody = try XCTUnwrap(JSONSerialization.jsonObject(with: secondRequestData) as? [String: Any])
+        let messages = try XCTUnwrap(secondBody["messages"] as? [[String: Any]])
+        let assistant = try XCTUnwrap(messages.last { ($0["role"] as? String) == "assistant" && $0["tool_calls"] != nil })
+        XCTAssertEqual(assistant["reasoning_content"] as? String, "先查书内原文")
+        XCTAssertTrue(events.contains { if case .reasoningDelta(let delta) = $0 { return delta == "先查书内原文" }; return false })
+    }
+
+    func testDeepSeekRequestEnablesNativeThinkingAndRaisesBudget() async throws {
+        let session = AgentAuditTransport.session([
+            .init(body: AgentAuditTransport.textChunk("好") + AgentAuditTransport.finishReason("stop") + AgentAuditTransport.done),
+        ])
+        let model = AgentAuditTransport.deepSeekModel(session)
+        _ = try await AgentAuditTransport.collect(model)
+        let requestData = try XCTUnwrap(AgentAuditURLProtocol.requestBodies.first)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: requestData) as? [String: Any])
+        XCTAssertEqual(body["thinking"] as? [String: String], ["type": "enabled"], "DeepSeek 不应再发 thinking:disabled")
+        XCTAssertEqual(body["reasoning_effort"] as? String, "high")
+        XCTAssertEqual(body["max_tokens"] as? Int, 16_384)
+        XCTAssertEqual(body["stream"] as? Bool, true)
+        XCTAssertGreaterThanOrEqual(AgentAuditURLProtocol.requestTimeouts.first ?? 0, 180)
+    }
+
+    func testNonDeepSeekRequestSendsNoThinkingParameters() async throws {
+        let session = AgentAuditTransport.session([
+            .init(body: AgentAuditTransport.textChunk("好") + AgentAuditTransport.finishReason("stop") + AgentAuditTransport.done),
+        ])
+        let model = AgentAuditTransport.openAI(session)
+        _ = try await AgentAuditTransport.collect(model)
+        let requestData = try XCTUnwrap(AgentAuditURLProtocol.requestBodies.first)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: requestData) as? [String: Any])
+        XCTAssertNil(body["thinking"], "非 DeepSeek 不应发送 thinking 参数")
+        XCTAssertNil(body["reasoning_effort"], "非 DeepSeek 不应发送 reasoning_effort")
+        XCTAssertEqual(body["max_tokens"] as? Int, 1_400, "非 DeepSeek 保持原有输出预算")
+        XCTAssertLessThan(AgentAuditURLProtocol.requestTimeouts.first ?? .infinity, 100, "非 DeepSeek 保持原有单次超时")
+    }
+
+    func testNoReasoningProducesNoFakeThinking() async throws {
+        let session = AgentAuditTransport.session([
+            .init(body: AgentAuditTransport.textChunk(#"{"answer":"直接回答。","citations":[]}"#)
+                + AgentAuditTransport.finishReason("stop") + AgentAuditTransport.done),
+        ])
+        let model = AgentAuditTransport.openAI(session)
+        let conversationID = UUID()
+        let executor = makeExecutor(model: model, source: StubBookSource(), root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: conversationID, bookID: "book-1", bookTitle: "测试书", messages: [.user("问")])))
+
+        XCTAssertFalse(events.contains { if case .reasoningDelta = $0 { return true }; return false },
+                       "没有原生 reasoning 时不应产生任何思考事件")
+        XCTAssertEqual(agentCompleted(events)?.answer, "直接回答。")
+        let checkpoint = try XCTUnwrap(try AgentCheckpointStore(root: root).load(conversationID: conversationID))
+        XCTAssertTrue(checkpoint.messages.allSatisfy { $0.reasoningContent == nil }, "无 reasoning 不应伪造历史推理")
+        // prompt 不再要求 preamble，也不再提供 JSON reasoning 兜底（思考只来自原生 reasoning）。
+        XCTAssertFalse(AgentPrompts.runtimeSystem.contains("2-4 句"))
+        XCTAssertFalse(AgentPrompts.runtimeSystem.contains("如何查证"))
+        XCTAssertFalse(AgentPrompts.runtimeSystem.contains("\"reasoning\""))
+        // 旧模型即使仍返回 reasoning 字段也兼容解析，但内核不再使用它。
+        XCTAssertNotNil(AgentAnswerFormat.payload(from: #"{"answer":"a","citations":[],"reasoning":"旧兜底"}"#))
+    }
+
+    func testExecutorAttachesReasoningToAssistantHistory() async throws {
+        let conversationID = UUID()
+        let source = StubBookSource(searchResults: [agentExcerpt("书里的原文句子")])
+        let model = ScriptedChatModel([
+            [.reasoningDelta("思考A：先查书"), .toolCall(AgentToolCall(id: "call_1", name: "search_book",
+                                                                      argumentsJSON: #"{"query":"原文"}"#)),
+             .finished(.toolCalls)],
+            [.reasoningDelta("思考B：整理引用"),
+             .textDelta(#"{"answer":"书里说的是原文。","citations":[{"id":"E1","quote":"书里的原文"}]}"#),
+             .finished(.stop)],
+        ])
+        let executor = makeExecutor(model: model, source: source, root: root)
+        let events = await collectEvents(executor.start(AgentRunRequest(
+            conversationID: conversationID, bookID: "book-1", bookTitle: "测试书", messages: [.user("问")])))
+
+        XCTAssertEqual(agentCompleted(events)?.answer, "书里说的是原文。")
+        let checkpoint = try XCTUnwrap(try AgentCheckpointStore(root: root).load(conversationID: conversationID))
+        let toolRound = try XCTUnwrap(checkpoint.messages.first { $0.role == .assistant && !$0.toolCalls.isEmpty })
+        XCTAssertEqual(toolRound.reasoningContent, "思考A：先查书", "工具轮的 reasoning 必须随 assistant 消息入历史")
+        let finalMessage = try XCTUnwrap(checkpoint.messages.last { $0.role == .assistant })
+        XCTAssertEqual(finalMessage.reasoningContent, "思考B：整理引用")
+        // 第二请求里 assistant 消息要带回上一轮 reasoning（ScriptedChatModel 也记录请求）。
+        let secondRequest = try XCTUnwrap(model.requests.last)
+        let assistant = try XCTUnwrap(secondRequest.first { $0.role == .assistant && !$0.toolCalls.isEmpty })
+        XCTAssertEqual(assistant.reasoningContent, "思考A：先查书")
+        XCTAssertTrue(events.contains { if case .reasoningDelta = $0 { return true }; return false })
+    }
+
+    func testAgentMessageReasoningCodableBackwardCompatible() throws {
+        let legacy = Data(#"{"role":"assistant","content":"旧消息","toolCalls":[]}"#.utf8)
+        let old = try JSONDecoder().decode(AgentMessage.self, from: legacy)
+        XCTAssertEqual(old.content, "旧消息")
+        XCTAssertNil(old.reasoningContent, "旧检查点没有 reasoningContent 应可解码")
+
+        let message = AgentMessage.assistant("回答", reasoningContent: "原生思考")
+        let roundtrip = try JSONDecoder().decode(AgentMessage.self, from: JSONEncoder().encode(message))
+        XCTAssertEqual(roundtrip.reasoningContent, "原生思考")
+    }
+
+    func testDeepSeekRuntimeBudgetTuningDoesNotAffectOtherProviders() {
+        let defaults = AgentRuntimeConfiguration()
+        XCTAssertEqual(defaults.runTimeout, 240)
+        XCTAssertEqual(defaults.modelOptions.maxTokens, 1_400)
+        XCTAssertEqual(defaults.modelOptions.timeout, 90)
+
+        let deepSeek = defaults.applyingThinkingBudget(for: AgentAuditTransport.deepSeekConfiguration())
+        XCTAssertEqual(deepSeek.runTimeout, 300)
+        XCTAssertEqual(deepSeek.modelOptions.maxTokens, 16_384)
+        XCTAssertEqual(deepSeek.modelOptions.timeout, 180)
+
+        let openAI = AIConfiguration(name: "o", format: .openAI, address: "https://api.openai.com", model: "gpt-4o")
+        let untouched = defaults.applyingThinkingBudget(for: openAI)
+        XCTAssertEqual(untouched.runTimeout, defaults.runTimeout)
+        XCTAssertEqual(untouched.modelOptions.maxTokens, defaults.modelOptions.maxTokens)
+        XCTAssertEqual(untouched.modelOptions.timeout, defaults.modelOptions.timeout)
+    }
+
+    func testDeepSeekThinkingDetectionByPresetModelAndHost() {
+        XCTAssertTrue(AgentAuditTransport.deepSeekConfiguration().agentUsesDeepSeekThinking)
+        var modelOnly = AIConfiguration(name: "c", format: .openAI, address: "https://gateway.example.com",
+                                        model: "deepseek-v4-pro")
+        XCTAssertTrue(modelOnly.agentUsesDeepSeekThinking, "模型名 deepseek* 也应开启原生思考")
+        modelOnly.model = "gpt-4o"
+        modelOnly.address = "https://api.deepseek.com"
+        XCTAssertTrue(modelOnly.agentUsesDeepSeekThinking, "官方域名也应开启")
+        let plain = AIConfiguration(name: "o", format: .openAI, address: "https://api.openai.com", model: "gpt-4o")
+        XCTAssertFalse(plain.agentUsesDeepSeekThinking)
+        let anthropic = AIConfiguration(name: "a", format: .anthropic, address: "https://api.deepseek.com",
+                                        model: "deepseek-flash", provider: .deepSeek)
+        XCTAssertFalse(anthropic.agentUsesDeepSeekThinking, "Anthropic 兼容路径本轮不开启思考参数")
     }
 }

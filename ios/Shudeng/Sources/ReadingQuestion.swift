@@ -125,6 +125,12 @@ struct AgentTranscript: Codable, Equatable {
     var steps: [Step] = []
     /// 收尾摘要（如「查书 3 步 · 参考 2 段原文」）。
     var summary = ""
+    /// 模型暴露的思考过程（可选，旧记录没有该字段）；只来自原生 reasoning 事件。
+    var reasoning: String?
+    /// 本次思考耗时（秒）；nil 表示旧记录或没有原生 reasoning。
+    var reasoningDuration: TimeInterval?
+    /// 读者手动展开状态；nil 表示未手动操作（生成中默认展开、完成后默认收起）。
+    var reasoningExpanded: Bool?
     /// 本次运行的材料预算快照；旧记录可能为 nil。
     var context: AgentContextUsage?
     /// 面向读者的警告文案。
@@ -355,6 +361,19 @@ final class QuestionStore: NSObject {
         guard var record = record(id), record.state == .draft || record.state == .incomplete else { return }
         record.question = text; record.updated = Date(); save(record)
     }
+    /// 记录读者对思考过程展开/收起的偏好；历史回看保持一致，不触发 AI。
+    func setThinkingExpanded(_ id: UUID, expanded: Bool) {
+        guard var record = record(id), var agent = record.agent else { return }
+        agent.reasoningExpanded = expanded
+        record.agent = agent
+        if streaming[id] != nil {
+            streaming[id] = record
+            notify()
+        } else if record.state == .complete {
+            record.updated = Date()
+            save(record)
+        }
+    }
     func cancel(_ id: UUID) {
         trace("cancel", id: id)
         interrupt(id, reason: "已主动取消；保留已保存内容。")
@@ -530,11 +549,17 @@ final class QuestionStore: NSObject {
         var transcript = AgentTranscript()
         var rawAnswer = ""
         var lastPublish = Date.distantPast
+        let reasoningStartedAt = Date()
+        func markReasoningDuration() {
+            guard !(transcript.reasoning ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            transcript.reasoningDuration = Date().timeIntervalSince(reasoningStartedAt)
+        }
         streaming[id] = live
 
         func publish(force: Bool = false) {
             live.agent = transcript
-            live.answer = Self.visibleStreamingAnswer(rawAnswer)
+            // 完成前答案区保持空：最终 JSON 之前的 preamble 不属于思考，也不应该闪进答案区。
+            live.answer = ""
             record.answer = live.answer
             record.citations = live.citations
             record.agent = transcript
@@ -560,9 +585,14 @@ final class QuestionStore: NSObject {
                 live.model = started.model
                 publish(force: true)
             case .step:
+                rawAnswer = ""
                 break
             case .textDelta(let delta):
                 rawAnswer += delta
+                // 思考过程只来自原生 reasoning 事件；正文在完成前不展示，避免 JSON 前的 preamble 闪烁。
+                publish()
+            case .reasoningDelta(let delta):
+                transcript.reasoning = (transcript.reasoning ?? "") + delta
                 publish()
             case .toolStarted(let call):
                 transcript.steps.append(AgentTranscript.Step(
@@ -611,6 +641,7 @@ final class QuestionStore: NSObject {
             case .citation:
                 break
             case .completed(let result):
+                markReasoningDuration()
                 live.answer = result.answer
                 live.citations = result.citations
                 transcript.context = result.context
@@ -625,6 +656,9 @@ final class QuestionStore: NSObject {
                         transcript.warnings.append(warning)
                     }
                 }
+                if let expanded = streaming[id]?.agent?.reasoningExpanded {
+                    transcript.reasoningExpanded = expanded
+                }
                 live.agent = transcript
                 live.state = .complete
                 live.failure = nil
@@ -637,24 +671,25 @@ final class QuestionStore: NSObject {
                 save(record)
                 return
             case .failed(let failure):
+                markReasoningDuration()
+                live.agent = transcript
                 if failure.code == .toolsUnsupported {
-                    live.agent = transcript
                     record = live
                     throw AgentFallback.toolsUnsupported
                 }
+                record.agent = transcript
                 throw Self.friendlyAgentFailure(failure)
             case .cancelled:
+                markReasoningDuration()
+                live.agent = transcript
+                record.agent = transcript
                 throw CancellationError()
             }
         }
+        markReasoningDuration()
+        live.agent = transcript
+        record.agent = transcript
         throw AgentFailure(code: .invalidResponse, message: "AI 服务没有返回完整回答，请重试。")
-    }
-
-    private static func visibleStreamingAnswer(_ raw: String) -> String {
-        // 最终答案要求输出 JSON；流式阶段只展示 JSON 之前的自然语言，避免把结构泄漏给读者。
-        var text = raw
-        if let brace = text.firstIndex(of: "{") { text = String(text[..<brace]) }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func agentReaderContext(record: ReadingQuestion, evidence: [QuestionEvidence]) -> String {

@@ -246,6 +246,11 @@ final class AgentOpenAIStreamDecoder: AgentSSEDecoder {
         guard let choice = (object["choices"] as? [[String: Any]])?.first else { return [] }
         var events: [AgentModelEvent] = []
         if let delta = choice["delta"] as? [String: Any] {
+            if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty {
+                events.append(.reasoningDelta(reasoning))
+            } else if let reasoning = delta["reasoning"] as? String, !reasoning.isEmpty {
+                events.append(.reasoningDelta(reasoning))
+            }
             if let content = delta["content"] as? String, !content.isEmpty {
                 events.append(.textDelta(content))
             }
@@ -339,6 +344,11 @@ final class AgentAnthropicStreamDecoder: AgentSSEDecoder {
                 guard !text.isEmpty else { return [] }
                 blocks[index] = state
                 return [.textDelta(text)]
+            case "thinking_delta":
+                let thinking = delta["thinking"] as? String ?? ""
+                guard !thinking.isEmpty else { return [] }
+                blocks[index] = state
+                return [.reasoningDelta(thinking)]
             case "input_json_delta":
                 state.arguments += delta["partial_json"] as? String ?? ""
                 blocks[index] = state

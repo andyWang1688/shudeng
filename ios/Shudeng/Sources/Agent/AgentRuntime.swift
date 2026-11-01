@@ -36,6 +36,17 @@ struct AgentRuntimeConfiguration: Sendable, Equatable {
     var modelOptions: AgentModelOptions = AgentModelOptions()
 
     init() {}
+
+    /// DeepSeek 原生思考需要更大的输出预算与超时（思考+回答共用 max_tokens）；
+    /// 其它 provider 原样返回，保证非 DeepSeek Agent 的预算/超时不被改变。
+    func applyingThinkingBudget(for configuration: AIConfiguration) -> AgentRuntimeConfiguration {
+        guard configuration.agentUsesDeepSeekThinking else { return self }
+        var value = self
+        value.runTimeout = max(value.runTimeout, 300)
+        value.modelOptions.maxTokens = max(value.modelOptions.maxTokens, 16_384)
+        value.modelOptions.timeout = max(value.modelOptions.timeout, 180)
+        return value
+    }
 }
 
 /// 引用核对（对应「最终回答必须经过书内原文核对」）。
@@ -228,6 +239,7 @@ final class AgentExecutor: Sendable {
 
                 // 2. 模型流式输出：文本直接转发，工具调用收集到本轮结束。
                 var assistantText = ""
+                var reasoningText = ""
                 var calls: [AgentToolCall] = []
                 var finishReason: AgentFinishReason = .stop
                 do {
@@ -240,6 +252,11 @@ final class AgentExecutor: Sendable {
                         case .textDelta(let delta):
                             assistantText += delta
                             emit(.textDelta(delta))
+                        case .reasoningDelta(let delta):
+                            // 本轮原生 reasoning 与 assistant 消息一起进入历史；DeepSeek 带 tools
+                            // 的下一轮请求必须原样回传，否则 400。
+                            reasoningText += delta
+                            emit(.reasoningDelta(delta))
                         case .toolCall(let call):
                             calls.append(call)
                         case .finished(let reason):
@@ -273,15 +290,17 @@ final class AgentExecutor: Sendable {
                         warnings.append(warning.message)
                         emit(.warning(warning))
                     }
-                    history.append(.assistant(finished.result.answer))
+                    history.append(.assistant(finished.result.answer,
+                                              reasoningContent: reasoningText.isEmpty ? nil : reasoningText))
                     saveCheckpoint(.completed, result: finished.result)
                     for citation in finished.result.citations { emit(.citation(citation)) }
                     emit(.completed(finished.result))
                     return
                 }
 
-                // 4. 回填 assistant(tool_calls) + 每个工具结果，进入下一轮。
-                history.append(.assistant(assistantText, toolCalls: calls))
+                // 4. 回填 assistant(tool_calls, reasoning_content) + 每个工具结果，进入下一轮。
+                history.append(.assistant(assistantText, toolCalls: calls,
+                                          reasoningContent: reasoningText.isEmpty ? nil : reasoningText))
                 let executed = Array(calls.prefix(configuration.maxToolCallsPerStep))
                 let skipped = Array(calls.dropFirst(configuration.maxToolCallsPerStep))
                 for call in executed {
@@ -507,7 +526,7 @@ struct AgentBookRuntime: Sendable {
         let verifier = BookIndexCitationVerifier(index: index, bookID: environment.bookID)
         let executor = AgentExecutor(model: model, tools: tools, context: context,
                                      checkpoints: store, verifier: verifier,
-                                     configuration: runtimeConfiguration)
+                                     configuration: runtimeConfiguration.applyingThinkingBudget(for: configuration))
         return AgentBookRuntime(environment: environment, executor: executor, checkpoints: store,
                                 summaries: summaries)
     }
