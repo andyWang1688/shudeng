@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-02
 ---
 
@@ -16,7 +16,7 @@ date: 2026-11-02
 
 现有 Swift 版保持不动，作为行为基线、回退包和旧数据迁移参照。
 
-2026-11-02 调整：产品决定 **iOS 优先**，Android 暂时搁置；架构方向不变，本文的 Android 证据保留为历史，不作为当前阻塞。
+2026-11-02 调整：产品决定 **iOS 优先**，Android 暂时搁置；架构方向不变，本文的 Android 证据保留为历史，不作为当前阻塞。用户已批准本 ADR，正式 iOS 迁移按 `docs/design/ios-rn-migration-plan.md` 执行。
 
 ## 决定（草案，待双端验收）
 
@@ -36,7 +36,7 @@ date: 2026-11-02
 - **Android 原生**：同一 Agent 事件链、SQLite/checkpoint、EPUB WebView、native ORT embedding（cosine=1）均在 Debug emulator 通过；Gradle 使用 Aliyun 镜像，ORT Android 需显式 autolink + Gradle 9 patch。
 - **V5 Node 业务闭环**：脱敏旧库迁移 → SQLite → 真实 ONNX 索引 → LangChain Agent 3 题引用核对，11/11 PASS；1000 chunk 索引 median **9.73s**，进程 max RSS **707MB**，查询 FTS/vector/hybrid p50 0–5ms。
 - **V5 双端原生闭环**：dev route 在 Android Debug 和 iOS Release 模拟器均执行 SQLite→真实 ONNX 索引→SqliteBookSource→LangChain Agent→引用 E1 核对→answer，PASS（iOS 用临时 QA 重定向绕过系统深链确认框）。
-- **真实 provider（iOS Hermes）**：开发路由从 App Documents 读取临时配置，经本机 OpenAI-compatible 代理调用 deepseek-flash；iOS Release 真机模拟器 PASS（reasoning 612 字、3 步、2 条引用、HTTP 200）。**官方 DeepSeek endpoint 仍未直接验收**，生产需 SecureStore + 设置页。
+- **真实 provider（iOS Hermes）**：开发路由从 App Documents 读取临时配置；本机代理 iOS PASS（reasoning 612 字、3 步、2 条引用），随后用户提供官方 key，官方 `https://api.deepseek.com/v1` 直接请求也 PASS（reasoning 853 字、3 步、2 条引用、HTTP 200）。生产需 SecureStore。
 - **Release 构建 smoke**：iOS Release simulator app **179MB**（可执行 115MB）；Android universal Release APK **240MB**（debug signing）。按发布架构补充采样：iOS `iphoneos` Release（未签名，加入 PDFKit 后）**95MB**，Android arm64+minify/shrink APK **74MB**；Android Release Agent 闭环可运行，冷启动单次约 **1.15s**。
 
 
@@ -59,7 +59,7 @@ date: 2026-11-02
 - **引用点击回跳阅读器**：`initialLocation` 已从 route→ReaderShell→ReaderWebView→`reader:open` 打通，iOS 打开 EPub CFI 验证；真实 locator→CFI 映射与点击按钮未做端到端。
 - **大 PDF（514 页/28MB）**：WKWebView 文件 URL、localhost HTTP、base64 三种方式均失败；改用 **react-native-pdf（iOS PDFKit）** 后打开成功，顶栏显示第 1/514 页，正文渲染正常。正式 reader 采用原生 PDFKit 作为大 PDF 路线；WebView 继续负责 EPUB/小 PDF。
 - **未验证**：PDFKit 真机手势/缩放/内存峰值、页码跳转、标注坐标、Release 商店签名。
-- **官方 DeepSeek/Anthropic endpoint**（当前只用本机代理/协议/本地 stub 证据）；Anthropic thinking 回传、真实手势/大 PDF。
+- **Anthropic** 官方 endpoint/thinking 回传未验证；**真实手指手势**未验证（无 GUI 触控自动化）；大 PDF 已由原生 PDFKit 打开 514 页。
 
 ## 进入正式迁移的门槛
 
