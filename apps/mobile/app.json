@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "书灯",
+    "slug": "shudeng-mobile",
+    "scheme": "shudeng",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "dev.shudeng.mobile"
+    },
+    "android": {
+      "package": "dev.shudeng.mobile"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite"
+    ]
+  }
+}

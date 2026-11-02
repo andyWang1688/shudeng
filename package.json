@@ -1,0 +1,11 @@
+{
+  "name": "shudeng",
+  "private": true,
+  "packageManager": "pnpm@10.34.5",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "eval": "pnpm --filter @shudeng/eval eval"
+  }
+}
