@@ -27,6 +27,9 @@ export function ReaderShell({ bookId, initialLocation }: ReaderShellProps) {
         setProgress(event.percent);
         setLastEvent(`阅读进度 ${Math.round(event.percent * 100)}%`);
         break;
+      case 'error':
+        setLastEvent(`阅读器错误：${event.message}`);
+        break;
     }
   };
 

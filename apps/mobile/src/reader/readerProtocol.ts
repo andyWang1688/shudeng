@@ -105,8 +105,22 @@ export function openPayloadForBook(
   bookId: string,
   fixture: { title: string; mimeType: string; base64: string },
   initialLocation?: string,
+  largePdfUrl?: string,
 ) {
   const format: ReaderFormat = bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub';
+  if (bookId === 'pdf-large-file') {
+    // 大 PDF 走 Documents 文件 + baseUrl，不把 28MB 转成 base64 塞进 HTML。
+    return {
+      type: 'reader:open' as const,
+      payload: {
+        format: 'pdf' as const,
+        url: largePdfUrl ?? 'large.pdf',
+        title: '大 PDF（514 页）',
+        mimeType: 'application/pdf',
+        ...(initialLocation ? { initialLocation } : {}),
+      },
+    };
+  }
   return {
     type: 'reader:open' as const,
     payload: {
