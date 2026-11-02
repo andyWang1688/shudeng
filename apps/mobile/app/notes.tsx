@@ -47,7 +47,7 @@ export default function NotesRoute() {
               {annotation.quote ? <Text style={styles.quote} numberOfLines={4}>“{annotation.quote}”</Text> : null}
               {annotation.body ? <Text style={styles.body}>{annotation.body}</Text> : null}
               <View style={styles.metaRow}>
-                <Text style={styles.meta}>{annotation.chapter ?? book.title}{annotation.page ? ` · 第 ${annotation.page} 页` : ''}</Text>
+                <Text style={styles.meta}>{annotation.chapter && !annotation.chapter.includes('页') ? annotation.chapter : book.title}{annotation.page ? ` · 第 ${annotation.page} 页` : ''}</Text>
                 <Pressable accessibilityRole="button" onPress={() => {
                   const locator = annotation.locator ? JSON.stringify(annotation.locator) : undefined;
                   router.push({ pathname: '/reader/[id]', params: locator ? { id: book.id, locator } : { id: book.id } });
