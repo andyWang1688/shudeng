@@ -26,7 +26,8 @@
     "plugins": [
       "expo-router",
       "expo-sqlite",
-      "onnxruntime-react-native"
+      "onnxruntime-react-native",
+      "expo-secure-store"
     ]
   }
 }

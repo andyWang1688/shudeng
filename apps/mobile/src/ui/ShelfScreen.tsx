@@ -55,11 +55,11 @@ export function ShelfScreen() {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Text style={styles.title}>书架</Text>
-          <View style={styles.profileChip}>
+          <Pressable accessibilityRole="button" accessibilityLabel="我的" onPress={() => router.push('/profile')} style={styles.profileChip}>
             <Text style={styles.profileText}>我的</Text>
-          </View>
+          </Pressable>
         </View>
-        <Text style={styles.subtitle}>Expo 双端壳 · 只验证导航 / WebView / SQLite 基础，不复制 Swift UI</Text>
+        <Text style={styles.subtitle}>读原文，问书灯；引用可回原文核对。</Text>
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>我的书籍</Text>
@@ -86,45 +86,6 @@ export function ShelfScreen() {
           </Pressable>
         ))}
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="打开问答面板"
-          onPress={() => router.push('/ask')}
-          style={({ pressed }) => [styles.askCard, pressed && styles.pressed]}
-        >
-          <Text style={styles.askTitle}>问问书灯</Text>
-          <Text style={styles.askDetail}>问答面板占位：Agent 由 @shudeng/core 提供，本任务不实现第二套 Agent。</Text>
-        </Pressable>
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="打开 AI 设置"
-          onPress={() => router.push('/ai-settings')}
-          style={({ pressed }) => [styles.askCard, pressed && styles.pressed]}
-        >
-          <Text style={styles.askTitle}>AI 设置（开发）</Text>
-          <Text style={styles.askDetail}>填写官方 provider key，运行真实模型测试；仅开发用途。</Text>
-        </Pressable>
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="打开 Agent 演示"
-          onPress={() => router.push('/agent-demo')}
-          style={({ pressed }) => [styles.agentCard, pressed && styles.pressed]}
-        >
-          <Text style={styles.askTitle}>Agent 演示（Hermes）</Text>
-          <Text style={styles.askDetail}>在设备内运行 @shudeng/core 的 LangChain Agent：脚本模型 + 内存书源，显示 reasoning / text / tool / citation 事件。</Text>
-        </Pressable>
-
-        <View style={styles.dbCard}>
-          <Text style={styles.dbTitle}>平台能力自检</Text>
-          <Text style={styles.dbDetail}>SQLite：{database === null ? '正在初始化…' : database.detail}</Text>
-          <Text style={styles.dbDetail}>WebView / 导航：打开任一书籍进入阅读器壳验证</Text>
-          <Text style={styles.dbDetail}>
-            Embedding：{embedding === null ? '检查模型中…' : embedding.available ? `模型可用（${embedding.modelId}）` : `未启用 · ${embedding.reason}`}
-          </Text>
-          <Text style={styles.dbHint}>真机/模拟器未在此任务验证时，报告中标记为未验证。</Text>
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
