@@ -6,8 +6,9 @@
  *  - apps/mobile/src/reader/readerWebHtml.ts（生成文件，TypeScript 字符串）
  *  - apps/mobile/src/reader/readerFixtures.ts（生成文件，EPUB/PDF fixture base64）
  *
- * 为什么要自包含：WKWebView 从 file:// 加载 ES module / pdf.js worker 受限制；
- * 把 JS/CSS/worker 全部内联后，WebView 只加载一个 html 字符串，不依赖本地静态服务器。
+ * 为什么要自包含：WKWebView 的 source={{html}} 没有可解析的 base URL，相对 worker URL 会失败；
+ * pdf.worker 模块已 import 进主 bundle（主线程 fake worker），不再需要独立 worker 文件/URL。
+ * JS/CSS 全部内联后，WebView 只加载一个 html 字符串，不依赖本地静态服务器。
  */
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs'
@@ -30,32 +31,19 @@ const indexHtml = readFileSync(resolve(DIST, 'index.html'), 'utf8')
 const assets = readdirSync(resolve(DIST, 'assets'))
 const jsName = assets.find((name) => /^index-.*\.js$/.test(name))
 const cssName = assets.find((name) => /^index-.*\.css$/.test(name))
-const workerName = assets.find((name) => /^pdf\.worker-.*\.mjs$/.test(name))
-if (!jsName || !cssName || !workerName) throw new Error('inline build assets missing')
+if (!jsName || !cssName) throw new Error('inline build assets missing')
 const js = readFileSync(resolve(DIST, 'assets', jsName), 'utf8')
 const css = readFileSync(resolve(DIST, 'assets', cssName), 'utf8')
-const worker = readFileSync(resolve(DIST, 'assets', workerName), 'utf8')
-const workerBase64 = Buffer.from(worker, 'utf8').toString('base64')
 const escapeScript = (code) => code.replace(/<\/script/gi, '<\\/script')
-
-const workerBootstrap = `<script>
-  (function () {
-    var b = atob(${JSON.stringify(workerBase64)});
-    var bytes = new Uint8Array(b.length);
-    for (var i = 0; i < b.length; i++) bytes[i] = b.charCodeAt(i);
-    window.__SHUDENG_PDF_WORKER_SRC = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
-  })();
-</script>`
 
 let html = indexHtml
   .replace(/<link rel="icon"[^>]*>/i, '')
   .replace(/<link rel="stylesheet"[^>]*>/i, `<style>${css}</style>`)
   .replace(
     /<script type="module"[^>]*><\/script>/i,
-    () => `${workerBootstrap}\n<script type="module">${escapeScript(js)}</script>`,
+    () => `<script type="module">${escapeScript(js)}</script>`,
   )
 
-if (!html.includes('__SHUDENG_PDF_WORKER_SRC')) throw new Error('worker bootstrap not injected')
 if (!html.includes('__readerHost')) throw new Error('reader js not inlined')
 
 writeFileSync(resolve(DIST, 'index.html'), html)
@@ -88,5 +76,5 @@ writeFileSync(
 
 console.log(
   `inline reader-web: ${(html.length / 1024 / 1024).toFixed(2)}MB html ` +
-  `(js ${(js.length / 1024).toFixed(0)}KB, worker ${(worker.length / 1024 / 1024).toFixed(2)}MB)`,
+  `(js ${(js.length / 1024 / 1024).toFixed(2)}MB, worker inlined)`,
 )

@@ -1,6 +1,9 @@
-import { getDocument, GlobalWorkerOptions, Util } from 'pdfjs-dist'
+import { getDocument, Util } from 'pdfjs-dist'
+// 把 worker 模块内联进主 bundle：模块顶层会设置 globalThis.pdfjsWorker，
+// pdf.js 检测到后使用 fake worker（LoopbackPort），不再解析 Worker URL。
+// 这样 WKWebView 的 source={{html}} 没有 base URL 也不会失败；代价是 PDF 解析在主线程。
+import 'pdfjs-dist/build/pdf.worker.mjs'
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
-import workerSrc from 'pdfjs-dist/build/pdf.worker.mjs?url'
 import { bridge } from './bridge'
 import type {
   AnnotationPayload,
@@ -12,9 +15,6 @@ import type {
   ReaderTheme,
   SelectionPayload,
 } from './protocol'
-
-const injectedWorkerSrc = (globalThis as { __SHUDENG_PDF_WORKER_SRC?: string }).__SHUDENG_PDF_WORKER_SRC
-GlobalWorkerOptions.workerSrc = injectedWorkerSrc ?? workerSrc
 
 const isSameRect = (a: PdfRect, b: PdfRect) =>
   Math.abs(a.x - b.x) < 1e-4 && Math.abs(a.y - b.y) < 1e-4

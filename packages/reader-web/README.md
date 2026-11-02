@@ -55,15 +55,16 @@ WebView → 原生（优先 `window.ReactNativeWebView.postMessage(JSON.stringif
 
 ## RN WebView 接入（task-89 已接）
 
-**已采用的方案：自包含 HTML。** `pnpm --filter @shudeng/reader-web build:inline` 把 JS/CSS/pdf.js worker 全部内联成
-`packages/reader-web/dist-inline/index.html`（约 3.5MB），并生成：
+**已采用的方案：自包含 HTML（worker 也内联）。** `pnpm --filter @shudeng/reader-web build:inline` 把 JS/CSS 与
+pdf.js worker 模块全部打进主 bundle，生成 `packages/reader-web/dist-inline/index.html`（约 1.8MB），并生成：
 
 - `apps/mobile/src/reader/readerWebHtml.ts`（HTML 字符串）
 - `apps/mobile/src/reader/readerFixtures.ts`（EPUB/PDF fixture base64）
 
 `apps/mobile/src/reader/ReaderWebView.tsx`（iOS/Android WebView）与 `ReaderWebView.web.tsx`（Expo Web iframe）
-都加载同一个 HTML；PDF worker 以 base64 → Blob URL 注入 `window.__SHUDENG_PDF_WORKER_SRC`，规避 WKWebView
-从 `file://` 加载 module/worker 的限制。
+都加载同一个 HTML。`pdf-reader.ts` 直接 `import 'pdfjs-dist/build/pdf.worker.mjs'`，worker 模块顶层会设置
+`globalThis.pdfjsWorker`，pdf.js 走 fake worker（主线程 LoopbackPort），**完全不解析 Worker URL**，因此
+WKWebView `source={{html}}` 无 base URL 也不会报 `"...mjs" cannot be parsed as a URL`。代价是 PDF 解析在主线程。
 
 ### 原生消息时序
 
@@ -123,7 +124,7 @@ const html = `<!doctype html><html><head>
 1. **PDF 是逐页单页渲染**，未实现连续滚动/infinite scroll；大文件内存优先（只保留当前页 canvas/text layer）。PDF `reader:flow=scrolled` 仍是单页语义（spike 未做纵向连续）。
 2. PDF 文本层是 spike 自绘 span（未用 pdf.js TextLayer），英文/旋转/多栏排版下选区矩形可能与视觉有偏差；PDF 文本坐标提取按 `getTextContent` transform 归一化，复杂字体/空格精度未逐字验证。
 3. EPUB 的 CFI 由 foliate-js 生成，已能存取；跨章节/跨页标注的 CFI 兼容性未做旧数据迁移测试。
-4. PDF worker 用 Vite `?url` 打包（dist 约 2.2MB worker）；WKWebView `file://` 下 worker/ESM 需要本地 http 或打包成 inline/blob，未在 iOS WebView 实测。
+4. PDF worker 走主线程 fake worker（为兼容 WKWebView 自包含 HTML），大文件解析会占用主线程；后续若要真 worker，需要本地 http/自定义 scheme 或 Worker Blob 方案。
 5. 深色 PDF 使用 canvas CSS `invert+hue-rotate`，扫描页/彩色图会偏色；不是重新渲染。
 6. 12MB 扫描样本仅 2 页，不能代表 500 页书籍；JS heap 不含 PDF.js 的 ArrayBuffer/WASM 外部内存，需真机 Instruments 复测。
 7. 未接 RN `apps/mobile`（按 Lead 要求），未验证 Android WebView/iOS WKWebView 手势、文件选择、离线缓存。
