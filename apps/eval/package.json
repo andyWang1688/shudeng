@@ -8,7 +8,8 @@
     "eval": "tsx src/index.ts",
     "eval:rag": "tsx src/rag-eval.ts",
     "eval:rag:real": "tsx src/rag-eval-real.ts",
-    "eval:embedding:baseline": "tsx src/embedding-baseline.ts"
+    "eval:embedding:baseline": "tsx src/embedding-baseline.ts",
+    "eval:migration": "tsx src/migration-eval.ts"
   },
   "dependencies": {
     "@shudeng/core": "workspace:*"

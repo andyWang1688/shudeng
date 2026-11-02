@@ -25,3 +25,5 @@ export interface AgentQuestion {
   selection?: string;
   history?: ReadonlyArray<{ question: string; answer: string }>;
 }
+
+export * from './anchor.js';
