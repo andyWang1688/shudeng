@@ -138,7 +138,7 @@ function chunkChapter(chapter: RagChapter, maxChars: number, signal?: Cancellati
 
 export class ParagraphTextChunker implements TextChunker {
   chunk(book: RagBook, options: ChunkerOptions = {}, context: { signal?: CancellationSignal } = {}): TextChunk[] {
-    const maxChars = Math.max(80, Math.floor(options.maxChars ?? 480));
+    const maxChars = Math.max(80, Math.floor(options.maxChars ?? 120));
     const chunks: TextChunk[] = [];
     for (const chapter of book.chapters) {
       assertNotAborted(context.signal);

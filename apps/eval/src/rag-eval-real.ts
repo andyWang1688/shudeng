@@ -181,7 +181,7 @@ async function main(): Promise<void> {
       chunker: new ParagraphTextChunker(),
       embedding: provider,
       book,
-      chunkOptions: { maxChars: 220 },
+      chunkOptions: { maxChars: 120 },
     });
     const chunkMs = nowMs() - chunkStart;
     const embedMetrics = provider.metricsSnapshot();

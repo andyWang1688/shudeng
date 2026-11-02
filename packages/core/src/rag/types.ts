@@ -65,7 +65,7 @@ export interface TextChunk {
 }
 
 export interface ChunkerOptions {
-  /** 单块最大字符数（默认 480）。 */
+  /** 单块最大字符数（默认 120，给 128 token 窗口留出 specials 余量）。 */
   maxChars?: number;
 }
 

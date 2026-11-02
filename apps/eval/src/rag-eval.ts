@@ -138,7 +138,7 @@ async function main(): Promise<void> {
       chunker,
       embedding,
       book: ragBook,
-      chunkOptions: { maxChars: 220 },
+      chunkOptions: { maxChars: 120 },
     });
     const stats = await index.stats(ragBook.book.id);
     console.log(`索引：${stats.chunkCount} chunks / ${stats.vectorCount} vectors / 维度 ${embedding.dimension}\n`);
