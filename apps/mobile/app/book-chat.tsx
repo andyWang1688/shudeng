@@ -55,6 +55,29 @@ function nextTurnId(): string {
   return `turn-${Date.now()}-${turnSequence}`;
 }
 
+/** 旧索引 locator 是 Readium JSON；转成 reader 可用 locator，无法定位时就只打开书。 */
+function locatorForCitation(citation: VerifiedCitation): string | undefined {
+  if (citation.page) return JSON.stringify({ type: 'pdf', page: citation.page });
+  try {
+    const parsed: unknown = JSON.parse(citation.locator);
+    if (typeof parsed !== 'object' || parsed === null) return undefined;
+    const record = parsed as Record<string, unknown>;
+    const locations = typeof record.locations === 'object' && record.locations !== null
+      ? (record.locations as Record<string, unknown>)
+      : undefined;
+    const cfi = typeof locations?.cfi === 'string' ? locations.cfi : undefined;
+    if (!cfi) return undefined;
+    return JSON.stringify({
+      type: 'epub',
+      cfi,
+      ...(typeof record.href === 'string' ? { href: record.href } : {}),
+      ...(typeof record.title === 'string' ? { chapter: record.title } : {}),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 function toolLabel(name: string): string {
   if (name === 'search_book') return '检索书内原文';
   if (name === 'read_page') return '读取页/章';
@@ -359,7 +382,10 @@ export default function BookChatRoute() {
                           key={citation.id}
                           accessibilityRole="button"
                           accessibilityLabel={`查看引用 ${citation.id}`}
-                          onPress={() => router.push({ pathname: '/reader/[id]', params: { id: bookId, locator: citation.locator } })}
+                          onPress={() => {
+                            const locator = locatorForCitation(citation);
+                            router.push({ pathname: '/reader/[id]', params: locator ? { id: bookId, locator } : { id: bookId } });
+                          }}
                           style={styles.citationCard}
                         >
                           <Text style={styles.citationMeta} numberOfLines={1}>
