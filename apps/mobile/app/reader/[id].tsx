@@ -1,66 +1,362 @@
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { BookRow } from '@shudeng/core/db';
 import { ReaderShell } from '../../src/ui/ReaderShell';
 import { ImportedPdfReader } from '../../src/reader/ImportedPdfReader';
 import { getDataLayer } from '../../src/platform/db';
 import { findBookFile, readBookBase64 } from '../../src/platform/bookFiles';
-import { colors } from '../../src/ui/theme';
+import {
+  deleteReaderAnnotation,
+  loadBookAnnotations,
+  loadBookProgress,
+  saveBookProgress,
+  saveReaderAnnotation,
+  type BookProgress,
+  type ShelfAnnotation,
+  type StoredReaderLocator,
+} from '../../src/platform/library';
+import { colors, radius, spacing } from '../../src/ui/theme';
+
+const KIND_LABEL: Record<ShelfAnnotation['kind'], string> = {
+  highlight: '高亮',
+  note: '笔记',
+  bookmark: '书签',
+};
+
+function parseReaderLocator(raw: string | string[] | undefined): StoredReaderLocator | null {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed === 'object' && parsed !== null) {
+      const record = parsed as Record<string, unknown>;
+      if (record.type === 'pdf' && typeof record.page === 'number') {
+        const rects = Array.isArray(record.rects)
+          ? record.rects.filter((rect): rect is Record<string, unknown> => typeof rect === 'object' && rect !== null).map((rect) => ({
+              x: Number(rect.x) || 0,
+              y: Number(rect.y) || 0,
+              width: Number(rect.width) || 0,
+              height: Number(rect.height) || 0,
+            }))
+          : undefined;
+        return { type: 'pdf', page: record.page, ...(rects ? { rects } : {}) };
+      }
+      if (record.type === 'epub' && typeof record.cfi === 'string') {
+        return {
+          type: 'epub',
+          cfi: record.cfi,
+          ...(typeof record.href === 'string' ? { href: record.href } : {}),
+          ...(typeof record.chapter === 'string' ? { chapter: record.chapter } : {}),
+        };
+      }
+    }
+  } catch {
+    // 旧调用方可能直接传 CFI 字符串。
+  }
+  return { type: 'epub', cfi: value };
+}
 
 export default function ReaderRoute() {
   const params = useLocalSearchParams<{ id?: string | string[]; locator?: string | string[] }>();
-  const raw = params.id;
-  const bookId = Array.isArray(raw) ? (raw[0] ?? 'epub-demo') : (raw ?? 'epub-demo');
-  const rawLocator = params.locator;
-  const initialLocation = Array.isArray(rawLocator) ? rawLocator[0] : rawLocator;
+  const router = useRouter();
+  const rawId = params.id;
+  const bookId = Array.isArray(rawId) ? (rawId[0] ?? '') : (rawId ?? '');
   const [book, setBook] = useState<BookRow | null>(null);
   const [epubBase64, setEpubBase64] = useState<string | null>(null);
   const [fileUri, setFileUri] = useState<string | null>(null);
+  const [progress, setProgress] = useState<BookProgress | null>(null);
+  const [annotations, setAnnotations] = useState<readonly ShelfAnnotation[]>([]);
+  const [jump, setJump] = useState<StoredReaderLocator | null>(() => parseReaderLocator(params.locator));
+  const [jumpVersion, setJumpVersion] = useState(0);
   const [checked, setChecked] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [pdfPanelOpen, setPdfPanelOpen] = useState(false);
+  const [pdfPage, setPdfPage] = useState(1);
+  const [pdfTotal, setPdfTotal] = useState(0);
+  const [pdfNotice, setPdfNotice] = useState<string | null>(null);
+  const pdfLatestPage = useRef(1);
+  const pdfTotalRef = useRef(0);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refreshAnnotations = useCallback(async () => {
+    try {
+      setAnnotations(await loadBookAnnotations(bookId));
+    } catch {
+      // 标注读取失败不阻塞打开书。
+    }
+  }, [bookId]);
 
   useEffect(() => {
     let mounted = true;
     void (async () => {
       try {
+        if (!bookId) {
+          setFailure('缺少书籍标识');
+          return;
+        }
         const layer = await getDataLayer();
         const row = await layer.store.getBook(bookId);
         if (!mounted) return;
-        setBook(row);
-        if (row) {
-          const file = findBookFile(row);
-          if (file) {
-            setFileUri(file.uri);
-            if (row.format === 'epub') setEpubBase64(await readBookBase64(row));
-          }
+        if (!row) {
+          setFailure('这本书不在书架上，可能已被删除');
+          return;
         }
+        setBook(row);
+        const file = findBookFile(row);
+        if (!file) {
+          setFailure('书籍文件缺失，请重新导入');
+          return;
+        }
+        setFileUri(file.uri);
+        if (row.format === 'epub') setEpubBase64(await readBookBase64(row));
+        const [savedProgress, loadedAnnotations] = await Promise.all([
+          loadBookProgress(bookId),
+          loadBookAnnotations(bookId),
+        ]);
+        if (!mounted) return;
+        setProgress(savedProgress);
+        setAnnotations(loadedAnnotations);
+      } catch (cause) {
+        if (mounted) setFailure(cause instanceof Error ? cause.message : String(cause));
       } finally {
         if (mounted) setChecked(true);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [bookId]);
 
+  useEffect(() => {
+    return () => {
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    };
+  }, []);
+
+  const showPdfNotice = (message: string) => {
+    setPdfNotice(message);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setPdfNotice(null), 2200);
+  };
+
+  const jumpToLocator = (locator: StoredReaderLocator) => {
+    setJump(locator);
+    setJumpVersion((value) => value + 1);
+    if (book?.format === 'pdf' && locator.type === 'pdf') {
+      pdfLatestPage.current = locator.page;
+      setPdfPage(locator.page);
+    }
+  };
+
+  const savePdfPage = (page: number, total: number) => {
+    pdfLatestPage.current = page;
+    pdfTotalRef.current = total;
+    setPdfPage(page);
+    setPdfTotal(total);
+    const percent = total > 0 ? Math.min(1, Math.max(0, page / total)) : 0;
+    void saveBookProgress(bookId, { locator: { type: 'pdf', page }, percent });
+  };
+
+  const bookmarkPdf = async () => {
+    const page = pdfLatestPage.current;
+    if (!page) return;
+    try {
+      await saveReaderAnnotation(bookId, {
+        kind: 'bookmark',
+        quote: pdfTotalRef.current > 0 ? `第 ${page} / ${pdfTotalRef.current} 页` : `第 ${page} 页`,
+        format: 'PDF',
+        locator: { type: 'pdf', page },
+        page,
+      });
+      await refreshAnnotations();
+      showPdfNotice('已加入书签');
+    } catch (cause) {
+      Alert.alert('书签保存失败', cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const askPdfBook = (selectionQuote?: string) => {
+    router.push({
+      pathname: '/book-chat',
+      params: {
+        bookId,
+        ...(book ? { bookTitle: book.title } : {}),
+        ...(selectionQuote ? { selectionQuote } : {}),
+        locator: JSON.stringify({ type: 'pdf', page: pdfLatestPage.current }),
+      },
+    });
+  };
+
+  const removePdfAnnotation = async (annotation: ShelfAnnotation) => {
+    try {
+      await deleteReaderAnnotation(annotation.id);
+      await refreshAnnotations();
+      showPdfNotice('已删除标注');
+    } catch (cause) {
+      Alert.alert('删除失败', cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
   if (!checked) {
-    return <View style={styles.center}><ActivityIndicator color={colors.lamp} /><Text style={styles.hint}>打开书籍…</Text></View>;
-  }
-  if (book && fileUri && book.format === 'pdf') {
-    return <ImportedPdfReader bookId={bookId} title={book.title} fileUri={fileUri} />;
-  }
-  if (book && fileUri && book.format === 'epub' && epubBase64) {
     return (
-      <ReaderShell
-        bookId={bookId}
-        initialLocation={initialLocation}
-        title={book.title}
-        openOverride={{ format: 'epub', title: book.title, dataBase64: epubBase64, mimeType: 'application/epub+zip' }}
-      />
+      <View style={styles.center}>
+        <ActivityIndicator color={colors.lamp} />
+        <Text style={styles.hint}>打开书籍…</Text>
+      </View>
     );
   }
-  return <ReaderShell bookId={bookId} initialLocation={initialLocation} openOverride={undefined} />;
+
+  if (failure || !book || !fileUri) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <View style={styles.errorToolbar}>
+          <Pressable accessibilityRole="button" onPress={() => router.back()}><Text style={styles.back}>‹ 书架</Text></Pressable>
+          <Text style={styles.errorTitle}>无法打开书籍</Text>
+        </View>
+        <View style={styles.center}>
+          <Text style={styles.errorDetail}>{failure ?? '书籍文件不可用'}</Text>
+          <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.errorButton}>
+            <Text style={styles.errorButtonText}>返回书架</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (book.format === 'pdf') {
+    const initialPage = jump?.type === 'pdf' ? jump.page : progress?.locator.type === 'pdf' ? progress.locator.page : undefined;
+    const pdfAnnotations = annotations.filter((annotation) => annotation.kind === 'bookmark' || annotation.kind === 'note');
+    return (
+      <View style={styles.pdfContainer}>
+        <ImportedPdfReader
+          key={`${bookId}-pdf-${jumpVersion}-${initialPage ?? 1}`}
+          bookId={bookId}
+          title={book.title}
+          fileUri={fileUri}
+          {...(initialPage ? { initialPage } : {})}
+          onLoadComplete={(total) => {
+            pdfTotalRef.current = total;
+            setPdfTotal(total);
+          }}
+          onPageChanged={(page, total) => savePdfPage(page, total)}
+        />
+        {pdfNotice ? <Text style={styles.pdfToast}>{pdfNotice}</Text> : null}
+        <View style={styles.pdfActions}>
+          <Pressable accessibilityRole="button" accessibilityLabel="PDF 书签" onPress={() => void bookmarkPdf()} style={styles.pdfActionButton}>
+            <Text style={styles.pdfActionText}>书签</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="PDF 标注" onPress={() => setPdfPanelOpen(true)} style={styles.pdfActionButton}>
+            <Text style={styles.pdfActionText}>标注{pdfAnnotations.length > 0 ? ` ${pdfAnnotations.length}` : ''}</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="问书灯" onPress={() => askPdfBook()} style={[styles.pdfActionButton, styles.pdfAskButton]}>
+            <Text style={styles.pdfAskText}>问书灯</Text>
+          </Pressable>
+        </View>
+        <Modal visible={pdfPanelOpen} transparent animationType="slide" onRequestClose={() => setPdfPanelOpen(false)}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.panel}>
+              <View style={styles.panelHeader}>
+                <Text style={styles.panelTitle}>PDF 标注</Text>
+                <Pressable accessibilityRole="button" onPress={() => setPdfPanelOpen(false)}><Text style={styles.panelClose}>完成</Text></Pressable>
+              </View>
+              <ScrollView style={styles.panelScroll} contentContainerStyle={styles.panelContent}>
+                {pdfAnnotations.length === 0 ? (
+                  <Text style={styles.panelEmpty}>还没有书签。点「书签」记录当前页；PDF 选字高亮暂不支持。</Text>
+                ) : (
+                  pdfAnnotations.slice().reverse().map((annotation) => (
+                    <View key={annotation.id} style={styles.annotationRow}>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => {
+                          if (annotation.locator?.type === 'pdf') {
+                            setPdfPanelOpen(false);
+                            jumpToLocator(annotation.locator);
+                          }
+                        }}
+                        style={styles.annotationMain}
+                      >
+                        <Text style={styles.annotationKind}>{KIND_LABEL[annotation.kind]}{annotation.page !== null ? ` · 第 ${annotation.page} 页` : ''}</Text>
+                        <Text style={styles.annotationQuote} numberOfLines={2}>{annotation.quote || annotation.body || '（位置）'}</Text>
+                        {annotation.body ? <Text style={styles.annotationBody}>{annotation.body}</Text> : null}
+                      </Pressable>
+                      <Pressable accessibilityRole="button" onPress={() => void removePdfAnnotation(annotation)} style={styles.annotationDelete}>
+                        <Text style={styles.annotationDeleteText}>删除</Text>
+                      </Pressable>
+                    </View>
+                  ))
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+      </View>
+    );
+  }
+
+  const savedLocation = progress?.locator.type === 'epub' ? progress.locator.cfi : undefineProgressLocation(progress);
+  const jumpLocation = jump?.type === 'epub' ? jump.cfi : null;
+  const initialLocation = jumpLocation ?? savedLocation ?? undefined;
+
+  return (
+    <ReaderShell
+      key={`${bookId}-epub-${jumpVersion}`}
+      bookId={bookId}
+      initialLocation={initialLocation}
+      title={book.title}
+      openOverride={{ format: 'epub', title: book.title, dataBase64: epubBase64 ?? '', mimeType: 'application/epub+zip' }}
+      initialAnnotations={annotations}
+      onJumpToLocator={jumpToLocator}
+      onAnnotationsChanged={setAnnotations}
+    />
+  );
+}
+
+function undefineProgressLocation(progress: BookProgress | null): string | null {
+  if (progress?.locator.type !== 'epub') return null;
+  return progress.locator.cfi.length > 0 ? progress.locator.cfi : null;
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.paper },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: colors.paper, padding: spacing.lg },
   hint: { fontSize: 13, color: colors.ink3 },
+  safeArea: { flex: 1, backgroundColor: colors.paper },
+  errorToolbar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
+  back: { fontSize: 15, color: colors.lamp },
+  errorTitle: { fontSize: 16, fontWeight: '600', color: colors.ink },
+  errorDetail: { fontSize: 13, lineHeight: 20, color: colors.ink2, textAlign: 'center' },
+  errorButton: { marginTop: spacing.sm, borderRadius: radius.field, backgroundColor: colors.paperDeep, paddingHorizontal: spacing.lg, paddingVertical: 10 },
+  errorButtonText: { fontSize: 13, fontWeight: '600', color: colors.ink },
+  pdfContainer: { flex: 1, backgroundColor: colors.paper },
+  pdfActions: { position: 'absolute', right: spacing.sm, bottom: 28, flexDirection: 'row', gap: 6 },
+  pdfActionButton: { borderRadius: 18, backgroundColor: 'rgba(255,253,248,0.94)', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, paddingHorizontal: 12, paddingVertical: 8 },
+  pdfActionText: { fontSize: 12, fontWeight: '600', color: colors.ink },
+  pdfAskButton: { backgroundColor: colors.lamp },
+  pdfAskText: { fontSize: 12, fontWeight: '600', color: colors.ink },
+  pdfToast: { position: 'absolute', alignSelf: 'center', top: 86, borderRadius: 12, backgroundColor: 'rgba(36,33,28,0.82)', color: '#FFFDF8', fontSize: 12, paddingHorizontal: 12, paddingVertical: 6, overflow: 'hidden', zIndex: 20 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.28)', justifyContent: 'flex-end' },
+  panel: { maxHeight: '72%', backgroundColor: colors.paper, borderTopLeftRadius: radius.card, borderTopRightRadius: radius.card },
+  panelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
+  panelTitle: { fontSize: 16, fontWeight: '600', color: colors.ink },
+  panelClose: { fontSize: 14, color: colors.lamp },
+  panelScroll: { flexGrow: 0 },
+  panelContent: { padding: spacing.md, gap: spacing.sm },
+  panelEmpty: { fontSize: 13, lineHeight: 20, color: colors.ink3, paddingVertical: spacing.lg },
+  annotationRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.field, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, padding: spacing.sm },
+  annotationMain: { flex: 1 },
+  annotationKind: { fontSize: 11, fontWeight: '600', color: colors.ink2 },
+  annotationQuote: { marginTop: 4, fontSize: 13, lineHeight: 19, color: colors.ink },
+  annotationBody: { marginTop: 3, fontSize: 12, lineHeight: 18, color: colors.ink2 },
+  annotationDelete: { paddingHorizontal: 8, paddingVertical: 6 },
+  annotationDeleteText: { fontSize: 12, color: '#A63A2B' },
 });

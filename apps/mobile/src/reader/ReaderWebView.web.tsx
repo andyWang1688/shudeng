@@ -9,6 +9,7 @@ import {
   openPayloadForBook,
   parseIncomingMessage,
   type IncomingMessage,
+  type ReaderAnnotationSeed,
   type ReaderEvent,
   type SelectionRect,
 } from './readerProtocol';
@@ -18,6 +19,9 @@ export type { ReaderEvent };
 
 type ReaderWebViewProps = {
   readonly bookId: string;
+  readonly initialAnnotations?: readonly ReaderAnnotationSeed[];
+  /** 是否显示 ReaderWebView 内置选字浮层；宿主自己渲染选字栏时传 false。默认 true。 */
+  readonly selectionBar?: boolean;
   readonly onEvent: (event: ReaderEvent) => void;
 };
 
@@ -31,12 +35,13 @@ type SelectionState = {
  * Expo Web 实现：用同源 iframe 承载同一个自包含 reader-web HTML。
  * react-native-webview 不支持 Web，iframe 能真实运行阅读器并验证协议/选字坐标。
  */
-export function ReaderWebView({ bookId, onEvent }: ReaderWebViewProps) {
+export function ReaderWebView({ bookId, initialAnnotations, selectionBar = true, onEvent }: ReaderWebViewProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const format = useMemo(() => (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub'), [bookId]);
   const fixture = readerFixtures[format];
   const openSent = useRef(false);
+  const annotationsHydrated = useRef(false);
 
   const send = useCallback((message: unknown) => {
     iframeRef.current?.contentWindow?.postMessage(message, '*');
@@ -61,6 +66,14 @@ export function ReaderWebView({ bookId, onEvent }: ReaderWebViewProps) {
   }, [bookId, fixture]);
 
   const handleMessage = useCallback((incoming: IncomingMessage) => {
+    if (incoming.type === 'reader:ready') {
+      if (!annotationsHydrated.current && initialAnnotations?.length) {
+        annotationsHydrated.current = true;
+        for (const annotation of initialAnnotations) {
+          send({ type: 'reader:annotation:add', payload: annotation });
+        }
+      }
+    }
     if (incoming.type === 'reader:selection') {
       setSelection({
         quote: incoming.payload.text,
@@ -70,7 +83,7 @@ export function ReaderWebView({ bookId, onEvent }: ReaderWebViewProps) {
     }
     const event = mapIncomingToReaderEvent(incoming);
     if (event) onEvent(event);
-  }, [onEvent]);
+  }, [initialAnnotations, onEvent, send]);
 
   useEffect(() => {
     const listener = (event: MessageEvent) => {
@@ -84,6 +97,7 @@ export function ReaderWebView({ bookId, onEvent }: ReaderWebViewProps) {
   useEffect(() => {
     setSelection(null);
     openSent.current = false;
+    annotationsHydrated.current = false;
   }, [bookId]);
 
   const highlightSelection = useCallback(() => {
@@ -117,7 +131,7 @@ export function ReaderWebView({ bookId, onEvent }: ReaderWebViewProps) {
         onLoad={injectOpen}
         style={iframeStyle}
       />
-      {selection ? (
+      {selection && selectionBar ? (
         <ReaderSelectionBar
           rects={selection.rects}
           onHighlight={highlightSelection}

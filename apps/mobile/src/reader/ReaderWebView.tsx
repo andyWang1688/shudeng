@@ -10,6 +10,7 @@ import {
   openPayloadForBook,
   parseIncomingMessage,
   type IncomingMessage,
+  type ReaderAnnotationSeed,
   type ReaderEvent,
   type SelectionRect,
 } from './readerProtocol';
@@ -28,6 +29,9 @@ type ReaderWebViewProps = {
     readonly dataBase64: string;
       readonly mimeType: string;
     };
+  readonly initialAnnotations?: readonly ReaderAnnotationSeed[];
+  /** 是否显示 ReaderWebView 内置选字浮层；宿主自己渲染选字栏时传 false。默认 true。 */
+  readonly selectionBar?: boolean;
   readonly onEvent: (event: ReaderEvent) => void;
 };
 
@@ -42,10 +46,11 @@ type SelectionState = {
  * 通过 reader:open/ready/selection/progress/annotation 协议与网页阅读器双向通信。
  * Expo Web 使用 ReaderWebView.web.tsx 的 iframe 实现；这里只在 iOS/Android 生效。
  */
-export function ReaderWebView({ bookId, initialLocation, openOverride, onEvent }: ReaderWebViewProps) {
+export function ReaderWebView({ bookId, initialLocation, openOverride, initialAnnotations, selectionBar = true, onEvent }: ReaderWebViewProps) {
   const webViewRef = useRef<ElementRef<typeof WebView>>(null);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const openSent = useRef(false);
+  const annotationsHydrated = useRef(false);
 
   const format = useMemo(() => (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub'), [bookId]);
   const fixture = readerFixtures[format];
@@ -76,6 +81,14 @@ export function ReaderWebView({ bookId, initialLocation, openOverride, onEvent }
   }, [bookId, fixture, initialLocation, openOverride]);
 
   const handleMessage = useCallback((incoming: IncomingMessage) => {
+    if (incoming.type === 'reader:ready') {
+      if (!annotationsHydrated.current && initialAnnotations?.length) {
+        annotationsHydrated.current = true;
+        for (const annotation of initialAnnotations) {
+          send({ type: 'reader:annotation:add', payload: annotation });
+        }
+      }
+    }
     if (incoming.type === 'reader:selection') {
       setSelection({
         quote: incoming.payload.text,
@@ -85,7 +98,7 @@ export function ReaderWebView({ bookId, initialLocation, openOverride, onEvent }
     }
     const event = mapIncomingToReaderEvent(incoming);
     if (event) onEvent(event);
-  }, [onEvent]);
+  }, [initialAnnotations, onEvent, send]);
 
   const highlightSelection = useCallback(() => {
     if (!selection) return;
@@ -112,6 +125,7 @@ export function ReaderWebView({ bookId, initialLocation, openOverride, onEvent }
   useEffect(() => {
     setSelection(null);
     openSent.current = false;
+    annotationsHydrated.current = false;
   }, [bookId]);
 
   return (
@@ -133,7 +147,7 @@ export function ReaderWebView({ bookId, initialLocation, openOverride, onEvent }
           onEvent({ type: 'error', message: event.nativeEvent.description });
         }}
       />
-      {selection ? (
+      {selection && selectionBar ? (
         <ReaderSelectionBar
           rects={selection.rects}
           onHighlight={highlightSelection}

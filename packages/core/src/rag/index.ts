@@ -32,3 +32,4 @@ export async function indexRagBook(
   await options.index.indexBook(options.book, chunks, embeddings, options.signal ? { signal: options.signal } : {});
   return { chunks, embeddings };
 }
+export * from './legacy-index.js';

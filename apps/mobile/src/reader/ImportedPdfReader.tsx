@@ -1,19 +1,24 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import Pdf from 'react-native-pdf';
+import Pdf, { type PdfRef } from 'react-native-pdf';
 import { colors, spacing } from '../ui/theme';
 
 type Props = {
   readonly bookId: string;
   readonly title: string;
   readonly fileUri: string;
+  readonly initialPage?: number;
+  readonly onLoadComplete?: (totalPages: number) => void;
+  readonly onPageChanged?: (page: number, total: number) => void;
 };
 
 /** 迁移后的真实 PDF：原生 PDFKit，不经过 WebView。 */
-export function ImportedPdfReader({ bookId, title, fileUri }: Props) {
+export function ImportedPdfReader({ bookId, title, fileUri, initialPage, onLoadComplete, onPageChanged }: Props) {
   const router = useRouter();
+  const pdfRef = useRef<PdfRef>(null);
+  const [totalPages, setTotalPages] = useState(0);
   const [pageInfo, setPageInfo] = useState('准备加载 PDF');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,10 +32,23 @@ export function ImportedPdfReader({ bookId, title, fileUri }: Props) {
       {loading ? <View style={styles.loading}><ActivityIndicator color={colors.lamp} /><Text style={styles.message}>{pageInfo}</Text></View> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <Pdf
+        ref={pdfRef}
         source={{ uri: fileUri, cache: true }}
         style={styles.pdf}
-        onLoadComplete={(pages) => { setLoading(false); setPageInfo(`共 ${pages} 页`); }}
-        onPageChanged={(page, total) => setPageInfo(`第 ${page} / ${total} 页`)}
+        onLoadComplete={(pages) => {
+          setLoading(false);
+          setTotalPages(pages);
+          setPageInfo(`共 ${pages} 页`);
+          onLoadComplete?.(pages);
+          if (initialPage && initialPage > 1 && initialPage <= pages) {
+            pdfRef.current?.setPage(initialPage);
+            setPageInfo(`第 ${initialPage} / ${pages} 页`);
+          }
+        }}
+        onPageChanged={(page, total) => {
+          setPageInfo(`第 ${page} / ${total} 页`);
+          onPageChanged?.(page, total);
+        }}
         onError={(err) => { setLoading(false); setError(String(err)); }}
         enablePaging={false}
         enableAntialiasing

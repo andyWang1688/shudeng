@@ -2,6 +2,17 @@
 
 export type ReaderFormat = 'epub' | 'pdf';
 
+/** UI 从 SQLite 恢复的标注种子；ready 后由 WebView 注入 reader:annotation:add。 */
+export type ReaderAnnotationSeed = {
+  readonly id: string;
+  readonly format: ReaderFormat;
+  readonly locator: ReaderLocator;
+  readonly text?: string;
+  readonly note?: string;
+  readonly color?: string;
+  readonly page?: number;
+};
+
 export type ReaderLocator =
   | { readonly type: 'epub'; readonly cfi: string; readonly href?: string; readonly chapter?: string }
   | { readonly type: 'pdf'; readonly page: number; readonly rects?: readonly PdfRect[]; readonly text?: string };
