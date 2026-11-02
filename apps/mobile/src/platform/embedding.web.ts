@@ -8,6 +8,7 @@ import {
   type EmbeddingStatus,
   type ExpoEmbeddingProvider,
 } from './embeddingShared';
+import type { ReferenceComparison } from './embeddingCompare';
 
 const WEB_REASON = 'Web 端未接入 onnxruntime-web（本 spike 只验证 iOS/Android onnxruntime-react-native 打包）';
 
@@ -42,6 +43,13 @@ export function getEmbeddingProvider(): ExpoEmbeddingProvider {
       });
     },
   };
+}
+
+export async function runEmbeddingReferenceCheck(
+  _referencePath?: string,
+  _options?: { readonly cosineThreshold?: number },
+): Promise<ReferenceComparison> {
+  throw new EmbeddingUnavailableError(WEB_REASON);
 }
 
 export { EmbeddingUnavailableError };

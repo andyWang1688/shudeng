@@ -5,5 +5,11 @@ export type DatabaseStatus = {
 };
 
 export { initializeDatabase } from './sqlite';
-export { embeddingStatus, getEmbeddingProvider, EmbeddingUnavailableError } from './embedding';
+export {
+  embeddingStatus,
+  getEmbeddingProvider,
+  EmbeddingUnavailableError,
+  runEmbeddingReferenceCheck,
+} from './embedding';
+export type { ReferenceComparison, ReferenceBundle, SentenceComparison } from './embeddingCompare';
 export type { EmbeddingStatus, EmbeddingDiagnostics, ExpoEmbeddingProvider } from './embeddingShared';

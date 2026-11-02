@@ -18,6 +18,8 @@ import {
   type EmbeddingStatus,
   type ExpoEmbeddingProvider,
 } from './embeddingShared';
+import { parseReferenceBundle, compareEmbeddings, type ActualEmbedding, type ReferenceComparison } from './embeddingCompare';
+import { l2Norm, meanPoolAndNormalize, truncateTokenIds } from './embeddingMath';
 
 const MODEL_FILE = 'model.onnx';
 const TOKENIZER_FILE = 'tokenizer.json';
@@ -125,12 +127,14 @@ async function loadSession(): Promise<{ session: InferenceSession; loadMs: numbe
 
 function encode(text: string, tokenizer: Tokenizer): { ids: number[]; tokenCount: number } {
   const encoding = tokenizer.encode(text, { add_special_tokens: true });
-  let ids = encoding.ids;
-  if (ids.length > EMBEDDING_MAX_TOKENS) {
-    // 与 Node/iOS 对齐：保留开头 specials/前 127 个 token，再接 eos。
-    const eos = ids[ids.length - 1];
-    ids = [...ids.slice(0, EMBEDDING_MAX_TOKENS - 1), eos ?? 2];
+  if (encoding.ids.length > EMBEDDING_MAX_TOKENS) {
+    // 防 tokenizer 行为变化时静默把内容 token 当 eos：截断前最后一位必须是 </s>。
+    const eosId = tokenizer.token_to_id('</s>');
+    if (eosId === undefined || encoding.ids[encoding.ids.length - 1] !== eosId) {
+      throw new Error(`截断前文本未以 eos 结尾（tokenizer 行为变化？最后 id=${String(encoding.ids[encoding.ids.length - 1])}）`);
+    }
   }
+  const ids = truncateTokenIds(encoding.ids);
   lastTokenCount = ids.length;
   return { ids, tokenCount: ids.length };
 }
@@ -175,7 +179,7 @@ export function createExpoEmbeddingProvider(): ExpoEmbeddingProvider {
         }
         const pooled = meanPoolAndNormalize(output.data, sequenceLength, hidden);
         lastEmbedMs = Date.now() - startedAt;
-        lastNorm = normOf(pooled);
+        lastNorm = l2Norm(pooled);
         results.push(pooled);
       }
       return results;
@@ -202,35 +206,40 @@ export function getEmbeddingProvider(): ExpoEmbeddingProvider {
   return provider;
 }
 
-function meanPoolAndNormalize(data: Float32Array, sequenceLength: number, dimension: number): Float32Array {
-  const pooled = new Float32Array(dimension);
-  for (let token = 0; token < sequenceLength; token += 1) {
-    const offset = token * dimension;
-    for (let index = 0; index < dimension; index += 1) {
-      pooled[index] = (pooled[index] ?? 0) + (data[offset + index] ?? 0);
-    }
+/**
+ * 与 Node 基线向量对照（需真机/模拟器 dev build；模型与参考 JSON 已放置到 App Documents）：
+ * - 逐句先比 tokenIds（Hermes tokenizer 冒烟），再算 cosine/maxAbsDiff/meanAbsDiff；
+ * - 参考文件默认 Paths.document/embedding-reference.json，可用 EXPO_PUBLIC_SHUDENG_EMBEDDING_REFERENCE 覆盖。
+ */
+export async function runEmbeddingReferenceCheck(
+  referencePath?: string,
+  options?: { readonly cosineThreshold?: number },
+): Promise<ReferenceComparison> {
+  const configured = process.env.EXPO_PUBLIC_SHUDENG_EMBEDDING_REFERENCE;
+  const file = referencePath
+    ? new File(referencePath)
+    : typeof configured === 'string' && configured.trim().length > 0
+      ? new File(configured.trim())
+      : new File(Paths.document, 'embedding-reference.json');
+  if (!file.exists) throw new EmbeddingUnavailableError(`参考向量不存在：${file.uri}`);
+  const bundle = parseReferenceBundle(JSON.parse(await file.text()) as unknown);
+  if (bundle.modelId !== EMBEDDING_MODEL_ID || bundle.dimension !== EMBEDDING_DIMENSION) {
+    throw new Error(`参考向量模型不匹配：${bundle.modelId} / ${bundle.dimension}`);
   }
-  for (let index = 0; index < dimension; index += 1) {
-    pooled[index] = (pooled[index] ?? 0) / Math.max(1, sequenceLength);
+  const [{ tokenizer }] = await Promise.all([loadTokenizer(), loadSession()]);
+  const eosId = tokenizer.token_to_id('</s>');
+  if (eosId !== 2) throw new Error(`tokenizer 的 </s> 不是 2（实际 ${String(eosId)}），截断基线需复核`);
+  const provider = getEmbeddingProvider();
+  const actuals: ActualEmbedding[] = [];
+  for (const sentence of bundle.sentences) {
+    const encoding = tokenizer.encode(sentence.text, { add_special_tokens: true });
+    const tokenIds = truncateTokenIds(encoding.ids);
+    const vectors = await provider.embed([sentence.text]);
+    const vector = vectors[0];
+    if (!vector) throw new Error(`embed 未返回向量：${sentence.id}`);
+    actuals.push({ id: sentence.id, tokenIds, vector });
   }
-  return normalizeInPlace(pooled);
-}
-
-function normalizeInPlace(vector: Float32Array): Float32Array {
-  const norm = normOf(vector);
-  if (norm > 0) {
-    for (let index = 0; index < vector.length; index += 1) vector[index] = (vector[index] ?? 0) / norm;
-  }
-  return vector;
-}
-
-function normOf(vector: Float32Array): number {
-  let sum = 0;
-  for (let index = 0; index < vector.length; index += 1) {
-    const value = vector[index] ?? 0;
-    sum += value * value;
-  }
-  return Math.sqrt(sum);
+  return compareEmbeddings(actuals, bundle, options ?? {});
 }
 
 export { EmbeddingUnavailableError } from './embeddingShared';

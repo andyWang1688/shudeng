@@ -21,12 +21,16 @@ const modelDir =
   process.env.SHUDENG_SEMANTIC_MODEL_DIR ?? join(repoRoot, 'ios/Shudeng/Resources/SemanticModel');
 const cacheDir = resolve(repoRoot, 'node_modules/.cache/shudeng-semantic-model');
 
+const MAX_TOKENS = 128;
+
 const outIndex = process.argv.indexOf('--out');
 const outPath = outIndex >= 0 ? process.argv[outIndex + 1] : undefined;
 
 const sentences = [
   { id: 'zh-lamp', text: '灯把书页照亮，也把问题留在纸上。' },
   { id: 'en-lamp', text: 'The lamp lights the page and leaves the question on the paper.' },
+  // >128 token：用于在设备上验证「前 127 + eos」截断分支（前两句都只有 17 token，不会触发）。
+  { id: 'zh-long-truncated', text: '灯把书页照亮，也把问题留在纸上。'.repeat(20) },
 ];
 
 function toBase64(vector: Float32Array): string {
@@ -46,15 +50,21 @@ async function main(): Promise<void> {
     const vectors = await provider.embed(sentences.map((sentence) => sentence.text));
     const entries = sentences.map((sentence, index) => {
       const encoding = provider.tokenize(sentence.text);
+      const raw = encoding.ids;
+      // tokenIds 输出「实际参与 embedding 的 ids」（与两端 truncateTokenIds 一致：前 127 + eos）。
+      const effective =
+        raw.length > MAX_TOKENS ? [...raw.slice(0, MAX_TOKENS - 1), raw[raw.length - 1]!] : raw;
       const vector = vectors[index]!;
       return {
         id: sentence.id,
         text: sentence.text,
-        tokenCount: encoding.ids.length,
-        tokenIds: encoding.ids,
+        rawTokenCount: raw.length,
+        truncated: raw.length > MAX_TOKENS,
+        tokenCount: effective.length,
+        tokenIds: effective,
         tokensPreview: encoding.tokens.slice(0, 8),
-        firstTokenId: encoding.ids[0],
-        lastTokenId: encoding.ids[encoding.ids.length - 1],
+        firstTokenId: effective[0],
+        lastTokenId: effective[effective.length - 1],
         norm: Number(norm(vector).toFixed(8)),
         vector: Array.from(vector),
         vectorBase64: toBase64(vector),
