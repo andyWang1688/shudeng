@@ -65,6 +65,7 @@ export default function LoopDemoRoute() {
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
+  const [citationLocator, setCitationLocator] = useState<string | null>(null);
   const autorunStarted = useRef(false);
 
   const append = useCallback((kind: string, text: string) => {
@@ -77,6 +78,7 @@ export default function LoopDemoRoute() {
     setRunning(true);
     setEntries([]);
     setSummary(null);
+    setCitationLocator(null);
     setDone(false);
     const model = createLoopModel();
     try {
@@ -97,9 +99,12 @@ export default function LoopDemoRoute() {
       const source = new SqliteBookSource(index, book);
       append('STEP', 'LangChain Agent：search_book → 引用核对 → 回答');
       const session = runBookAgent({ model, source, book, question: '灯在书里是什么意思？' });
+      let lastCitation: string | null = null;
       for await (const event of session.events) {
+        if (event.type === 'citation') lastCitation = event.citation.locator;
         handle(event, append);
       }
+      setCitationLocator(lastCitation);
       const result = await session.result;
       if (result) {
         append('PASS', `闭环完成：${result.citations.length} 条引用，${result.steps} 步`);
@@ -136,7 +141,20 @@ export default function LoopDemoRoute() {
         </Pressable>
       </View>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-        {summary ? <View style={styles.summary}><Text style={styles.summaryText}>{summary}</Text></View> : null}
+        {summary ? (
+          <>
+            <View style={styles.summary}><Text style={styles.summaryText}>{summary}</Text></View>
+            {citationLocator ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => router.push({ pathname: '/reader/[id]', params: { id: 'epub-hongloumeng', locator: 'epubcfi(/6/2!/4/2/2)' } })}
+                style={styles.openReader}
+              >
+                <Text style={styles.openReaderText}>回原文查看引用（示例 EPUB 定位）</Text>
+              </Pressable>
+            ) : null}
+          </>
+        ) : null}
         {entries.length === 0 ? <Text style={styles.empty}>旧库/迁移 → SQLite → 真实 ONNX 索引 → Agent → 引用核对。</Text> : null}
         {entries.map((entry) => (
           <View key={entry.id} style={[styles.entry, entry.kind === 'PASS' && styles.pass, entry.kind === 'FAIL' && styles.fail]}>
@@ -181,6 +199,10 @@ const styles = StyleSheet.create({
   entry: { borderRadius: radius.field, padding: spacing.sm, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line },
   pass: { backgroundColor: colors.lampWash },
   fail: { backgroundColor: '#f6e3df' },
+  summary: { backgroundColor: '#dcead8', borderRadius: radius.field, padding: spacing.sm },
+  summaryText: { fontSize: 12, lineHeight: 18, color: colors.ink },
+  openReader: { alignSelf: 'flex-start', backgroundColor: colors.lampWash, borderRadius: radius.field, paddingHorizontal: spacing.sm, paddingVertical: 8 },
+  openReaderText: { fontSize: 12, color: colors.ink, fontWeight: '600' },
   kind: { fontSize: 10, textTransform: 'uppercase', color: colors.ink3, marginBottom: 4 },
   text: { fontSize: 13, lineHeight: 20, color: colors.ink },
 });

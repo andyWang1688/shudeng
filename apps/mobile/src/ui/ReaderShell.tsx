@@ -7,9 +7,10 @@ import { colors, radius, spacing } from './theme';
 
 type ReaderShellProps = {
   readonly bookId: string;
+  readonly initialLocation: string | undefined;
 };
 
-export function ReaderShell({ bookId }: ReaderShellProps) {
+export function ReaderShell({ bookId, initialLocation }: ReaderShellProps) {
   const router = useRouter();
   const [progress, setProgress] = useState(0);
   const [lastEvent, setLastEvent] = useState('等待 WebView 消息');
@@ -40,7 +41,7 @@ export function ReaderShell({ bookId }: ReaderShellProps) {
         <Text style={styles.title} numberOfLines={1}>{bookTitle}</Text>
         <View style={styles.modeChip}><Text style={styles.modeText}>WebView 壳</Text></View>
       </View>
-      <ReaderWebView bookId={bookId} onEvent={onReaderEvent} />
+      <ReaderWebView bookId={bookId} initialLocation={initialLocation} onEvent={onReaderEvent} />
       <View style={styles.footer}>
         <Text style={styles.footerEvent} numberOfLines={1}>{lastEvent}</Text>
         <View style={styles.progressTrack}>

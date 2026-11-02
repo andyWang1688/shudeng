@@ -101,7 +101,11 @@ export function clampPercent(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-export function openPayloadForBook(bookId: string, fixture: { title: string; mimeType: string; base64: string }) {
+export function openPayloadForBook(
+  bookId: string,
+  fixture: { title: string; mimeType: string; base64: string },
+  initialLocation?: string,
+) {
   const format: ReaderFormat = bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub';
   return {
     type: 'reader:open' as const,
@@ -111,6 +115,7 @@ export function openPayloadForBook(bookId: string, fixture: { title: string; mim
       title: fixture.title,
       dataBase64: fixture.base64,
       mimeType: fixture.mimeType,
+      ...(initialLocation ? { initialLocation } : {}),
     },
   };
 }

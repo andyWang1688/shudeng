@@ -19,6 +19,7 @@ export type { ReaderEvent };
 
 type ReaderWebViewProps = {
   readonly bookId: string;
+  readonly initialLocation: string | undefined;
   readonly onEvent: (event: ReaderEvent) => void;
 };
 
@@ -33,7 +34,7 @@ type SelectionState = {
  * 通过 reader:open/ready/selection/progress/annotation 协议与网页阅读器双向通信。
  * Expo Web 使用 ReaderWebView.web.tsx 的 iframe 实现；这里只在 iOS/Android 生效。
  */
-export function ReaderWebView({ bookId, onEvent }: ReaderWebViewProps) {
+export function ReaderWebView({ bookId, initialLocation, onEvent }: ReaderWebViewProps) {
   const webViewRef = useRef<ElementRef<typeof WebView>>(null);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const openSent = useRef(false);
@@ -49,7 +50,7 @@ export function ReaderWebView({ bookId, onEvent }: ReaderWebViewProps) {
   const injectOpen = useCallback(() => {
     if (openSent.current) return;
     openSent.current = true;
-    const message = JSON.stringify(openPayloadForBook(bookId, fixture));
+    const message = JSON.stringify(openPayloadForBook(bookId, fixture, initialLocation));
     // HTML 的 module 脚本可能晚于 onLoadEnd 执行，注入前轮询等待 __readerHost 就绪。
     webViewRef.current?.injectJavaScript(`
       (function () {
@@ -62,7 +63,7 @@ export function ReaderWebView({ bookId, onEvent }: ReaderWebViewProps) {
         deliver();
       })(); true;
     `);
-  }, [bookId, fixture]);
+  }, [bookId, fixture, initialLocation]);
 
   const handleMessage = useCallback((incoming: IncomingMessage) => {
     if (incoming.type === 'reader:selection') {
