@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "书灯",
+    "name": "\u4e66\u706f",
     "slug": "shudeng-mobile",
     "scheme": "shudeng",
     "version": "0.0.1",
@@ -20,7 +20,8 @@
     },
     "plugins": [
       "expo-router",
-      "expo-sqlite"
+      "expo-sqlite",
+      "onnxruntime-react-native"
     ]
   }
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { initializeDatabase, type DatabaseStatus } from '../platform';
+import { embeddingStatus, initializeDatabase, type DatabaseStatus, type EmbeddingStatus } from '../platform';
 import { colors, radius, spacing } from './theme';
 
 type ShelfBook = {
@@ -20,11 +20,15 @@ const books: readonly ShelfBook[] = [
 export function ShelfScreen() {
   const router = useRouter();
   const [database, setDatabase] = useState<DatabaseStatus | null>(null);
+  const [embedding, setEmbedding] = useState<EmbeddingStatus | null>(null);
 
   useEffect(() => {
     let mounted = true;
     void initializeDatabase().then((status) => {
       if (mounted) setDatabase(status);
+    });
+    void embeddingStatus().then((status) => {
+      if (mounted) setEmbedding(status);
     });
     return () => {
       mounted = false;
@@ -90,6 +94,9 @@ export function ShelfScreen() {
           <Text style={styles.dbTitle}>平台能力自检</Text>
           <Text style={styles.dbDetail}>SQLite：{database === null ? '正在初始化…' : database.detail}</Text>
           <Text style={styles.dbDetail}>WebView / 导航：打开任一书籍进入阅读器壳验证</Text>
+          <Text style={styles.dbDetail}>
+            Embedding：{embedding === null ? '检查模型中…' : embedding.available ? `模型可用（${embedding.modelId}）` : `未启用 · ${embedding.reason}`}
+          </Text>
           <Text style={styles.dbHint}>真机/模拟器未在此任务验证时，报告中标记为未验证。</Text>
         </View>
       </ScrollView>

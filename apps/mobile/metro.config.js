@@ -38,7 +38,6 @@ const aliases = {
   'node:os': shim('os'),
   url: shim('url'),
   'node:url': shim('url'),
-  process: shim('process'),
   'node:process': shim('process'),
   diagnostics_channel: shim('diagnostics_channel'),
   'node:diagnostics_channel': shim('diagnostics_channel'),
