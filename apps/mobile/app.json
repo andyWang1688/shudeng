@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "\u4e66\u706f",
+    "name": "书灯",
     "slug": "shudeng-mobile",
     "scheme": "shudeng",
     "version": "0.0.1",
@@ -9,7 +9,12 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "dev.shudeng.mobile"
+      "bundleIdentifier": "dev.shudeng.mobile",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
     },
     "android": {
       "package": "dev.shudeng.mobile"
