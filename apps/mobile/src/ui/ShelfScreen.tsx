@@ -82,6 +82,16 @@ export function ShelfScreen() {
 
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel="打开 AI 设置"
+          onPress={() => router.push('/ai-settings')}
+          style={({ pressed }) => [styles.askCard, pressed && styles.pressed]}
+        >
+          <Text style={styles.askTitle}>AI 设置（开发）</Text>
+          <Text style={styles.askDetail}>填写官方 provider key，运行真实模型测试；仅开发用途。</Text>
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
           accessibilityLabel="打开 Agent 演示"
           onPress={() => router.push('/agent-demo')}
           style={({ pressed }) => [styles.agentCard, pressed && styles.pressed]}
