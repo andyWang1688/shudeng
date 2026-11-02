@@ -7,7 +7,7 @@
  */
 import { Directory, File, Paths } from 'expo-file-system';
 import { Tokenizer } from '@huggingface/tokenizers';
-import { InferenceSession, Tensor } from 'onnxruntime-react-native';
+import type { InferenceSession, Tensor } from 'onnxruntime-react-native';
 import type { EmbeddingOptions } from '@shudeng/core/rag';
 import {
   EMBEDDING_DIMENSION,
@@ -28,7 +28,9 @@ const TOKENIZER_CONFIG_FILE = 'tokenizer_config.json';
 type LoadedTokenizer = { readonly tokenizer: Tokenizer; readonly loadMs: number };
 
 let tokenizerPromise: Promise<LoadedTokenizer> | null = null;
-let sessionPromise: Promise<{ session: InferenceSession; loadMs: number }> | null = null;
+type OrtModule = typeof import('onnxruntime-react-native');
+type LoadedSession = { readonly session: InferenceSession; readonly ort: OrtModule; readonly loadMs: number };
+let sessionPromise: Promise<LoadedSession> | null = null;
 let lastEmbedMs: number | null = null;
 let lastTokenCount: number | null = null;
 let lastNorm: number | null = null;
@@ -108,19 +110,34 @@ async function loadTokenizer(): Promise<LoadedTokenizer> {
   return tokenizerPromise;
 }
 
-async function loadSession(): Promise<{ session: InferenceSession; loadMs: number }> {
+async function loadSession(): Promise<LoadedSession> {
   sessionPromise ??= (async () => {
     const directory = modelDirectory();
     const files = requiredFiles(directory);
     const reason = missingReason(directory, files);
     if (reason) throw new EmbeddingUnavailableError(reason);
+    // 动态 import：onnxruntime-react-native 的 JS 绑定在模块加载时会调用原生 Module.install()；
+    // 懒加载让未安装原生 ORT 的构建仍能启动其他功能，embedding 明确报错而不是整 app 崩溃。
+    let ort: OrtModule;
+    try {
+      ort = await import('onnxruntime-react-native');
+    } catch (error) {
+      throw new EmbeddingUnavailableError(
+        `onnxruntime-react-native 原生模块不可用：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (typeof ort.InferenceSession?.create !== 'function') {
+      throw new EmbeddingUnavailableError(
+        'onnxruntime-react-native 原生模块未加载（1.24.3 iOS 源码与 RN 0.88 New Architecture 不兼容，本轮 native 构建已排除该 pod）',
+      );
+    }
     const startedAt = Date.now();
     const modelPath = toNativePath(files.model.uri);
-    const session = await InferenceSession.create(modelPath, {
+    const session = await ort.InferenceSession.create(modelPath, {
       executionProviders: ['cpu'],
       graphOptimizationLevel: 'all',
     });
-    return { session, loadMs: Date.now() - startedAt };
+    return { session, ort, loadMs: Date.now() - startedAt };
   })();
   return sessionPromise;
 }
@@ -139,8 +156,8 @@ function encode(text: string, tokenizer: Tokenizer): { ids: number[]; tokenCount
   return { ids, tokenCount: ids.length };
 }
 
-function int64Tensor(values: readonly number[]): Tensor {
-  return new Tensor('int64', BigInt64Array.from(values, (value) => BigInt(value)), [1, values.length]);
+function int64Tensor(ort: OrtModule, values: readonly number[]): Tensor {
+  return new ort.Tensor('int64', BigInt64Array.from(values, (value) => BigInt(value)), [1, values.length]);
 }
 
 export function createExpoEmbeddingProvider(): ExpoEmbeddingProvider {
@@ -151,7 +168,7 @@ export function createExpoEmbeddingProvider(): ExpoEmbeddingProvider {
     async embed(texts: ReadonlyArray<string>, options?: EmbeddingOptions): Promise<Float32Array[]> {
       const signal = options?.signal;
       if (signal?.aborted) throw Object.assign(new Error('embedding 已取消'), { name: 'AbortError' });
-      const [{ tokenizer }, { session }] = await Promise.all([loadTokenizer(), loadSession()]);
+      const [{ tokenizer }, { session, ort }] = await Promise.all([loadTokenizer(), loadSession()]);
       const results: Float32Array[] = [];
       const inputNames = new Set(session.inputNames);
       for (const text of texts) {
@@ -159,11 +176,11 @@ export function createExpoEmbeddingProvider(): ExpoEmbeddingProvider {
         const startedAt = Date.now();
         const { ids } = encode(text, tokenizer);
         const feeds: Record<string, Tensor> = {
-          input_ids: int64Tensor(ids),
-          attention_mask: int64Tensor(new Array<number>(ids.length).fill(1)),
+          input_ids: int64Tensor(ort, ids),
+          attention_mask: int64Tensor(ort, new Array<number>(ids.length).fill(1)),
         };
         if (inputNames.has('token_type_ids')) {
-          feeds.token_type_ids = int64Tensor(new Array<number>(ids.length).fill(0));
+          feeds.token_type_ids = int64Tensor(ort, new Array<number>(ids.length).fill(0));
         }
         const outputs = await session.run(feeds);
         const outputName = session.outputNames[0];
