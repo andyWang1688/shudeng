@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ElementRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { File, Paths } from 'expo-file-system';
 import { colors } from '../ui/theme';
 import { readerFixtures } from './readerFixtures';
 import { readerWebHtml } from './readerWebHtml';
@@ -48,18 +47,10 @@ export function ReaderWebView({ bookId, initialLocation, onEvent }: ReaderWebVie
     webViewRef.current?.injectJavaScript(`window.__readerHost && window.__readerHost(${json}); true;`);
   }, []);
 
-  const injectOpen = useCallback(async () => {
+  const injectOpen = useCallback(() => {
     if (openSent.current) return;
     openSent.current = true;
-    const largePdfUrl = bookId === 'pdf-large-file'
-      ? (process.env.EXPO_PUBLIC_LARGE_PDF_URL ?? `${Paths.document.uri}large.pdf`)
-      : undefined;
-    let largePdfBase64: string | undefined;
-    if (bookId === 'pdf-large-file') {
-      const file = new File(Paths.document, 'large.pdf');
-      if (file.exists) largePdfBase64 = await file.base64();
-    }
-    const message = JSON.stringify(openPayloadForBook(bookId, fixture, initialLocation, largePdfUrl, largePdfBase64));
+    const message = JSON.stringify(openPayloadForBook(bookId, fixture, initialLocation));
     // HTML 的 module 脚本可能晚于 onLoadEnd 执行，注入前轮询等待 __readerHost 就绪。
     webViewRef.current?.injectJavaScript(`
       (function () {
@@ -119,12 +110,11 @@ export function ReaderWebView({ bookId, initialLocation, onEvent }: ReaderWebVie
         ref={webViewRef}
         style={styles.webView}
         originWhitelist={['*']}
-        source={{ html: readerWebHtml, ...(bookId === 'pdf-large-file' ? { baseUrl: Paths.document.uri } : {}) }}
-        {...(bookId === 'pdf-large-file' ? { allowingReadAccessToURL: Paths.document.uri } : {})}
+        source={{ html: readerWebHtml }}
         javaScriptEnabled
         domStorageEnabled
         setSupportMultipleWindows={false}
-        onLoadEnd={() => { void injectOpen(); }}
+        onLoadEnd={injectOpen}
         onMessage={(event) => {
           const parsed = parseIncomingMessage(event.nativeEvent.data);
           if (parsed) handleMessage(parsed);

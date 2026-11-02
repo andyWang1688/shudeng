@@ -57,7 +57,8 @@ date: 2026-11-02
 - 真实 DeepSeek/Anthropic 网络请求、Anthropic thinking blocks 回传。
 - **移动端索引/推理耗时、内存峰值、真实书问题集**：当前只有 Node/PC 基线；Release 包体已采样，明显高于 Swift 版，需进一步裁剪/按需下载评估。
 - **引用点击回跳阅读器**：`initialLocation` 已从 route→ReaderShell→ReaderWebView→`reader:open` 打通，iOS 打开 EPub CFI 验证；真实 locator→CFI 映射与点击按钮未做端到端。
-- **大 PDF（514 页/28MB）**：WKWebView `source={{html}}` + Documents 文件 URL、localhost HTTP、base64 注入三种方式均失败（`Unexpected server response (0)` / `Load failed`）；暂标记未验证，需要原生 PDFKit/专用 native module 或重新设计 reader 资源加载。
+- **大 PDF（514 页/28MB）**：WKWebView 文件 URL、localhost HTTP、base64 三种方式均失败；改用 **react-native-pdf（iOS PDFKit）** 后打开成功，顶栏显示第 1/514 页，正文渲染正常。正式 reader 采用原生 PDFKit 作为大 PDF 路线；WebView 继续负责 EPUB/小 PDF。
+- **未验证**：PDFKit 真机手势/缩放/内存峰值、页码跳转、标注坐标、Release 商店签名。
 - **官方 DeepSeek/Anthropic endpoint**（当前只用本机代理/协议/本地 stub 证据）；Anthropic thinking 回传、真实手势/大 PDF。
 
 ## 进入正式迁移的门槛

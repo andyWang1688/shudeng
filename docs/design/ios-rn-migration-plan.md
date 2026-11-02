@@ -18,7 +18,7 @@
 
 ## 阶段 2：阅读
 
-1. EPUB/PDF 文件导入、缓存、删除；沿用 WebView reader + foliate/js/pdf.js。
+1. EPUB/PDF 文件导入、缓存、删除；EPUB/小 PDF 用 WebView reader，大 PDF 走原生 PDFKit（`react-native-pdf`）。
 2. 阅读进度、选字、标注、书签、深色、字号；locator 统一 AnchorV3。
 3. 迁移旧 EPUB Readium locator / PDF page+rect；抽样真实书验证回跳。
 4. 大 PDF/真实手势/中断恢复验收。
