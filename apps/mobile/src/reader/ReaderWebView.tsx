@@ -51,7 +51,9 @@ export function ReaderWebView({ bookId, initialLocation, onEvent }: ReaderWebVie
   const injectOpen = useCallback(() => {
     if (openSent.current) return;
     openSent.current = true;
-    const largePdfUrl = bookId === 'pdf-large-file' ? `${Paths.document.uri}large.pdf` : undefined;
+    const largePdfUrl = bookId === 'pdf-large-file'
+      ? (process.env.EXPO_PUBLIC_LARGE_PDF_URL ?? `${Paths.document.uri}large.pdf`)
+      : undefined;
     const message = JSON.stringify(openPayloadForBook(bookId, fixture, initialLocation, largePdfUrl));
     // HTML 的 module 脚本可能晚于 onLoadEnd 执行，注入前轮询等待 __readerHost 就绪。
     webViewRef.current?.injectJavaScript(`
