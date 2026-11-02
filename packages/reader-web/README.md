@@ -7,6 +7,7 @@ task-87 WebView 阅读器 spike：EPUB 用 foliate-js、PDF 用 pdf.js，作为 
 ```bash
 pnpm --filter @shudeng/reader-web typecheck
 pnpm --filter @shudeng/reader-web build
+pnpm --filter @shudeng/reader-web build:inline   # 生成 RN WebView 自包含 HTML + mobile 生成文件
 pnpm --filter @shudeng/reader-web preview   # http://127.0.0.1:4173
 # 验证（headless Chrome + CDP，不依赖 Playwright）：
 pnpm --filter @shudeng/reader-web verify
@@ -52,7 +53,26 @@ WebView → 原生（优先 `window.ReactNativeWebView.postMessage(JSON.stringif
 - EPUB：`locator = {type:'epub', cfi, href?, chapter?}`；CFI 由 `foliate-view.getCFI(index, range)` 生成，选中/标注/恢复都用 CFI。进度用 `relocate` 事件的 CFI+fraction。
 - PDF：`locator = {type:'pdf', page, rects:[{x,y,width,height}]}`；`rects` 是相对页面的归一化坐标（0..1，左上原点）。文本坐标可由 `reader:pageText` 后续扩展暴露（当前验证脚本调用内部 `getTextCoordinates(page)`）。
 
-## RN WebView 最小壳（待接）
+## RN WebView 接入（task-89 已接）
+
+**已采用的方案：自包含 HTML。** `pnpm --filter @shudeng/reader-web build:inline` 把 JS/CSS/pdf.js worker 全部内联成
+`packages/reader-web/dist-inline/index.html`（约 3.5MB），并生成：
+
+- `apps/mobile/src/reader/readerWebHtml.ts`（HTML 字符串）
+- `apps/mobile/src/reader/readerFixtures.ts`（EPUB/PDF fixture base64）
+
+`apps/mobile/src/reader/ReaderWebView.tsx`（iOS/Android WebView）与 `ReaderWebView.web.tsx`（Expo Web iframe）
+都加载同一个 HTML；PDF worker 以 base64 → Blob URL 注入 `window.__SHUDENG_PDF_WORKER_SRC`，规避 WKWebView
+从 `file://` 加载 module/worker 的限制。
+
+### 原生消息时序
+
+1. WebView `onLoadEnd` → 轮询 `window.__readerHost` 就绪 → 注入 `reader:open`（fixture base64）。
+2. 页面回 `reader:ready` → ReaderShell 显示已就绪；`reader:progress` 驱动底栏进度。
+3. 选字 → 页面回 `reader:selection`（quote/locator/rects）→ RN 在选区附近浮出「高亮/取消」。
+4. 点高亮 → RN 注入 `reader:annotation:add` + `reader:selection:clear` → 页面绘制 overlayer 并回 `reader:annotation`。
+
+### 旧版最小壳契约（供参考）
 
 ```tsx
 const html = `<!doctype html><html><head>
@@ -78,7 +98,7 @@ const html = `<!doctype html><html><head>
 
 `ReaderWebView` 建议：
 
-1. 把 `dist/` 作为本地静态资源（`baseUrl` 指向本地 http 服务/自定义 scheme）；ES module 与 pdf.js worker 在 `file://` 下受 WKWebView 限制，优先本地 http。
+1. 自包含 HTML 方案不需要本地静态服务器；若改回 `dist/` 需本地 http。
 2. 收到 `reader:ready` 后再注入后续命令；`selection` 用 `rects` 定位原生浮层，`locator` 用于高亮/保存。
 3. `reader:annotation:add` 只传锚点和显示信息，不把整本书内容传给原生。
 

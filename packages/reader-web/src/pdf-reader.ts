@@ -13,7 +13,8 @@ import type {
   SelectionPayload,
 } from './protocol'
 
-GlobalWorkerOptions.workerSrc = workerSrc
+const injectedWorkerSrc = (globalThis as { __SHUDENG_PDF_WORKER_SRC?: string }).__SHUDENG_PDF_WORKER_SRC
+GlobalWorkerOptions.workerSrc = injectedWorkerSrc ?? workerSrc
 
 const isSameRect = (a: PdfRect, b: PdfRect) =>
   Math.abs(a.x - b.x) < 1e-4 && Math.abs(a.y - b.y) < 1e-4
@@ -42,14 +43,16 @@ export class PdfReader {
     return this.document?.numPages ?? 0
   }
 
-  async open(url: string, title: string, initialLocation?: string): Promise<void> {
-    this.url = url
+  async open(source: string | Uint8Array, title: string, initialLocation?: string): Promise<void> {
+    this.url = typeof source === 'string' ? source : 'inline'
     this.title = title
     if (initialLocation) {
       const match = /page[:/\\]?(\\d+)/i.exec(initialLocation) ?? /^(\\d+)$/.exec(initialLocation)
       if (match) this.page = Math.max(1, Number(match[1]))
     }
-    const task = getDocument({ url, useSystemFonts: true })
+    const task = typeof source === 'string'
+      ? getDocument({ url: source, useSystemFonts: true })
+      : getDocument({ data: source, useSystemFonts: true })
     this.document = await task.promise
     this.page = Math.min(Math.max(1, this.page), this.document.numPages)
     this.createPageHost()
@@ -97,6 +100,7 @@ export class PdfReader {
   async addAnnotation(payload: AnnotationPayload): Promise<void> {
     this.annotations.set(payload.id, payload)
     this.renderAnnotations()
+    bridge.send({ type: 'reader:annotation', payload })
     this.sendAnnotationState()
   }
 
@@ -105,8 +109,10 @@ export class PdfReader {
   }
 
   async removeAnnotation(id: string): Promise<void> {
+    const payload = this.annotations.get(id)
     this.annotations.delete(id)
     this.renderAnnotations()
+    if (payload) bridge.send({ type: 'reader:annotation', payload })
     this.sendAnnotationState()
   }
 

@@ -53,10 +53,10 @@ export class EpubReader {
     return this.view
   }
 
-  async open(url: string, title: string): Promise<void> {
+  async open(source: string | Blob, title: string): Promise<void> {
     this.title = title
     this.applyTheme()
-    await this.view.open(url)
+    await this.view.open(source)
     await this.view.init({ showTextStart: true })
     this.applyStyles()
     this.applyFlow()
@@ -106,6 +106,7 @@ export class EpubReader {
     this.annotations.set(payload.id, payload)
     this.annotationByCfi.set(cfi, payload)
     await this.view.addAnnotation({ value: cfi, color: payload.color })
+    bridge.send({ type: 'reader:annotation', payload })
     this.sendAnnotationState()
   }
 
@@ -125,6 +126,7 @@ export class EpubReader {
       this.annotationByCfi.delete(cfi)
       await this.view.deleteAnnotation({ value: cfi })
     }
+    bridge.send({ type: 'reader:annotation', payload })
     this.sendAnnotationState()
   }
 

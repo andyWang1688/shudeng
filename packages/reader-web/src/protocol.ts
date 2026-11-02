@@ -31,6 +31,9 @@ export type ReaderLocator = EpubLocator | PdfLocator
 export interface OpenPayload {
   format: ReaderFormat
   url: string
+  /** 原生 WebView 打包场景：直接传 fixture 的 base64 内容，避免 file:// 资源加载。 */
+  dataBase64?: string
+  mimeType?: string
   title?: string
   initialLocation?: string
   theme?: ReaderTheme
@@ -79,6 +82,7 @@ export type HostToReader =
   | { type: 'reader:zoom'; payload: { scale: number } }
   | { type: 'reader:annotation:add'; payload: AnnotationPayload }
   | { type: 'reader:annotation:remove'; payload: { id: string } }
+  | { type: 'reader:selection:clear' }
 
 export type ReaderToHost =
   | { type: 'reader:ready'; payload: { format: ReaderFormat; title: string; totalPages?: number; flow: ReaderFlow } }

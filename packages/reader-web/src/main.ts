@@ -64,6 +64,13 @@ function onProgress(payload: ProgressPayload): void {
   send({ type: 'reader:progress', payload })
 }
 
+function decodeBase64(input: string): Uint8Array {
+  const binary = atob(input)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return bytes
+}
+
 function resetReader(): void {
   reader = null
   currentFormat = null
@@ -91,7 +98,15 @@ async function open(payload: OpenPayload): Promise<void> {
     if (payload.format === 'epub') {
       const epub = new EpubReader(readerEl, onProgress)
       reader = epub
-      await epub.open(payload.url, currentTitle)
+      const epubBytes = payload.dataBase64 ? decodeBase64(payload.dataBase64) : null
+      const epubSource = epubBytes
+        ? new File(
+            [epubBytes.buffer.slice(epubBytes.byteOffset, epubBytes.byteOffset + epubBytes.byteLength) as ArrayBuffer],
+            `${currentTitle}.epub`,
+            { type: payload.mimeType ?? 'application/epub+zip' },
+          )
+        : payload.url
+      await epub.open(epubSource, currentTitle)
       await epub.setTheme(currentTheme)
       await epub.setFontSize(currentFontSize)
       await epub.setFlow(currentFlow)
@@ -99,7 +114,8 @@ async function open(payload: OpenPayload): Promise<void> {
     } else {
       const pdf = new PdfReader(readerEl, onProgress)
       reader = pdf
-      await pdf.open(payload.url, currentTitle, payload.initialLocation)
+      const pdfSource = payload.dataBase64 ? decodeBase64(payload.dataBase64) : payload.url
+      await pdf.open(pdfSource, currentTitle, payload.initialLocation)
       await pdf.setTheme(currentTheme)
     }
     window.__readerReady = true
@@ -159,6 +175,9 @@ async function dispatch(message: HostToReader): Promise<void> {
         break
       case 'reader:annotation:remove':
         await reader?.removeAnnotation(message.payload.id)
+        break
+      case 'reader:selection:clear':
+        reader?.clearSelection()
         break
     }
     updateMeta()
