@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="data:," />
+    <title>书灯阅读器 WebView</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="chrome">
+        <button id="back" type="button" aria-label="返回">‹</button>
+        <div id="heading">
+          <strong id="title">书灯</strong>
+          <span id="meta">准备中…</span>
+        </div>
+        <div id="actions">
+          <button id="theme" type="button" aria-label="切换主题">◐</button>
+          <button id="font" type="button" aria-label="调整字号">A</button>
+          <button id="flow" type="button" aria-label="切换翻页">≡</button>
+        </div>
+      </header>
+      <main id="reader" aria-live="polite"></main>
+      <footer id="footer">
+        <button id="prev" type="button" aria-label="上一页">上一页</button>
+        <span id="progress">0%</span>
+        <button id="next" type="button" aria-label="下一页">下一页</button>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -3,3 +3,7 @@ node_modules/
 dist-web/
 dist-ios/
 dist-android/
+
+# Expo prebuild (CNG) 原生工程不提交
+/ios/
+/android/

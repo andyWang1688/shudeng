@@ -76,6 +76,16 @@ export function ShelfScreen() {
           <Text style={styles.askDetail}>问答面板占位：Agent 由 @shudeng/core 提供，本任务不实现第二套 Agent。</Text>
         </Pressable>
 
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="打开 Agent 演示"
+          onPress={() => router.push('/agent-demo')}
+          style={({ pressed }) => [styles.agentCard, pressed && styles.pressed]}
+        >
+          <Text style={styles.askTitle}>Agent 演示（Hermes）</Text>
+          <Text style={styles.askDetail}>在设备内运行 @shudeng/core 的 LangChain Agent：脚本模型 + 内存书源，显示 reasoning / text / tool / citation 事件。</Text>
+        </Pressable>
+
         <View style={styles.dbCard}>
           <Text style={styles.dbTitle}>平台能力自检</Text>
           <Text style={styles.dbDetail}>SQLite：{database === null ? '正在初始化…' : database.detail}</Text>
@@ -127,6 +137,14 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: radius.card,
     backgroundColor: colors.lampWash,
+  },
+  agentCard: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.card,
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
   },
   askTitle: { fontSize: 16, fontWeight: '600', color: colors.ink },
   askDetail: { marginTop: 6, fontSize: 12, lineHeight: 18, color: colors.ink2 },
