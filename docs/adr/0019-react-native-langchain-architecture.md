@@ -32,6 +32,8 @@ date: 2026-11-02
 
 - **iOS 原生**：Agent 事件链、SQLite/LangGraph checkpoint、WebView EPUB/PDF 渲染/选字/高亮、native ORT embedding（cosine=1）。
 - **Android 原生**：同一 Agent 事件链、SQLite/checkpoint、EPUB WebView、native ORT embedding（cosine=1）均在 Debug emulator 通过；Gradle 使用 Aliyun 镜像，ORT Android 需显式 autolink + Gradle 9 patch。
+- **V5 Node 业务闭环**：脱敏旧库迁移 → SQLite → 真实 ONNX 索引 → LangChain Agent 3 题引用核对，11/11 PASS；1000 chunk 索引 median **9.73s**，进程 max RSS **707MB**，查询 FTS/vector/hybrid p50 0–5ms。
+- **Release 构建 smoke**：iOS Release simulator app **179MB**（可执行 115MB）；Android Release APK **240MB**（debug signing，未发布签名）；Android Release Agent 闭环可运行，冷启动单次约 **1.15s**。
 
 
 - `packages/core` Node Agent：LangChain `createAgent` + LangGraph、书内工具、引用核对、AgentEvent、DeepSeek reasoning 工具轮回传；core 测试 22+，eval 3/3。
@@ -49,7 +51,9 @@ date: 2026-11-02
 - Android Hermes 上 ORT/tokenizer 内存/首 token/Release 表现；Android Debug 的 tokenIds/cosine 已与 Node 参考一致。
 - 旧数据迁移、PDF 大文件/连续滚动、真机手势/坐标换算、checkpoint 清理生命周期。
 - 真实 DeepSeek/Anthropic 网络请求、Anthropic thinking blocks 回传。
-- iOS/Android Release 包体、冷启动、索引耗时、大 PDF/手势；当前为 Debug 模拟器/headless emulator 证据。
+- **移动端索引/推理耗时、内存峰值、真实书问题集**：当前只有 Node/PC 基线；Release 包体已采样，明显高于 Swift 版，需进一步裁剪/按需下载评估。
+- **移动端完整业务闭环**：Agent、SQLite、RAG 分别通过，尚未用一个 UI 流程把“旧库→索引→问答→引用回跳”串起来。
+- **真实 provider 网络**、Anthropic thinking 回传、真实手势/大 PDF。
 
 ## 进入正式迁移的门槛
 
@@ -57,7 +61,7 @@ date: 2026-11-02
 - V2：端侧 embedding/检索可用（iOS 已验证 native ORT；Android 需补丁/替代执行器），中文/跨语言召回有固定问题集证据。
 - V3：真实 EPUB/PDF、旧数据副本迁移、标注坐标与回跳通过真机验证。
 - V4：取消/断网/杀进程后的 checkpoint 恢复明确。
-- V5：完整业务闭环 + 与 Swift v0.4.8 的包体/启动/内存/交互对照。
+- V5：完整业务闭环 + 与 Swift v0.4.8 的包体/启动/内存/交互对照。当前只有 Node 闭环、双端分段通过和 Release 体积采样；**179/240MB Release 包体是迁移前必须解释/优化的风险**。
 - 汇总通过/失败/未验证项，锁定阅读器、推理、checkpoint 驱动和依赖版本后，本 ADR 才可从 proposed 改为 accepted。
 
 ## 后果
