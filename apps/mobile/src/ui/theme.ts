@@ -1,16 +1,34 @@
-/** 纸白/暖灯基础色（只取少量令牌，避免复制 Swift 版 UI 细节）。 */
+/** 书灯设计令牌：对齐 docs/design/ui-development-standard.md 与 design-baseline 截图。 */
 export const colors = {
-  paper: '#F7F3EA',
-  paperDeep: '#EDE6D8',
-  surface: '#FFFDF8',
-  ink: '#24211C',
-  ink2: '#6E6A60',
-  ink3: '#948D80',
-  line: '#DED5C4',
-  lamp: '#C98A2E',
-  lampWash: '#F4E3C2',
-  danger: '#A63A2B',
+  paper: '#FCFBF8',
+  surface: '#FFFFFF',
+  paperDeep: '#F2F0E9',
+  line: '#E6E3DA',
+  ink: '#282B26',
+  ink2: '#64675F',
+  ink3: '#696C63',
+  lamp: '#8A590D',
+  lampWash: '#F5E9CC',
+  selection: '#F4E3AC',
+  danger: '#A13C30',
+  dangerWash: '#FAEBE7',
+  green: '#4F5A4A',
+  olive: '#E8E5D8',
 } as const;
 
-export const spacing = { xs: 8, sm: 12, md: 16, lg: 24 } as const;
-export const radius = { field: 10, card: 16 } as const;
+export const spacing = { xxs: 4, xs: 8, sm: 12, md: 16, lg: 24, xl: 32 } as const;
+export const radius = { coverLeft: 3, coverRight: 7, field: 12, card: 16, sheet: 23 } as const;
+export const type = {
+  brand: 21,
+  title: 31,
+  section: 18,
+  bookTitle: 21,
+  body: 15,
+  caption: 12,
+  tiny: 10,
+} as const;
+
+export const font = {
+  system: undefined as string | undefined,
+  serif: 'Songti SC',
+} as const;

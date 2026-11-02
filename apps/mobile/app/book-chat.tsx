@@ -20,6 +20,7 @@ import {
   startBookChatTurn,
   type BookChatAvailability,
 } from '../src/platform/ai';
+import { appendBookChatTurn } from '../src/platform/library';
 import { colors, radius, spacing } from '../src/ui/theme';
 import { FormattedText } from '../src/ui/FormattedText';
 
@@ -237,6 +238,18 @@ export default function BookChatRoute() {
               status: 'done',
             }));
             historyRef.current.push({ question: text, answer: result.answer });
+            void appendBookChatTurn({
+              bookId,
+              question: text,
+              answer: result.answer,
+              citations: result.citations.map((citation) => ({
+                id: citation.id,
+                quote: citation.quote,
+                locator: citation.locator,
+                ...(citation.chapter ? { chapter: citation.chapter } : {}),
+                ...(citation.page ? { page: citation.page } : {}),
+              })),
+            }).catch(() => undefined);
             break;
           }
           case 'failed':

@@ -598,3 +598,75 @@ export async function deleteShelfBook(bookId: string): Promise<void> {
   const file = new File(Paths.document, 'Books', `${book.id}.${book.format}`);
   if (file.exists) file.delete();
 }
+
+// ---------- 书内对话摘要 ----------
+
+export type ConversationSummary = {
+  readonly conversationId: string;
+  readonly bookId: string;
+  readonly question: string;
+  readonly answer: string;
+  readonly turns: number;
+  readonly updatedAt: number;
+};
+
+const CONVERSATION_PREFIX = 'book:';
+
+export async function appendBookChatTurn(input: {
+  readonly bookId: string;
+  readonly question: string;
+  readonly answer: string;
+  readonly citations?: ReadonlyArray<{ readonly id: string; readonly quote: string; readonly locator: string; readonly chapter?: string; readonly page?: number }>;
+}): Promise<void> {
+  const layer = await getDataLayer();
+  const conversationId = `${CONVERSATION_PREFIX}${input.bookId}`;
+  await layer.store.appendMessage({ conversationId, role: 'user', content: input.question });
+  const assistant = await layer.store.appendMessage({ conversationId, role: 'assistant', content: input.answer });
+  for (const citation of input.citations ?? []) {
+    await layer.store.addCitation({
+      conversationId,
+      messageId: assistant.id,
+      evidenceId: citation.id,
+      quote: citation.quote,
+      locatorJson: citation.locator,
+      chapter: citation.chapter ?? null,
+      page: citation.page ?? null,
+    });
+  }
+}
+
+export async function loadConversationSummaries(): Promise<readonly ConversationSummary[]> {
+  const layer = await getDataLayer();
+  const rows = await layer.driver.all<Record<string, SQLiteValue>>(
+    `SELECT conversation_id, COUNT(*) AS turns, MAX(created_at) AS updated_at
+     FROM messages WHERE role IN ('user','assistant') AND conversation_id LIKE 'book:%'
+     GROUP BY conversation_id ORDER BY updated_at DESC`,
+  );
+  const summaries: ConversationSummary[] = [];
+  for (const row of rows) {
+    if (typeof row.conversation_id !== 'string') continue;
+    const conversationId = row.conversation_id;
+    const messages = await layer.store.listMessages(conversationId);
+    const question = [...messages].reverse().find((message) => message.role === 'user')?.content ?? '';
+    const answer = [...messages].reverse().find((message) => message.role === 'assistant')?.content ?? '';
+    summaries.push({
+      conversationId,
+      bookId: conversationId.slice(CONVERSATION_PREFIX.length),
+      question,
+      answer,
+      turns: typeof row.turns === 'number' ? row.turns : messages.length,
+      updatedAt: typeof row.updated_at === 'number' ? row.updated_at : 0,
+    });
+  }
+  return summaries;
+}
+
+export async function loadAllAnnotations(): Promise<ReadonlyArray<{ book: ShelfBookRecord; annotation: ShelfAnnotation }>> {
+  const books = await loadShelfBooks();
+  const result: Array<{ book: ShelfBookRecord; annotation: ShelfAnnotation }> = [];
+  for (const book of books) {
+    const annotations = await loadBookAnnotations(book.id);
+    for (const annotation of annotations) result.push({ book, annotation });
+  }
+  return result.sort((a, b) => b.annotation.createdAt - a.annotation.createdAt);
+}
