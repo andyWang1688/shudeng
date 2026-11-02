@@ -28,7 +28,11 @@ date: 2026-11-02
 
 ## 当前证据
 
-已完成：
+已完成（2026-11-02 更新）：
+
+- **iOS 原生**：Agent 事件链、SQLite/LangGraph checkpoint、WebView EPUB/PDF 渲染/选字/高亮、native ORT embedding（cosine=1）。
+- **Android 原生**：同一 Agent 事件链、SQLite/checkpoint、EPUB WebView、native ORT embedding（cosine=1）均在 Debug emulator 通过；Gradle 使用 Aliyun 镜像，ORT Android 需显式 autolink + Gradle 9 patch。
+
 
 - `packages/core` Node Agent：LangChain `createAgent` + LangGraph、书内工具、引用核对、AgentEvent、DeepSeek reasoning 工具轮回传；core 测试 22+，eval 3/3。
 - Expo/Hermes 打包：iOS/Android/Web 导出成功；Web 运行时同一 core Agent 跑通 reasoning → search_book → citation → completed。
@@ -42,9 +46,10 @@ date: 2026-11-02
 未验证：
 
 - iOS/Android 原生运行（CocoaPods/React-Core-prebuilt 网络阻塞；Android 无 SDK）。
-- Android Hermes 上 ORT/tokenizer 运行时、内存、首 token、向量数值一致性（iOS 已验证）。
+- Android Hermes 上 ORT/tokenizer 内存/首 token/Release 表现；Android Debug 的 tokenIds/cosine 已与 Node 参考一致。
 - 旧数据迁移、PDF 大文件/连续滚动、真机手势/坐标换算、checkpoint 清理生命周期。
 - 真实 DeepSeek/Anthropic 网络请求、Anthropic thinking blocks 回传。
+- iOS/Android Release 包体、冷启动、索引耗时、大 PDF/手势；当前为 Debug 模拟器/headless emulator 证据。
 
 ## 进入正式迁移的门槛
 
