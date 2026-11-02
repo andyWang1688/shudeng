@@ -37,7 +37,7 @@ date: 2026-11-02
 - **V5 Node 业务闭环**：脱敏旧库迁移 → SQLite → 真实 ONNX 索引 → LangChain Agent 3 题引用核对，11/11 PASS；1000 chunk 索引 median **9.73s**，进程 max RSS **707MB**，查询 FTS/vector/hybrid p50 0–5ms。
 - **V5 双端原生闭环**：dev route 在 Android Debug 和 iOS Release 模拟器均执行 SQLite→真实 ONNX 索引→SqliteBookSource→LangChain Agent→引用 E1 核对→answer，PASS（iOS 用临时 QA 重定向绕过系统深链确认框）。
 - **真实 provider（iOS Hermes）**：开发路由从 App Documents 读取临时配置，经本机 OpenAI-compatible 代理调用 deepseek-flash；iOS Release 真机模拟器 PASS（reasoning 612 字、3 步、2 条引用、HTTP 200）。**官方 DeepSeek endpoint 仍未直接验收**，生产需 SecureStore + 设置页。
-- **Release 构建 smoke**：iOS Release simulator app **179MB**（可执行 115MB）；Android universal Release APK **240MB**（debug signing）。按发布架构补充采样：iOS `iphoneos` Release（未签名）**93MB**，Android arm64+minify/shrink APK **74MB**；Android Release Agent 闭环可运行，冷启动单次约 **1.15s**。
+- **Release 构建 smoke**：iOS Release simulator app **179MB**（可执行 115MB）；Android universal Release APK **240MB**（debug signing）。按发布架构补充采样：iOS `iphoneos` Release（未签名，加入 PDFKit 后）**95MB**，Android arm64+minify/shrink APK **74MB**；Android Release Agent 闭环可运行，冷启动单次约 **1.15s**。
 
 
 - `packages/core` Node Agent：LangChain `createAgent` + LangGraph、书内工具、引用核对、AgentEvent、DeepSeek reasoning 工具轮回传；core 测试 22+，eval 3/3。
