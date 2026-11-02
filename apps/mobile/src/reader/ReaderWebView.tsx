@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ElementRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { Paths } from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import { colors } from '../ui/theme';
 import { readerFixtures } from './readerFixtures';
 import { readerWebHtml } from './readerWebHtml';
@@ -48,13 +48,18 @@ export function ReaderWebView({ bookId, initialLocation, onEvent }: ReaderWebVie
     webViewRef.current?.injectJavaScript(`window.__readerHost && window.__readerHost(${json}); true;`);
   }, []);
 
-  const injectOpen = useCallback(() => {
+  const injectOpen = useCallback(async () => {
     if (openSent.current) return;
     openSent.current = true;
     const largePdfUrl = bookId === 'pdf-large-file'
       ? (process.env.EXPO_PUBLIC_LARGE_PDF_URL ?? `${Paths.document.uri}large.pdf`)
       : undefined;
-    const message = JSON.stringify(openPayloadForBook(bookId, fixture, initialLocation, largePdfUrl));
+    let largePdfBase64: string | undefined;
+    if (bookId === 'pdf-large-file') {
+      const file = new File(Paths.document, 'large.pdf');
+      if (file.exists) largePdfBase64 = await file.base64();
+    }
+    const message = JSON.stringify(openPayloadForBook(bookId, fixture, initialLocation, largePdfUrl, largePdfBase64));
     // HTML 的 module 脚本可能晚于 onLoadEnd 执行，注入前轮询等待 __readerHost 就绪。
     webViewRef.current?.injectJavaScript(`
       (function () {
@@ -119,7 +124,7 @@ export function ReaderWebView({ bookId, initialLocation, onEvent }: ReaderWebVie
         javaScriptEnabled
         domStorageEnabled
         setSupportMultipleWindows={false}
-        onLoadEnd={injectOpen}
+        onLoadEnd={() => { void injectOpen(); }}
         onMessage={(event) => {
           const parsed = parseIncomingMessage(event.nativeEvent.data);
           if (parsed) handleMessage(parsed);

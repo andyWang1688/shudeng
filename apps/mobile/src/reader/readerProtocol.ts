@@ -106,6 +106,7 @@ export function openPayloadForBook(
   fixture: { title: string; mimeType: string; base64: string },
   initialLocation?: string,
   largePdfUrl?: string,
+  largePdfBase64?: string,
 ) {
   const format: ReaderFormat = bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub';
   if (bookId === 'pdf-large-file') {
