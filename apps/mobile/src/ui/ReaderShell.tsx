@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { ReaderWebView, type ReaderEvent } from '../reader/ReaderWebView';
+import { SymbolView } from 'expo-symbols';
 import type { ReaderAnnotationSeed, ReaderLocator } from '../reader/readerProtocol';
 import {
   deleteReaderAnnotation,
@@ -282,18 +283,15 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <View style={styles.toolbar}>
-        <Pressable accessibilityRole="button" accessibilityLabel="返回书架" onPress={() => router.back()} style={styles.backButton}>
-          <Text style={styles.backText}>‹ 书架</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="返回书架" onPress={() => router.back()} style={styles.iconButton}>
+          <SymbolView name="chevron.left" size={20} tintColor={colors.ink} />
         </Pressable>
         <Text style={styles.title} numberOfLines={1}>{title ?? '阅读'}</Text>
         <Pressable accessibilityRole="button" accessibilityLabel="书签" onPress={() => void saveBookmark()} style={styles.iconButton}>
-          <Text style={styles.iconText}>书签</Text>
+          <SymbolView name="bookmark" size={20} tintColor={colors.ink} />
         </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="标注" onPress={() => setPanelOpen(true)} style={styles.iconButton}>
-          <Text style={styles.iconText}>标注{annotations.length > 0 ? ` ${annotations.length}` : ''}</Text>
-        </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="问书灯" onPress={askAboutBook} style={styles.askButton}>
-          <Text style={styles.askText}>问书灯</Text>
+          <SymbolView name="list.bullet" size={20} tintColor={colors.ink} />
         </Pressable>
       </View>
 
@@ -310,6 +308,10 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
         initialAnnotations={seedAnnotations}
         onEvent={onReaderEvent}
       />
+      <Pressable accessibilityRole="button" accessibilityLabel="问书灯" onPress={askAboutBook} style={styles.askCapsule}>
+        <SymbolView name="lightbulb" size={17} tintColor={colors.ink} />
+        <Text style={styles.askCapsuleText}>问问书灯</Text>
+      </Pressable>
 
       {selection ? (
         <View style={styles.selectionBar}>
@@ -423,8 +425,25 @@ const styles = StyleSheet.create({
   title: { flex: 1, fontSize: 15, fontWeight: '600', color: colors.ink },
   iconButton: { paddingVertical: 7, paddingHorizontal: 5 },
   iconText: { fontSize: 12, color: colors.ink2 },
-  askButton: { borderRadius: radius.field, backgroundColor: colors.lampWash, paddingHorizontal: spacing.sm, paddingVertical: 7 },
-  askText: { fontSize: 12, fontWeight: '600', color: colors.ink },
+  askCapsule: {
+    position: 'absolute',
+    bottom: 54,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  askCapsuleText: { fontSize: 13, fontWeight: '600', color: colors.ink },
   errorBanner: { backgroundColor: '#F6E3DF', paddingHorizontal: spacing.sm, paddingVertical: 7 },
   errorText: { fontSize: 12, color: '#7A2F24' },
   selectionBar: {

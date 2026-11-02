@@ -22,6 +22,7 @@ import {
 } from '../src/platform/ai';
 import { appendBookChatTurn } from '../src/platform/library';
 import { colors, radius, spacing } from '../src/ui/theme';
+import { SymbolView } from 'expo-symbols';
 import { FormattedText } from '../src/ui/FormattedText';
 
 interface ToolLine {
@@ -299,17 +300,20 @@ export default function BookChatRoute() {
   );
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-      <View style={styles.toolbar}>
-        <Pressable accessibilityRole="button" accessibilityLabel="返回" onPress={() => router.back()} style={styles.backButton}>
-          <Text style={styles.backText}>‹ 返回</Text>
-        </Pressable>
-        <Text style={styles.title} numberOfLines={1}>{title}</Text>
-        <View style={styles.chip}>
-          <Text style={styles.chipText}>
-            {availability?.index.semantic ? '全文+语义' : availability?.index.available ? '全文' : '索引未就绪'}
-          </Text>
+    <View style={styles.backdrop}>
+      <View style={styles.sheet}>
+      <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
+      <View style={styles.handle} />
+      <View style={styles.sheetHeader}>
+        <SymbolView name="lightbulb" size={22} tintColor={colors.lamp} />
+        <View style={styles.sheetTitleBlock}>
+          <Text style={styles.sheetTitle}>问问书灯</Text>
+          <Text style={styles.sheetBook} numberOfLines={1}>{title}</Text>
         </View>
+        <Text style={styles.chipText}>{availability?.index.semantic ? '全文+语义' : availability?.index.available ? '全文' : '索引未就绪'}</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="关闭" onPress={() => router.back()} style={styles.closeButton}>
+          <SymbolView name="xmark" size={17} tintColor={colors.ink2} />
+        </Pressable>
       </View>
 
       {selectionQuote ? (
@@ -443,11 +447,21 @@ export default function BookChatRoute() {
           </View>
         </KeyboardAvoidingView>
       )}
-    </SafeAreaView>
+      </SafeAreaView>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.30)', justifyContent: 'flex-end' },
+  sheet: { height: '76%', borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet, overflow: 'hidden', backgroundColor: colors.paper },
+  handle: { alignSelf: 'center', width: 33, height: 4, borderRadius: 2, backgroundColor: colors.line, marginTop: 7, marginBottom: 3 },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
+  sheetTitleBlock: { flex: 1 },
+  sheetTitle: { fontSize: 17, fontWeight: '600', color: colors.ink },
+  sheetBook: { fontSize: 11, color: colors.ink3, marginTop: 2 },
+  closeButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   safeArea: { flex: 1, backgroundColor: colors.paper },
   flex: { flex: 1 },
   toolbar: {
@@ -486,7 +500,7 @@ const styles = StyleSheet.create({
   userBubble: {
     maxWidth: '84%',
     borderRadius: radius.field,
-    backgroundColor: colors.lamp,
+    backgroundColor: colors.paperDeep,
     paddingHorizontal: 11,
     paddingVertical: 8,
   },
