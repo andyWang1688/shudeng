@@ -82,6 +82,17 @@ export function ReaderWebView({ bookId, initialLocation, openOverride, initialAn
 
   const handleMessage = useCallback((incoming: IncomingMessage) => {
     if (incoming.type === 'reader:ready') {
+      // 原生壳已提供工具栏/进度/问答入口，隐藏网页阅读器自带 chrome，避免双层工具栏。
+      webViewRef.current?.injectJavaScript(`
+        (function () {
+          if (document.getElementById('shudeng-native-chrome')) return true;
+          var style = document.createElement('style');
+          style.id = 'shudeng-native-chrome';
+          style.textContent = '#chrome, #footer { display: none !important; }';
+          document.head.appendChild(style);
+          return true;
+        })(); true;
+      `);
       if (!annotationsHydrated.current && initialAnnotations?.length) {
         annotationsHydrated.current = true;
         for (const annotation of initialAnnotations) {
