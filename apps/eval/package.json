@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "eval": "tsx src/index.ts"
+    "eval": "tsx src/index.ts",
+    "eval:rag": "tsx src/rag-eval.ts"
   },
   "dependencies": {
     "@shudeng/core": "workspace:*"

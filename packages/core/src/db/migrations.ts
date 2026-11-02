@@ -114,6 +114,40 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       `CREATE INDEX IF NOT EXISTS lg_writes_lookup ON lg_writes (thread_id, checkpoint_ns, checkpoint_id)`,
     ],
   },
+  {
+    id: '0002_rag',
+    statements: [
+      // 切块：保留书内原文位置与 locator（章节/页码/字符 offset）。
+      `CREATE TABLE IF NOT EXISTS rag_chunks (
+        id TEXT PRIMARY KEY NOT NULL,
+        book_id TEXT NOT NULL,
+        chapter_ordinal INTEGER NOT NULL,
+        chapter_title TEXT NOT NULL,
+        page INTEGER,
+        start_offset INTEGER NOT NULL,
+        end_offset INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        locator_json TEXT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS rag_chunks_book ON rag_chunks (book_id, chapter_ordinal)`,
+      // FTS5 全文索引。中文不靠分词器：写入/查询前由 rag/text.ts 转成字符/词 token 序列
+      // （unicode61 会把连续中文当单 token，无法用子串检索）。
+      `CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
+        chunk_id UNINDEXED,
+        book_id UNINDEXED,
+        fts_text,
+        tokenize='unicode61'
+      )`,
+      // 向量：BLOB 存 Float32 小端数组；余弦相似度在 JS 里算（expo/Node 都可用，不依赖 SQLite 扩展）。
+      `CREATE TABLE IF NOT EXISTS rag_chunk_vectors (
+        chunk_id TEXT PRIMARY KEY NOT NULL,
+        model TEXT NOT NULL,
+        dim INTEGER NOT NULL,
+        vector BLOB NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS rag_chunk_vectors_model ON rag_chunk_vectors (model, dim)`,
+    ],
+  },
 ];
 
 export interface MigrateResult {

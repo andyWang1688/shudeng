@@ -157,6 +157,39 @@ export const lgWrites = sqliteTable(
   ],
 );
 
+/** RAG 切块（迁移 0002：FTS5 + 向量见 llm/rag 索引实现，FTS 虚拟表不在此定义）。 */
+export const ragChunks = sqliteTable(
+  'rag_chunks',
+  {
+    id: text('id').primaryKey(),
+    bookId: text('book_id').notNull(),
+    chapterOrdinal: integer('chapter_ordinal').notNull(),
+    chapterTitle: text('chapter_title').notNull(),
+    page: integer('page'),
+    startOffset: integer('start_offset').notNull(),
+    endOffset: integer('end_offset').notNull(),
+    text: text('text').notNull(),
+    locatorJson: text('locator_json').notNull(),
+  },
+  (table) => [index('rag_chunks_book').on(table.bookId, table.chapterOrdinal)],
+);
+
+/** 切块向量（Float32 小端 BLOB；dim 用于维度校验）。 */
+export const ragChunkVectors = sqliteTable(
+  'rag_chunk_vectors',
+  {
+    chunkId: text('chunk_id').primaryKey(),
+    model: text('model').notNull(),
+    dim: integer('dim').notNull(),
+    vector: blob('vector').notNull(),
+  },
+  (table) => [index('rag_chunk_vectors_model').on(table.model, table.dim)],
+);
+
+export type RagChunkRow = typeof ragChunks.$inferSelect;
+export type NewRagChunkRow = typeof ragChunks.$inferInsert;
+export type RagChunkVectorRow = typeof ragChunkVectors.$inferSelect;
+
 export type BookRow = typeof books.$inferSelect;
 export type NewBookRow = typeof books.$inferInsert;
 export type AnchorRow = typeof anchors.$inferSelect;
@@ -180,4 +213,6 @@ export const schema = {
   schemaMigrations,
   lgCheckpoints,
   lgWrites,
+  ragChunks,
+  ragChunkVectors,
 } as const;

@@ -61,7 +61,7 @@ async function exercise(fake: FakeExpoDatabase & ExpoSQLiteDatabaseLike): Promis
   fakes.push(fake);
   const driver = createExpoSQLiteDriver(fake);
   const migration = await migrate(driver);
-  expect(migration.applied).toEqual(['0001_initial']);
+  expect(migration.applied).toEqual(['0001_initial', '0002_rag']);
 
   const store = new ShudengStore(createDatabase(driver));
   await store.saveBook({ id: 'book-1', title: '移动书', format: 'epub', sourceHash: 'h' });
