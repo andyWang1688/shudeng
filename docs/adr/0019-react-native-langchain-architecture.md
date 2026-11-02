@@ -36,6 +36,7 @@ date: 2026-11-02
 - **Android 原生**：同一 Agent 事件链、SQLite/checkpoint、EPUB WebView、native ORT embedding（cosine=1）均在 Debug emulator 通过；Gradle 使用 Aliyun 镜像，ORT Android 需显式 autolink + Gradle 9 patch。
 - **V5 Node 业务闭环**：脱敏旧库迁移 → SQLite → 真实 ONNX 索引 → LangChain Agent 3 题引用核对，11/11 PASS；1000 chunk 索引 median **9.73s**，进程 max RSS **707MB**，查询 FTS/vector/hybrid p50 0–5ms。
 - **V5 双端原生闭环**：dev route 在 Android Debug 和 iOS Release 模拟器均执行 SQLite→真实 ONNX 索引→SqliteBookSource→LangChain Agent→引用 E1 核对→answer，PASS（iOS 用临时 QA 重定向绕过系统深链确认框）。
+- **真实 provider（iOS Hermes）**：开发路由从 App Documents 读取临时配置，经本机 OpenAI-compatible 代理调用 deepseek-flash；iOS Release 真机模拟器 PASS（reasoning 612 字、3 步、2 条引用、HTTP 200）。**官方 DeepSeek endpoint 仍未直接验收**，生产需 SecureStore + 设置页。
 - **Release 构建 smoke**：iOS Release simulator app **179MB**（可执行 115MB）；Android universal Release APK **240MB**（debug signing）。按发布架构补充采样：iOS `iphoneos` Release（未签名）**93MB**，Android arm64+minify/shrink APK **74MB**；Android Release Agent 闭环可运行，冷启动单次约 **1.15s**。
 
 
@@ -55,8 +56,8 @@ date: 2026-11-02
 - 旧数据迁移、PDF 大文件/连续滚动、真机手势/坐标换算、checkpoint 清理生命周期。
 - 真实 DeepSeek/Anthropic 网络请求、Anthropic thinking blocks 回传。
 - **移动端索引/推理耗时、内存峰值、真实书问题集**：当前只有 Node/PC 基线；Release 包体已采样，明显高于 Swift 版，需进一步裁剪/按需下载评估。
-- **引用点击回跳阅读器**：V5 dev route 已产生 locator，但未接 ReaderWebView 的跳转流程。
-- **真实 provider 网络**（无 API key，仅协议/本地 stub 证据）、Anthropic thinking 回传、真实手势/大 PDF。
+- **引用点击回跳阅读器**：`initialLocation` 已从 route→ReaderShell→ReaderWebView→`reader:open` 打通，iOS 打开 EPub CFI 验证；真实 locator→CFI 映射与点击按钮未做端到端。
+- **官方 DeepSeek/Anthropic endpoint**（当前只用本机代理/协议/本地 stub 证据）；Anthropic thinking 回传、真实手势/大 PDF。
 
 ## 进入正式迁移的门槛
 
