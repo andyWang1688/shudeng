@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, radius, spacing } from '../src/ui/theme';
 import { loadAIConfig, saveAIConfig } from '../src/platform/aiConfig';
+import { testAIConnection } from '../src/platform/aiTest';
 
 /** AI 服务设置：key 存 SecureStore。 */
 export default function AiSettingsRoute() {
@@ -13,6 +14,7 @@ export default function AiSettingsRoute() {
   const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com/v1');
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('');
+  const [testing, setTesting] = useState(false);
   useEffect(() => {
     let mounted = true;
     void loadAIConfig().then((config) => {
@@ -28,10 +30,16 @@ export default function AiSettingsRoute() {
   const save = async () => {
     try {
       if (!apiKey.trim()) throw new Error('请填写 API Key');
-      await saveAIConfig({ provider, model, baseUrl, apiKey: apiKey.trim() });
-      setMessage('已保存。官方 key 已安全写入本机 SecureStore。');
+      const config = { provider, model, baseUrl, apiKey: apiKey.trim() } as const;
+      await saveAIConfig(config);
+      setTesting(true);
+      setMessage('已保存，正在测试连接…');
+      const result = await testAIConnection(config);
+      setMessage(result.ok ? result.message : `连接失败：${result.message}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -51,7 +59,7 @@ export default function AiSettingsRoute() {
         <TextInput value={baseUrl} onChangeText={setBaseUrl} autoCapitalize="none" style={styles.input} />
         <Text style={styles.label}>API Key</Text>
         <TextInput value={apiKey} onChangeText={setApiKey} secureTextEntry autoCapitalize="none" placeholder="粘贴官方 key" style={styles.input} />
-        <Pressable accessibilityRole="button" onPress={() => void save()} style={styles.button}><Text style={styles.buttonText}>保存并测试</Text></Pressable>
+        <Pressable accessibilityRole="button" onPress={() => void save()} disabled={testing} style={[styles.button, testing && styles.disabled]}><Text style={styles.buttonText}>{testing ? '测试连接中…' : '保存并测试连接'}</Text></Pressable>
         {message ? <Text style={styles.message}>{message}</Text> : null}
       </ScrollView>
     </SafeAreaView>
@@ -69,5 +77,6 @@ const styles = StyleSheet.create({
   input: { borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, borderRadius: radius.field, backgroundColor: colors.surface, paddingHorizontal: 10, paddingVertical: 9, fontSize: 13, color: colors.ink },
   button: { backgroundColor: colors.lamp, borderRadius: radius.field, paddingVertical: 11, alignItems: 'center', marginTop: spacing.sm },
   buttonText: { fontSize: 14, fontWeight: '600', color: colors.ink },
+  disabled: { opacity: 0.6 },
   message: { fontSize: 12, color: colors.ink2, marginTop: 8 },
 });
