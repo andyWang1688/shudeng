@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { embeddingStatus, initializeDatabase, type DatabaseStatus, type EmbeddingStatus } from '../platform';
+import { loadShelfBooks, migrateLegacyLibraryIfNeeded, type ShelfBookRecord } from '../platform/library';
 import { colors, radius, spacing } from './theme';
 
 type ShelfBook = {
@@ -12,7 +13,7 @@ type ShelfBook = {
   readonly progress: string;
 };
 
-const books: readonly ShelfBook[] = [
+const fallbackBooks: readonly ShelfBook[] = [
   { id: 'epub-hongloumeng', title: '红楼梦', format: 'EPUB', progress: '已读 12%' },
   { id: 'pdf-shudeng-demo', title: '书灯 PDF 示例', format: 'PDF', progress: '第 1 / 2 页' },
 ];
@@ -21,12 +22,26 @@ export function ShelfScreen() {
   const router = useRouter();
   const [database, setDatabase] = useState<DatabaseStatus | null>(null);
   const [embedding, setEmbedding] = useState<EmbeddingStatus | null>(null);
+  const [migrated, setMigrated] = useState<readonly ShelfBookRecord[]>([]);
+  const [libraryMessage, setLibraryMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
-    void initializeDatabase().then((status) => {
-      if (mounted) setDatabase(status);
-    });
+    void initializeDatabase()
+      .then((status) => {
+        if (mounted) setDatabase(status);
+        if (!status.ok) return;
+        return migrateLegacyLibraryIfNeeded()
+          .then((result) => {
+            if (mounted && result.imported) setLibraryMessage(`旧书库已迁移 ${result.books} 本`);
+            if (mounted && result.failures > 0) setLibraryMessage(`旧书库已迁移，${result.failures} 条失败记录`);
+            return loadShelfBooks();
+          })
+          .then((records) => { if (mounted) setMigrated(records); })
+          .catch((error: unknown) => {
+            if (mounted) setLibraryMessage(error instanceof Error ? error.message : String(error));
+          });
+      });
     void embeddingStatus().then((status) => {
       if (mounted) setEmbedding(status);
     });
@@ -48,15 +63,20 @@ export function ShelfScreen() {
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>我的书籍</Text>
-          <Text style={styles.sectionCount}>{books.length} 本</Text>
+          <Text style={styles.sectionCount}>{migrated.length > 0 ? migrated.length : fallbackBooks.length} 本</Text>
         </View>
 
-        {books.map((book) => (
+        {libraryMessage ? <Text style={styles.subtitle}>{libraryMessage}</Text> : null}
+        {(migrated.length > 0 ? migrated : fallbackBooks).map((book) => (
           <Pressable
             key={book.id}
             accessibilityRole="button"
             accessibilityLabel={`打开${book.title}`}
-            onPress={() => router.push({ pathname: '/reader/[id]', params: { id: book.id } })}
+            onPress={() => {
+              const isFallback = fallbackBooks.some((item) => item.id === book.id);
+              if (isFallback) router.push({ pathname: '/reader/[id]', params: { id: book.id } });
+              else Alert.alert('阅读器导入下一批', '旧书文件导入会在下一批迁移中接入；当前已展示真实旧书库。');
+            }}
             style={({ pressed }) => [styles.bookCard, pressed && styles.pressed]}
           >
             <View style={styles.cover}>
@@ -64,7 +84,7 @@ export function ShelfScreen() {
             </View>
             <View style={styles.bookMeta}>
               <Text style={styles.bookTitle} numberOfLines={2}>{book.title}</Text>
-              <Text style={styles.bookDetail}>{book.format} · {book.progress}</Text>
+              <Text style={styles.bookDetail}>{book.format} · {'progress' in book ? book.progress : (book as ShelfBookRecord).author ?? '旧书库已迁移'}</Text>
               <Text style={styles.bookAction}>打开阅读器 ›</Text>
             </View>
           </Pressable>
