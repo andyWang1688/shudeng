@@ -37,6 +37,7 @@ date: 2026-11-02
 - 真实 ONNX embedding（Node）：MiniLM int8、384 维、中英/跨语言召回 5/5；RAG FTS5 + vector 混合。
 - Expo ONNX 适配器：onnxruntime-react-native 1.24.3 + 纯 JS tokenizer，三平台 bundle 通过。
 - **iOS 原生 ONNX 已验证**：用本地 pnpm patch 修复 RN 0.88 New Architecture 下的 legacy bridge 兼容（`patches/onnxruntime-react-native@1.24.3.patch`），模拟器 tokenIds 全等、cosine=1（对 Node 1.31.1 基线，bit 级一致）。代价是每次升级 RN/ORT 需要重验 patch；Android 仍需对应补丁（#33081）或替代执行器。
+- **Embedding 执行器决策（近期）**：采用 `onnxruntime-react-native` + 本地 patch（A）；`onnxruntime-web` 纯 WASM 在 WKWebView 已验证（tokenIds 全等、minCos 0.99966），保留为 fallback；Swift SPM/TFLite/ExecuTorch/CoreML 不作为当前主路线。`EmbeddingProvider` 端口保持可替换。
 
 未验证：
 
@@ -48,7 +49,7 @@ date: 2026-11-02
 ## 进入正式迁移的门槛
 
 - V1：iOS + Android 真机跑通同一 Agent（流式思考、工具循环、取消、引用）。
-- V2：端侧 embedding/检索可用，中文/跨语言召回有固定问题集证据。
+- V2：端侧 embedding/检索可用（iOS 已验证 native ORT；Android 需补丁/替代执行器），中文/跨语言召回有固定问题集证据。
 - V3：真实 EPUB/PDF、旧数据副本迁移、标注坐标与回跳通过真机验证。
 - V4：取消/断网/杀进程后的 checkpoint 恢复明确。
 - V5：完整业务闭环 + 与 Swift v0.4.8 的包体/启动/内存/交互对照。
