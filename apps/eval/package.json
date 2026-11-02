@@ -7,7 +7,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "eval": "tsx src/index.ts",
     "eval:rag": "tsx src/rag-eval.ts",
-    "eval:rag:real": "tsx src/rag-eval-real.ts"
+    "eval:rag:real": "tsx src/rag-eval-real.ts",
+    "eval:embedding:baseline": "tsx src/embedding-baseline.ts"
   },
   "dependencies": {
     "@shudeng/core": "workspace:*"

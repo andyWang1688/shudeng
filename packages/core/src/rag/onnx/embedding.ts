@@ -225,6 +225,12 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     return new OnnxEmbeddingProvider(session, tokenizer, manifest, maxTokens, resolveEosTokenId(tokenizer, tokenizerConfig));
   }
 
+  /** 跨端 tokenizer 对齐/基线生成用：与 embed 相同的 add_special_tokens=true 编码（未截断）。 */
+  tokenize(text: string): { ids: number[]; tokens: string[] } {
+    const encoding = this.tokenizer.encode(text, { add_special_tokens: true });
+    return { ids: [...encoding.ids], tokens: [...encoding.tokens] };
+  }
+
   metricsSnapshot(): OnnxEmbeddingMetrics {
     return { ...this.metrics };
   }

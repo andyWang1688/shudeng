@@ -72,6 +72,24 @@ suite('OnnxEmbeddingProvider（真实 MiniLM int8 ONNX）', () => {
   );
 
   it(
+    'tokenizer 基线：中文/英文 fixture 均为 17 tokens、首 0 尾 2（与 Expo 端对照）',
+    () => {
+      const zh = provider.tokenize('灯把书页照亮，也把问题留在纸上。');
+      expect(zh.ids).toHaveLength(17);
+      expect(zh.ids[0]).toBe(0);
+      expect(zh.ids[zh.ids.length - 1]).toBe(2);
+      expect(zh.tokens[0]).toBe('<s>');
+      expect(zh.tokens[zh.tokens.length - 1]).toBe('</s>');
+
+      const en = provider.tokenize('The lamp lights the page and leaves the question on the paper.');
+      expect(en.ids).toHaveLength(17);
+      expect(en.ids[0]).toBe(0);
+      expect(en.ids[en.ids.length - 1]).toBe(2);
+    },
+    120_000,
+  );
+
+  it(
     '解压缓存：第二次命中缓存，sha256/大小与 manifest 一致',
     async () => {
       const first = await prepareOnnxModel({ modelDir, cacheDir });
