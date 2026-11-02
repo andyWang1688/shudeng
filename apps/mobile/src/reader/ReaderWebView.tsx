@@ -20,6 +20,14 @@ export type { ReaderEvent };
 type ReaderWebViewProps = {
   readonly bookId: string;
   readonly initialLocation: string | undefined;
+  readonly openOverride:
+    | undefined
+    | {
+    readonly format: 'epub' | 'pdf';
+    readonly title: string;
+    readonly dataBase64: string;
+      readonly mimeType: string;
+    };
   readonly onEvent: (event: ReaderEvent) => void;
 };
 
@@ -34,7 +42,7 @@ type SelectionState = {
  * 通过 reader:open/ready/selection/progress/annotation 协议与网页阅读器双向通信。
  * Expo Web 使用 ReaderWebView.web.tsx 的 iframe 实现；这里只在 iOS/Android 生效。
  */
-export function ReaderWebView({ bookId, initialLocation, onEvent }: ReaderWebViewProps) {
+export function ReaderWebView({ bookId, initialLocation, openOverride, onEvent }: ReaderWebViewProps) {
   const webViewRef = useRef<ElementRef<typeof WebView>>(null);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const openSent = useRef(false);
@@ -50,7 +58,9 @@ export function ReaderWebView({ bookId, initialLocation, onEvent }: ReaderWebVie
   const injectOpen = useCallback(() => {
     if (openSent.current) return;
     openSent.current = true;
-    const message = JSON.stringify(openPayloadForBook(bookId, fixture, initialLocation));
+    const message = JSON.stringify(openOverride
+      ? { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, dataBase64: openOverride.dataBase64, mimeType: openOverride.mimeType, ...(initialLocation ? { initialLocation } : {}) } }
+      : openPayloadForBook(bookId, fixture, initialLocation));
     // HTML 的 module 脚本可能晚于 onLoadEnd 执行，注入前轮询等待 __readerHost 就绪。
     webViewRef.current?.injectJavaScript(`
       (function () {
@@ -63,7 +73,7 @@ export function ReaderWebView({ bookId, initialLocation, onEvent }: ReaderWebVie
         deliver();
       })(); true;
     `);
-  }, [bookId, fixture, initialLocation]);
+  }, [bookId, fixture, initialLocation, openOverride]);
 
   const handleMessage = useCallback((incoming: IncomingMessage) => {
     if (incoming.type === 'reader:selection') {

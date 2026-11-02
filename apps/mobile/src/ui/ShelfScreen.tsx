@@ -72,11 +72,7 @@ export function ShelfScreen() {
             key={book.id}
             accessibilityRole="button"
             accessibilityLabel={`打开${book.title}`}
-            onPress={() => {
-              const isFallback = fallbackBooks.some((item) => item.id === book.id);
-              if (isFallback) router.push({ pathname: '/reader/[id]', params: { id: book.id } });
-              else Alert.alert('阅读器导入下一批', '旧书文件导入会在下一批迁移中接入；当前已展示真实旧书库。');
-            }}
+            onPress={() => router.push({ pathname: '/reader/[id]', params: { id: book.id } })}
             style={({ pressed }) => [styles.bookCard, pressed && styles.pressed]}
           >
             <View style={styles.cover}>

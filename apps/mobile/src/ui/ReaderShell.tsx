@@ -8,9 +8,18 @@ import { colors, radius, spacing } from './theme';
 type ReaderShellProps = {
   readonly bookId: string;
   readonly initialLocation: string | undefined;
+  readonly title?: string;
+  readonly openOverride:
+    | undefined
+    | {
+    readonly format: 'epub' | 'pdf';
+    readonly title: string;
+    readonly dataBase64: string;
+      readonly mimeType: string;
+    };
 };
 
-export function ReaderShell({ bookId, initialLocation }: ReaderShellProps) {
+export function ReaderShell({ bookId, initialLocation, title, openOverride }: ReaderShellProps) {
   const router = useRouter();
   const [progress, setProgress] = useState(0);
   const [lastEvent, setLastEvent] = useState('等待 WebView 消息');
@@ -33,7 +42,7 @@ export function ReaderShell({ bookId, initialLocation }: ReaderShellProps) {
     }
   };
 
-  const bookTitle = bookId.toLowerCase().includes('pdf') ? '书灯 PDF 示例' : '红楼梦';
+  const bookTitle = title ?? (bookId.toLowerCase().includes('pdf') ? '书灯 PDF 示例' : '红楼梦');
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -44,7 +53,7 @@ export function ReaderShell({ bookId, initialLocation }: ReaderShellProps) {
         <Text style={styles.title} numberOfLines={1}>{bookTitle}</Text>
         <View style={styles.modeChip}><Text style={styles.modeText}>WebView 壳</Text></View>
       </View>
-      <ReaderWebView bookId={bookId} initialLocation={initialLocation} onEvent={onReaderEvent} />
+      <ReaderWebView bookId={bookId} initialLocation={initialLocation} openOverride={openOverride} onEvent={onReaderEvent} />
       <View style={styles.footer}>
         <Text style={styles.footerEvent} numberOfLines={1}>{lastEvent}</Text>
         <View style={styles.progressTrack}>
