@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "eval": "tsx src/index.ts",
-    "eval:rag": "tsx src/rag-eval.ts"
+    "eval:rag": "tsx src/rag-eval.ts",
+    "eval:rag:real": "tsx src/rag-eval-real.ts"
   },
   "dependencies": {
     "@shudeng/core": "workspace:*"
