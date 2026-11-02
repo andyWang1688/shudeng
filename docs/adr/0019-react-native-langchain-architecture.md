@@ -35,12 +35,13 @@ date: 2026-11-02
 - reader-web：foliate-js EPUB、pdf.js PDF；选字、CFI/归一化 rect、标注、深色；Expo WebView 接线与 CDP 验证。
 - SQLite/Drizzle：共享 schema、迁移、Expo/Node 驱动、异步 LangGraph checkpoint saver；Node 与 Expo bundle 验证。
 - 真实 ONNX embedding（Node）：MiniLM int8、384 维、中英/跨语言召回 5/5；RAG FTS5 + vector 混合。
-- Expo ONNX 适配器：onnxruntime-react-native + 纯 JS tokenizer，三平台 bundle 通过。
+- Expo ONNX 适配器：onnxruntime-react-native 1.24.3 + 纯 JS tokenizer，三平台 bundle 通过。
+- **iOS 原生 ONNX 已验证**：用本地 pnpm patch 修复 RN 0.88 New Architecture 下的 legacy bridge 兼容（`patches/onnxruntime-react-native@1.24.3.patch`），模拟器 tokenIds 全等、cosine=1（对 Node 1.31.1 基线，bit 级一致）。代价是每次升级 RN/ORT 需要重验 patch；Android 仍需对应补丁（#33081）或替代执行器。
 
 未验证：
 
 - iOS/Android 原生运行（CocoaPods/React-Core-prebuilt 网络阻塞；Android 无 SDK）。
-- Hermes 上 tokenizer/ORT 运行时、内存、首 token、向量数值一致性。
+- Android Hermes 上 ORT/tokenizer 运行时、内存、首 token、向量数值一致性（iOS 已验证）。
 - 旧数据迁移、PDF 大文件/连续滚动、真机手势/坐标换算、checkpoint 清理生命周期。
 - 真实 DeepSeek/Anthropic 网络请求、Anthropic thinking blocks 回传。
 

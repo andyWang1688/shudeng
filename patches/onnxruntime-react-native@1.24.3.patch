@@ -1,0 +1,45 @@
+diff --git a/ios/OnnxruntimeModule.mm b/ios/OnnxruntimeModule.mm
+index 8155f92aa4770c2c13c6c7c3db2a38f7311282c1..0e484c06b066860f15a179e3802897ac91aab085 100644
+--- a/ios/OnnxruntimeModule.mm
++++ b/ios/OnnxruntimeModule.mm
+@@ -10,6 +10,14 @@
+ #import <ReactCommon/RCTTurboModule.h>
+ #import <jsi/jsi.h>
+ 
++// React Native 0.88 New Architecture（RCT_REMOVE_LEGACY_ARCH=1）不再声明 RCTCxxBridge。
++// bridgeless 模式下列模块拿到的是 RCTBridgeProxy（NSProxy）：它实现了 -runtime，但
++// respondsToSelector:@selector(runtime) 返回 NO（NSProxy 不转发 respondsToSelector），
++// 因此这里直接调用并用 @try 兜底。见 microsoft/onnxruntime#33083 / #33081。
++@interface RCTBridge (OrtJsiRuntime)
++- (void *)runtime;
++@end
++
+ @implementation OnnxruntimeModule
+ 
+ @synthesize bridge = _bridge;
+@@ -27,16 +35,19 @@ - (void)setBridge:(RCTBridge*)bridge {
+  */
+ RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(install) {
+   @try {
+-    RCTCxxBridge* cxxBridge = (RCTCxxBridge*)_bridge;
+-    if (cxxBridge == nil) {
++    if (_bridge == nil) {
+       return @false;
+     }
+-
+-    auto jsiRuntime = (facebook::jsi::Runtime*)cxxBridge.runtime;
+-    if (jsiRuntime == nil) {
++    void *runtimePtr = nil;
++    @try {
++      runtimePtr = (void *)_bridge.runtime;
++    } @catch (NSException *exception) {
++      return @false;
++    }
++    if (runtimePtr == nil) {
+       return @false;
+     }
+-    auto& runtime = *jsiRuntime;
++    auto& runtime = *((facebook::jsi::Runtime*)runtimePtr);
+     auto jsiInvoker = _bridge.jsCallInvoker;
+ 
+     env = onnxruntimejsi::install(runtime, jsiInvoker);

@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  onnxruntime-react-native@1.24.3:
+    hash: cd243768f4317693a8964d02bbeb825a245c070a8ec05cbab0ae1e32a89da70f
+    path: patches/onnxruntime-react-native@1.24.3.patch
+
 importers:
 
   .: {}
@@ -70,7 +75,7 @@ importers:
         version: 58.0.4(expo-font@58.0.11)(expo@58.0.22)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       onnxruntime-react-native:
         specifier: 1.24.3
-        version: 1.24.3(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
+        version: 1.24.3(patch_hash=cd243768f4317693a8964d02bbeb825a245c070a8ec05cbab0ae1e32a89da70f)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       react:
         specifier: 19.3.0
         version: 19.3.0
@@ -6970,7 +6975,7 @@ snapshots:
       global-agent: 4.1.6
       onnxruntime-common: 1.31.1
 
-  onnxruntime-react-native@1.24.3(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0):
+  onnxruntime-react-native@1.24.3(patch_hash=cd243768f4317693a8964d02bbeb825a245c070a8ec05cbab0ae1e32a89da70f)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0):
     dependencies:
       onnxruntime-common: 1.24.3
       react: 19.3.0

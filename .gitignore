@@ -11,3 +11,7 @@ node_modules/
 delivery/
 __pycache__/
 *.py[cod]
+
+# spike experiment artifacts
+spikes/097-embedding-wasm-wkwebview/data/
+spikes/097-embedding-wasm-wkwebview/vendor/
