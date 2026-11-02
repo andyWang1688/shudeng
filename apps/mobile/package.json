@@ -9,7 +9,9 @@
     "export:web": "expo export --platform web --output-dir dist-web",
     "export:ios": "expo export --platform ios --output-dir dist-ios",
     "export:android": "expo export --platform android --output-dir dist-android",
-    "agent-demo": "expo start"
+    "agent-demo": "expo start",
+    "build:ios:release": "../../scripts/build-ios-rn.sh Release",
+    "build:ios:debug": "../../scripts/build-ios-rn.sh Debug"
   },
   "dependencies": {
     "@expo/metro-runtime": "~58.0.16",
