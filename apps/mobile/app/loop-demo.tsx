@@ -64,6 +64,7 @@ export default function LoopDemoRoute() {
   const [entries, setEntries] = useState<readonly Entry[]>([]);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
   const autorunStarted = useRef(false);
 
   const append = useCallback((kind: string, text: string) => {
@@ -75,6 +76,7 @@ export default function LoopDemoRoute() {
     if (running) return;
     setRunning(true);
     setEntries([]);
+    setSummary(null);
     setDone(false);
     const model = createLoopModel();
     try {
@@ -99,7 +101,10 @@ export default function LoopDemoRoute() {
         handle(event, append);
       }
       const result = await session.result;
-      if (result) append('PASS', `闭环完成：${result.citations.length} 条引用，${result.steps} 步`);
+      if (result) {
+        append('PASS', `闭环完成：${result.citations.length} 条引用，${result.steps} 步`);
+        setSummary(`PASS · ${result.citations.length} 条引用 · ${result.steps} 步 · ${result.answer.replace(/^#+\s*/gm, '').slice(0, 80)}`);
+      }
       else append('FAIL', 'Agent 没有返回结果');
       setDone(result !== null);
     } catch (error) {
@@ -131,6 +136,7 @@ export default function LoopDemoRoute() {
         </Pressable>
       </View>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+        {summary ? <View style={styles.summary}><Text style={styles.summaryText}>{summary}</Text></View> : null}
         {entries.length === 0 ? <Text style={styles.empty}>旧库/迁移 → SQLite → 真实 ONNX 索引 → Agent → 引用核对。</Text> : null}
         {entries.map((entry) => (
           <View key={entry.id} style={[styles.entry, entry.kind === 'PASS' && styles.pass, entry.kind === 'FAIL' && styles.fail]}>
