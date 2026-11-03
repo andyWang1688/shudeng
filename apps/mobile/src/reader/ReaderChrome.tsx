@@ -131,7 +131,7 @@ const styles = StyleSheet.create({
     paddingTop: 4,
   },
   progress: { width: 56, color: colors.ink3, fontSize: 11, paddingBottom: 10 },
-  chapterRight: { width: 110, textAlign: 'right', color: colors.ink3, fontSize: 11, paddingBottom: 10 },
+  chapterRight: { flexShrink: 1, maxWidth: '54%', textAlign: 'right', color: colors.ink3, fontSize: 11, paddingBottom: 10 },
   askCapsule: {
     position: 'absolute',
     bottom: 36,
