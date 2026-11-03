@@ -28,8 +28,10 @@ export default function NotesRoute() {
     return () => { mounted = false; };
   }, []));
 
+  // 与原版一致：笔记页只展示高亮/笔记，书签留在阅读器。
+  const visibleItems = items.filter(({ annotation }) => annotation.kind !== 'bookmark');
   const needle = query.trim().toLowerCase();
-  const filtered = items.filter(({ book, annotation }) => !needle
+  const filtered = visibleItems.filter(({ book, annotation }) => !needle
     || (`${annotation.quote} ${annotation.body ?? ''} ${book.title} ${annotation.chapter ?? ''}`).toLowerCase().includes(needle));
 
   const groups: Array<{ book: ShelfBookRecord; entries: Item[] }> = [];

@@ -507,7 +507,7 @@ export async function loadShelfBooks(): Promise<readonly ShelfBookRecord[]> {
   return rows.map((row) => {
     const format = formatOf(row.format);
     const item = progress.get(row.id) ?? null;
-    const percent = item ? Math.round(item.percent * 100) : null;
+    const percent = item ? Math.floor(item.percent * 100) : null;
     const page = item?.page ?? null;
     const progressLabel = format === 'PDF'
       ? page !== null ? `第 ${page} 页` : percent !== null ? `已读 ${percent}%` : '未开始'
