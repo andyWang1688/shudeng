@@ -189,9 +189,10 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
         const locator = toStoredLocator(event.locator);
         if (!locator) break;
         const percent = Math.min(1, Math.max(0, event.percent));
+        const chapterLabel = event.locator?.type === 'epub' ? event.locator.chapter ?? null : null;
         setProgress(percent);
-        setChapter(null);
-        persistProgress(locator, percent, null);
+        setChapter(chapterLabel);
+        persistProgress(locator, percent, chapterLabel);
         break;
       }
       case 'annotationAdded':
