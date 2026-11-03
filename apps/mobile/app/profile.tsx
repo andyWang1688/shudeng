@@ -21,12 +21,12 @@ export default function ProfileRoute() {
           <Text style={styles.tagline}>一盏照书的灯</Text>
         </View>
         <Pressable accessibilityRole="button" onPress={() => router.push('/ai-settings')} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
-          <Text style={styles.rowIcon}>💡</Text>
+          <SymbolView name="lightbulb" size={20} tintColor={colors.lamp} style={styles.rowIcon} />
           <View style={styles.rowBody}><Text style={styles.rowTitle}>AI 服务</Text><Text style={styles.rowDetail}>{config ? `${config.provider} · ${config.model}` : '未配置'}</Text></View>
           <Text style={styles.chevron}>›</Text>
         </Pressable>
-        <View style={styles.row}><Text style={styles.rowIcon}>☀️</Text><View style={styles.rowBody}><Text style={styles.rowTitle}>外观</Text></View><Text style={styles.rowValue}>跟随系统</Text><Text style={styles.chevron}>›</Text></View>
-        <View style={styles.row}><Text style={styles.rowIcon}>📄</Text><View style={styles.rowBody}><Text style={styles.rowTitle}>关于书灯</Text></View><Text style={styles.rowValue}>0.1.0</Text><Text style={styles.chevron}>›</Text></View>
+        <View style={styles.row}><SymbolView name="sun.max" size={20} tintColor={colors.ink} style={styles.rowIcon} /><View style={styles.rowBody}><Text style={styles.rowTitle}>外观</Text></View><Text style={styles.rowValue}>跟随系统</Text><Text style={styles.chevron}>›</Text></View>
+        <View style={styles.row}><SymbolView name="doc.text" size={20} tintColor={colors.ink} style={styles.rowIcon} /><View style={styles.rowBody}><Text style={styles.rowTitle}>关于书灯</Text></View><Text style={styles.rowValue}>0.4.8</Text><Text style={styles.chevron}>›</Text></View>
       </ScrollView>
       <BottomBar active="profile" />
     </SafeAreaView>
@@ -43,7 +43,7 @@ const styles = StyleSheet.create({
   tagline: { marginTop: 4, fontSize: type.body, color: colors.ink2 },
   row: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
   pressed: { opacity: 0.7 },
-  rowIcon: { fontSize: 20, width: 26, textAlign: 'center' },
+  rowIcon: { width: 26 },
   rowBody: { flex: 1 },
   rowTitle: { fontSize: type.body, color: colors.ink },
   rowDetail: { marginTop: 3, fontSize: type.caption, color: colors.ink2 },
