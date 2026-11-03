@@ -138,7 +138,7 @@ export function searchFieldIconColor(palette: Palette): string {
 export function searchFieldChrome(palette: Palette): ViewStyle {
   const dark = palette.paper === darkColors.paper;
   return {
-    backgroundColor: dark ? palette.paperDeep : '#FFFFFF',
+    backgroundColor: dark ? '#1F1D1A' : '#FFFFFF',
     borderWidth: 1,
     borderColor: palette.line,
     borderRadius: 15,

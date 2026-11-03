@@ -96,7 +96,7 @@ export default function ConversationsRoute() {
               <Text style={styles.hint}>打开一本书，点「问书灯」开始提问。</Text>
             </View>
           ) : groups.map(({ book, bookId, entries }) => {
-            const isCollapsed = collapsed[bookId] ?? false;
+            const isCollapsed = collapsed[bookId] ?? true;
             const title = book?.title ?? '书内问答';
             const swatch = bookSwatchTone(title, book?.format);
             return (
