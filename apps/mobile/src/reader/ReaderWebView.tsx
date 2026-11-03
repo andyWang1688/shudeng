@@ -2,7 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import type { ElementRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { colors } from '../ui/theme';
+import { usePalette, type Palette } from '../ui/theme';
 import { readerFixtures } from './readerFixtures';
 import { readerWebHtml } from './readerWebHtml';
 import {
@@ -33,6 +33,8 @@ type ReaderWebViewProps = {
   readonly initialAnnotations?: readonly ReaderAnnotationSeed[];
   /** 是否显示 ReaderWebView 内置选字浮层；宿主自己渲染选字栏时传 false。默认 true。 */
   readonly selectionBar?: boolean;
+  /** 阅读器主题；深色模式传 dark 让 reader-web 正文/背景切换。 */
+  readonly theme?: 'light' | 'dark';
   readonly onTap?: () => void;
   readonly onEvent: (event: ReaderEvent) => void;
 };
@@ -54,9 +56,11 @@ type SelectionState = {
  * Expo Web 使用 ReaderWebView.web.tsx 的 iframe 实现；这里只在 iOS/Android 生效。
  */
 export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView(
-  { bookId, initialLocation, openOverride, initialAnnotations, selectionBar = true, onTap, onEvent },
+  { bookId, initialLocation, openOverride, initialAnnotations, selectionBar = true, theme = 'light', onTap, onEvent },
   ref,
 ) {
+  const palette = usePalette();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const webViewRef = useRef<ElementRef<typeof WebView>>(null);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const openSent = useRef(false);
@@ -105,8 +109,8 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
     if (openSent.current) return;
     openSent.current = true;
     const message = JSON.stringify(openOverride
-      ? { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, dataBase64: openOverride.dataBase64, mimeType: openOverride.mimeType, ...(initialLocation ? { initialLocation } : {}) } }
-      : openPayloadForBook(bookId, fixture, initialLocation));
+      ? { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, dataBase64: openOverride.dataBase64, mimeType: openOverride.mimeType, theme, ...(initialLocation ? { initialLocation } : {}) } }
+      : { ...openPayloadForBook(bookId, fixture, initialLocation), payload: { ...openPayloadForBook(bookId, fixture, initialLocation).payload, theme } });
     // HTML 的 module 脚本可能晚于 onLoadEnd 执行，注入前轮询等待 __readerHost 就绪。
     webViewRef.current?.injectJavaScript(`
       (function () {
@@ -119,7 +123,7 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
         deliver();
       })(); true;
     `);
-  }, [bookId, fixture, initialLocation, openOverride]);
+  }, [bookId, fixture, initialLocation, openOverride, theme]);
 
   useImperativeHandle(ref, () => ({
     highlightSelection: (locator: ReaderLocator, quote: string) => {
@@ -237,7 +241,9 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
   );
 });
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.paper },
-  webView: { flex: 1, backgroundColor: colors.paper },
-});
+function makeStyles(palette: Palette) {
+  return StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
+  webView: { flex: 1, backgroundColor: palette.paper },
+  });
+}

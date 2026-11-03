@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, radius, spacing } from '../src/ui/theme';
+import { radius, spacing, usePalette, type Palette } from '../src/ui/theme';
 import { loadAIConfig, saveAIConfig, type AIConfig } from '../src/platform/aiConfig';
 import { testAIConnection } from '../src/platform/aiTest';
 
@@ -16,6 +16,8 @@ const PRESETS: Record<Provider, { label: string; model: string; baseUrl: string 
 
 export default function AiSettingsRoute() {
   const router = useRouter();
+  const palette = usePalette();
+  const styles = useMemo(() => createStyles(palette), [palette]);
   const [provider, setProvider] = useState<Provider>('deepseek');
   const [model, setModel] = useState(PRESETS.deepseek.model);
   const [baseUrl, setBaseUrl] = useState(PRESETS.deepseek.baseUrl);
@@ -101,11 +103,11 @@ export default function AiSettingsRoute() {
           autoCapitalize="none"
           autoCorrect={false}
           placeholder="粘贴官方 API Key"
-          placeholderTextColor={colors.ink3}
+          placeholderTextColor={palette.ink3}
           style={styles.input}
         />
         <Pressable accessibilityRole="button" disabled={testing || !loaded} onPress={() => void save()} style={[styles.button, (testing || !loaded) && styles.disabled]}>
-          {testing ? <ActivityIndicator size="small" color={colors.ink} /> : <Text style={styles.buttonText}>保存并测试连接</Text>}
+          {testing ? <ActivityIndicator size="small" color={palette.ink} /> : <Text style={styles.buttonText}>保存并测试连接</Text>}
         </Pressable>
         {message ? <Text style={[styles.message, message.startsWith('连接成功') && styles.messageOk]}>{message}</Text> : null}
       </ScrollView>
@@ -113,23 +115,25 @@ export default function AiSettingsRoute() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.paper },
-  toolbar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
-  back: { fontSize: 15, color: colors.lamp },
-  title: { fontSize: 17, fontWeight: '600', color: colors.ink },
-  content: { padding: spacing.md, gap: 6 },
-  hint: { fontSize: 12, lineHeight: 18, color: colors.ink3, marginBottom: 4 },
-  label: { fontSize: 12, color: colors.ink2, marginTop: 8 },
-  providers: { flexDirection: 'row', gap: spacing.xs },
-  providerChip: { flex: 1, alignItems: 'center', borderRadius: radius.field, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, backgroundColor: colors.surface, paddingVertical: 9 },
-  providerChipActive: { backgroundColor: colors.lampWash, borderColor: colors.lamp },
-  providerText: { fontSize: 13, color: colors.ink2 },
-  providerTextActive: { color: colors.ink, fontWeight: '600' },
-  input: { borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, borderRadius: radius.field, backgroundColor: colors.surface, paddingHorizontal: 10, paddingVertical: 10, fontSize: 13, color: colors.ink },
-  button: { marginTop: spacing.md, backgroundColor: colors.lamp, borderRadius: radius.field, paddingVertical: 12, alignItems: 'center' },
-  buttonText: { fontSize: 14, fontWeight: '600', color: colors.ink },
-  disabled: { opacity: 0.6 },
-  message: { fontSize: 12, lineHeight: 18, color: '#A63A2B', marginTop: 8 },
-  messageOk: { color: '#3F6B45' },
-});
+function createStyles(palette: Palette) {
+  return StyleSheet.create({
+    safeArea: { flex: 1, backgroundColor: palette.paper },
+    toolbar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line },
+    back: { fontSize: 15, color: palette.lamp },
+    title: { fontSize: 17, fontWeight: '600', color: palette.ink },
+    content: { padding: spacing.md, gap: 6 },
+    hint: { fontSize: 12, lineHeight: 18, color: palette.ink3, marginBottom: 4 },
+    label: { fontSize: 12, color: palette.ink2, marginTop: 8 },
+    providers: { flexDirection: 'row', gap: spacing.xs },
+    providerChip: { flex: 1, alignItems: 'center', borderRadius: radius.field, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, backgroundColor: palette.surface, paddingVertical: 9 },
+    providerChipActive: { backgroundColor: palette.lampWash, borderColor: palette.lamp },
+    providerText: { fontSize: 13, color: palette.ink2 },
+    providerTextActive: { color: palette.ink, fontWeight: '600' },
+    input: { borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, borderRadius: radius.field, backgroundColor: palette.surface, paddingHorizontal: 10, paddingVertical: 10, fontSize: 13, color: palette.ink },
+    button: { marginTop: spacing.md, backgroundColor: palette.lamp, borderRadius: radius.field, paddingVertical: 12, alignItems: 'center' },
+    buttonText: { fontSize: 14, fontWeight: '600', color: palette.ink },
+    disabled: { opacity: 0.6 },
+    message: { fontSize: 12, lineHeight: 18, color: palette.error, marginTop: 8 },
+    messageOk: { color: palette.lampInk },
+  });
+}

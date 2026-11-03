@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useColorScheme,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,7 +26,7 @@ import {
   type ShelfAnnotation,
   type StoredReaderLocator,
 } from '../platform/library';
-import { colors, radius, spacing } from './theme';
+import { radius, spacing, usePalette, type Palette } from './theme';
 
 type ReaderShellProps = {
   readonly bookId: string;
@@ -94,6 +95,9 @@ function toSeed(annotation: ShelfAnnotation, format: BookFormat): ReaderAnnotati
 
 export function ReaderShell({ bookId, initialLocation, title, openOverride, initialAnnotations, onJumpToLocator, onAnnotationsChanged, referenceMode = false }: ReaderShellProps) {
   const router = useRouter();
+  const palette = usePalette();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const readerTheme = useColorScheme() === 'dark' ? 'dark' : 'light';
   const insets = useSafeAreaInsets();
   const readerRef = useRef<ReaderWebViewHandle>(null);
   const [chromeVisible, setChromeVisible] = useState(true);
@@ -273,6 +277,7 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
       pathname: '/book-chat',
       params: {
         bookId,
+        theme: readerTheme,
         ...(title ? { bookTitle: title } : {}),
         ...(selection ? { selectionQuote: selection.quote } : {}),
         ...(locator ? { locator: JSON.stringify(locator) } : {}),
@@ -285,6 +290,7 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
       pathname: '/book-chat',
       params: {
         bookId,
+        theme: readerTheme,
         ...(title ? { bookTitle: title } : {}),
         ...(latestProgress.current?.locator ? { locator: JSON.stringify(latestProgress.current.locator) } : {}),
       },
@@ -322,12 +328,13 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
           openOverride={openOverride}
           initialAnnotations={seedAnnotations}
           selectionBar={false}
+          theme={readerTheme}
           onTap={() => setChromeVisible((value) => !value)}
           onEvent={onReaderEvent}
         />
         {!readerReady && !readerError ? (
           <View style={styles.loadingOverlay} pointerEvents="none">
-            <ActivityIndicator color={colors.lamp} />
+            <ActivityIndicator color={palette.lamp} />
             <Text style={styles.loadingText}>正在打开书籍…</Text>
           </View>
         ) : null}
@@ -408,7 +415,7 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
                       style={styles.annotationMain}
                     >
                       <View style={styles.annotationMeta}>
-                        <View style={[styles.colorDot, { backgroundColor: annotation.color ?? colors.lamp }]} />
+                        <View style={[styles.colorDot, { backgroundColor: annotation.color ?? palette.lamp }]} />
                         <Text style={styles.annotationKind}>{KIND_LABEL[annotation.kind]}</Text>
                         {annotation.page !== null ? <Text style={styles.annotationPage}>第 {annotation.page} 页</Text> : null}
                       </View>
@@ -444,7 +451,7 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
               value={noteBody}
               onChangeText={setNoteBody}
               placeholder="写下你的想法…"
-              placeholderTextColor={colors.ink3}
+              placeholderTextColor={palette.ink3}
               multiline
               autoFocus
               style={styles.noteInput}
@@ -456,29 +463,30 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.paper },
-  content: { flex: 1, backgroundColor: colors.paper },
+function makeStyles(palette: Palette) {
+  return StyleSheet.create({
+  screen: { flex: 1, backgroundColor: palette.paper },
+  content: { flex: 1, backgroundColor: palette.paper },
   noticeToast: { position: 'absolute', alignSelf: 'center', left: 24, right: 24, alignItems: 'center', zIndex: 30 },
-  noticeText: { borderRadius: 10, backgroundColor: 'rgba(36,33,28,0.86)', color: colors.paper, fontSize: 12, paddingHorizontal: 12, paddingVertical: 6, overflow: 'hidden' },
+  noticeText: { borderRadius: 10, backgroundColor: 'rgba(36,33,28,0.86)', color: palette.paper, fontSize: 12, paddingHorizontal: 12, paddingVertical: 6, overflow: 'hidden' },
   loadingOverlay: { position: 'absolute', left: 0, right: 0, top: '40%', alignItems: 'center', gap: 10, zIndex: 25 },
-  loadingText: { color: colors.ink3, fontSize: 13 },
-  errorOverlay: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: '28%', zIndex: 30, alignItems: 'center', gap: 10, borderRadius: radius.card, backgroundColor: colors.paper, padding: spacing.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line },
-  errorTitle: { color: colors.ink, fontSize: 15, fontWeight: '600' },
-  errorDetail: { color: colors.ink3, fontSize: 12, lineHeight: 18, textAlign: 'center' },
-  retryButton: { borderRadius: radius.field, backgroundColor: colors.lampWash, paddingHorizontal: spacing.lg, paddingVertical: 8 },
-  retryText: { color: colors.ink, fontSize: 13, fontWeight: '600' },
-  errorBanner: { position: 'absolute', left: 12, right: 12, zIndex: 35, backgroundColor: '#F6E3DF', paddingHorizontal: spacing.sm, paddingVertical: 7, borderRadius: radius.field },
-  errorText: { fontSize: 12, color: '#7A2F24' },
+  loadingText: { color: palette.ink3, fontSize: 13 },
+  errorOverlay: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: '28%', zIndex: 30, alignItems: 'center', gap: 10, borderRadius: radius.card, backgroundColor: palette.paper, padding: spacing.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line },
+  errorTitle: { color: palette.ink, fontSize: 15, fontWeight: '600' },
+  errorDetail: { color: palette.ink3, fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  retryButton: { borderRadius: radius.field, backgroundColor: palette.lampWash, paddingHorizontal: spacing.lg, paddingVertical: 8 },
+  retryText: { color: palette.ink, fontSize: 13, fontWeight: '600' },
+  errorBanner: { position: 'absolute', left: 12, right: 12, zIndex: 35, backgroundColor: palette.errorWash, paddingHorizontal: spacing.sm, paddingVertical: 7, borderRadius: radius.field },
+  errorText: { fontSize: 12, color: palette.error },
   selectionBar: {
     position: 'absolute',
     left: spacing.sm,
     right: spacing.sm,
     zIndex: 40,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
+    borderColor: palette.line,
     borderRadius: radius.card,
-    backgroundColor: colors.surface,
+    backgroundColor: palette.surface,
     paddingHorizontal: spacing.sm,
     paddingTop: spacing.xs,
     paddingBottom: spacing.sm,
@@ -488,50 +496,51 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
   },
-  selectionQuote: { fontSize: 12, lineHeight: 17, color: colors.ink2 },
+  selectionQuote: { fontSize: 12, lineHeight: 17, color: palette.ink2 },
   selectionActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  selectionButton: { borderRadius: radius.field, backgroundColor: colors.lampWash, paddingHorizontal: spacing.sm, paddingVertical: 7 },
-  selectionButtonText: { fontSize: 12, fontWeight: '600', color: colors.ink },
+  selectionButton: { borderRadius: radius.field, backgroundColor: palette.lampWash, paddingHorizontal: spacing.sm, paddingVertical: 7 },
+  selectionButtonText: { fontSize: 12, fontWeight: '600', color: palette.ink },
   selectionCancel: { paddingHorizontal: spacing.sm, paddingVertical: 7 },
-  selectionCancelText: { fontSize: 12, color: colors.ink3 },
+  selectionCancelText: { fontSize: 12, color: palette.ink3 },
   footer: {
     paddingHorizontal: spacing.sm,
     paddingTop: spacing.xs,
     paddingBottom: spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
-    backgroundColor: colors.paper,
+    borderTopColor: palette.line,
+    backgroundColor: palette.paper,
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
     gap: 6,
   },
-  footerText: { flex: 1, fontSize: 12, color: colors.ink3 },
-  notice: { flex: 1, fontSize: 12, color: colors.lamp },
-  percent: { fontSize: 12, color: colors.ink2 },
-  progressTrack: { width: '100%', height: 3, borderRadius: 2, backgroundColor: colors.paperDeep, overflow: 'hidden' },
-  progressFill: { height: 3, borderRadius: 2, backgroundColor: colors.lamp },
+  footerText: { flex: 1, fontSize: 12, color: palette.ink3 },
+  notice: { flex: 1, fontSize: 12, color: palette.lamp },
+  percent: { fontSize: 12, color: palette.ink2 },
+  progressTrack: { width: '100%', height: 3, borderRadius: 2, backgroundColor: palette.paperDeep, overflow: 'hidden' },
+  progressFill: { height: 3, borderRadius: 2, backgroundColor: palette.lamp },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.28)', justifyContent: 'flex-end' },
-  panel: { maxHeight: '72%', backgroundColor: colors.paper, borderTopLeftRadius: radius.card, borderTopRightRadius: radius.card },
-  panelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
-  panelTitle: { fontSize: 16, fontWeight: '600', color: colors.ink },
-  panelClose: { fontSize: 14, color: colors.lamp },
-  panelDone: { fontSize: 14, fontWeight: '600', color: colors.lamp },
-  panelDoneDisabled: { color: colors.ink3 },
+  panel: { maxHeight: '72%', backgroundColor: palette.paper, borderTopLeftRadius: radius.card, borderTopRightRadius: radius.card },
+  panelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line },
+  panelTitle: { fontSize: 16, fontWeight: '600', color: palette.ink },
+  panelClose: { fontSize: 14, color: palette.lamp },
+  panelDone: { fontSize: 14, fontWeight: '600', color: palette.lamp },
+  panelDoneDisabled: { color: palette.ink3 },
   panelScroll: { flexGrow: 0 },
   panelContent: { padding: spacing.md, gap: spacing.sm },
-  panelEmpty: { fontSize: 13, lineHeight: 20, color: colors.ink3, paddingVertical: spacing.lg },
-  annotationRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.field, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, padding: spacing.sm },
+  panelEmpty: { fontSize: 13, lineHeight: 20, color: palette.ink3, paddingVertical: spacing.lg },
+  annotationRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.field, backgroundColor: palette.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, padding: spacing.sm },
   annotationMain: { flex: 1 },
   annotationMeta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   colorDot: { width: 8, height: 8, borderRadius: 4 },
-  annotationKind: { fontSize: 11, fontWeight: '600', color: colors.ink2 },
-  annotationPage: { fontSize: 11, color: colors.ink3 },
-  annotationQuote: { marginTop: 5, fontSize: 13, lineHeight: 19, color: colors.ink },
-  annotationBody: { marginTop: 4, fontSize: 12, lineHeight: 18, color: colors.ink2 },
+  annotationKind: { fontSize: 11, fontWeight: '600', color: palette.ink2 },
+  annotationPage: { fontSize: 11, color: palette.ink3 },
+  annotationQuote: { marginTop: 5, fontSize: 13, lineHeight: 19, color: palette.ink },
+  annotationBody: { marginTop: 4, fontSize: 12, lineHeight: 18, color: palette.ink2 },
   annotationDelete: { paddingHorizontal: 8, paddingVertical: 6 },
-  annotationDeleteText: { fontSize: 12, color: '#A63A2B' },
-  noteSheet: { backgroundColor: colors.paper, borderTopLeftRadius: radius.card, borderTopRightRadius: radius.card, paddingBottom: 24 },
-  noteQuote: { marginHorizontal: spacing.md, marginTop: spacing.sm, fontSize: 12, lineHeight: 18, color: colors.ink3, backgroundColor: colors.paperDeep, borderRadius: radius.field, padding: spacing.sm },
-  noteInput: { margin: spacing.md, minHeight: 110, borderRadius: radius.field, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, padding: spacing.sm, fontSize: 14, color: colors.ink, textAlignVertical: 'top' },
-});
+  annotationDeleteText: { fontSize: 12, color: palette.danger },
+  noteSheet: { backgroundColor: palette.paper, borderTopLeftRadius: radius.card, borderTopRightRadius: radius.card, paddingBottom: 24 },
+  noteQuote: { marginHorizontal: spacing.md, marginTop: spacing.sm, fontSize: 12, lineHeight: 18, color: palette.ink3, backgroundColor: palette.paperDeep, borderRadius: radius.field, padding: spacing.sm },
+  noteInput: { margin: spacing.md, minHeight: 110, borderRadius: radius.field, backgroundColor: palette.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, padding: spacing.sm, fontSize: 14, color: palette.ink, textAlignVertical: 'top' },
+  });
+}

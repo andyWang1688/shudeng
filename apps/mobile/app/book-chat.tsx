@@ -12,6 +12,7 @@ import {
   Text,
   TextInput,
   View,
+  useColorScheme,
   useWindowDimensions,
   type KeyboardEvent,
 } from 'react-native';
@@ -27,7 +28,7 @@ import {
   type BookChatAvailability,
 } from '../src/platform/ai';
 import { appendBookChatTurn } from '../src/platform/library';
-import { radius, type Palette, usePalette } from '../src/ui/theme';
+import { darkColors, lightColors, radius, type Palette } from '../src/ui/theme';
 
 /** Swift BookType.serif 使用 PostScript 名 SongtiSC-*；用 family 名在 RN 会回退系统字体。 */
 const SERIF = 'SongtiSC-Regular';
@@ -129,17 +130,28 @@ function citationTitle(citation: VerifiedCitation, index: number, bookTitle: str
 /** 书内 AI 问答（产品页；76% 底部面板，对齐 Swift QuestionController）。 */
 export default function BookChatRoute() {
   const router = useRouter();
-  const palette = usePalette();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const styles = useMemo(() => createStyles(palette), [palette]);
+  const systemScheme = useColorScheme();
   const params = useLocalSearchParams<{
     bookId?: string | string[];
     bookTitle?: string | string[];
     selectionQuote?: string | string[];
     locator?: string | string[];
     initialQuestion?: string | string[];
+    /** 透明 modal 内 useColorScheme 可能读不到下层 scheme；由入口显式传 dark/light。 */
+    theme?: string | string[];
   }>();
+  const themeParam = paramValue(params.theme);
+  const palette: Palette =
+    themeParam === 'dark'
+      ? darkColors
+      : themeParam === 'light'
+        ? lightColors
+        : systemScheme === 'dark'
+          ? darkColors
+          : lightColors;
+  const styles = useMemo(() => createStyles(palette), [palette]);
   const bookId = paramValue(params.bookId) ?? '';
   const bookTitleParam = paramValue(params.bookTitle);
   const selectionQuote = paramValue(params.selectionQuote);

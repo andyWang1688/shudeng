@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SymbolView } from 'expo-symbols';
-import { colors, radius, spacing } from '../ui/theme';
+import { radius, spacing, usePalette, type Palette } from '../ui/theme';
 
 export type ReaderChromeProps = {
   readonly title: string;
@@ -34,6 +34,8 @@ export function ReaderChrome({
   onMore,
   onAsk,
 }: ReaderChromeProps) {
+  const palette = usePalette();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
   const opacity = useRef(new Animated.Value(1)).current;
 
@@ -55,7 +57,7 @@ export function ReaderChrome({
             onPress={onBack}
             style={styles.backButton}
           >
-            <SymbolView name="chevron.left" size={20} tintColor={colors.ink2} />
+            <SymbolView name="chevron.left" size={20} tintColor={palette.ink2} />
             {referenceMode ? <Text style={styles.referenceBack}>返回问答</Text> : null}
           </Pressable>
           <View style={styles.heading} pointerEvents="none">
@@ -65,13 +67,13 @@ export function ReaderChrome({
           <View style={styles.actions}>
             {onAnnotations ? (
               <Pressable accessibilityRole="button" accessibilityLabel="标注" onPress={onAnnotations} style={styles.iconButton}>
-                <SymbolView name="list.bullet" size={19} tintColor={colors.ink2} />
+                <SymbolView name="list.bullet" size={19} tintColor={palette.ink2} />
                 {annotationCount > 0 ? <Text style={styles.badge}>{annotationCount}</Text> : null}
               </Pressable>
             ) : null}
             {onMore ? (
               <Pressable accessibilityRole="button" accessibilityLabel="更多" onPress={onMore} style={styles.iconButton}>
-                <SymbolView name="ellipsis" size={19} tintColor={colors.ink2} />
+                <SymbolView name="ellipsis" size={19} tintColor={palette.ink2} />
               </Pressable>
             ) : null}
           </View>
@@ -81,7 +83,7 @@ export function ReaderChrome({
       <View style={[styles.footer, { paddingBottom: insets.bottom, height: 76 + insets.bottom }]}>
         <Text style={styles.progress}>{progressText}</Text>
         <Pressable accessibilityRole="button" accessibilityLabel="问问书灯" onPress={onAsk} style={styles.askCapsule}>
-          <SymbolView name="lightbulb" size={16} tintColor={colors.ink} />
+          <SymbolView name="lightbulb" size={16} tintColor={palette.ink} />
           <Text style={styles.askText}>问问书灯</Text>
         </Pressable>
         <Text style={styles.chapterRight} numberOfLines={1}>{chapter ?? ''}</Text>
@@ -90,16 +92,17 @@ export function ReaderChrome({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(palette: Palette) {
+  return StyleSheet.create({
   root: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 20 },
   toolbar: {
     position: 'absolute',
     left: 0,
     right: 0,
     top: 0,
-    backgroundColor: 'rgba(252,251,248,0.94)',
+    backgroundColor: `${palette.paper}F0`,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.line,
+    borderBottomColor: palette.line,
     justifyContent: 'flex-end',
   },
   toolbarRow: {
@@ -109,29 +112,29 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   backButton: { minWidth: 44, height: 44, flexDirection: 'row', alignItems: 'center', gap: 4 },
-  referenceBack: { color: colors.ink2, fontSize: 12 },
+  referenceBack: { color: palette.ink2, fontSize: 12 },
   heading: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
-  title: { color: colors.ink, fontSize: 13, fontWeight: '600', lineHeight: 17 },
-  chapter: { color: colors.ink3, fontSize: 10, lineHeight: 14 },
+  title: { color: palette.ink, fontSize: 13, fontWeight: '600', lineHeight: 17 },
+  chapter: { color: palette.ink3, fontSize: 10, lineHeight: 14 },
   actions: { flexDirection: 'row', alignItems: 'center' },
   iconButton: { width: 40, height: 44, alignItems: 'center', justifyContent: 'center' },
-  badge: { position: 'absolute', top: 7, right: 3, minWidth: 12, textAlign: 'center', fontSize: 9, color: colors.paper, backgroundColor: colors.lamp, borderRadius: 6, overflow: 'hidden' },
+  badge: { position: 'absolute', top: 7, right: 3, minWidth: 12, textAlign: 'center', fontSize: 9, color: palette.paper, backgroundColor: palette.lamp, borderRadius: 6, overflow: 'hidden' },
   footer: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(252,251,248,0.94)',
+    backgroundColor: `${palette.paper}F0`,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
+    borderTopColor: palette.line,
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.md,
     paddingTop: 4,
   },
-  progress: { width: 56, color: colors.ink3, fontSize: 11, paddingBottom: 10 },
-  chapterRight: { flexShrink: 1, maxWidth: '54%', textAlign: 'right', color: colors.ink3, fontSize: 11, paddingBottom: 10 },
+  progress: { width: 56, color: palette.ink3, fontSize: 11, paddingBottom: 10 },
+  chapterRight: { flexShrink: 1, maxWidth: '54%', textAlign: 'right', color: palette.ink3, fontSize: 11, paddingBottom: 10 },
   askCapsule: {
     position: 'absolute',
     bottom: 36,
@@ -142,9 +145,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     borderRadius: 22,
-    backgroundColor: colors.surface,
+    backgroundColor: palette.surface,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
+    borderColor: palette.line,
     paddingHorizontal: 16,
     paddingVertical: 9,
     shadowColor: '#000',
@@ -152,5 +155,6 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
   },
-  askText: { fontSize: 13, fontWeight: '600', color: colors.ink },
-});
+  askText: { fontSize: 13, fontWeight: '600', color: palette.ink },
+  });
+}

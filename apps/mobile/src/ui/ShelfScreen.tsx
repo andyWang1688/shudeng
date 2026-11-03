@@ -111,11 +111,6 @@ export function ShelfScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <View style={styles.brandRow}>
-          <SymbolView name="lightbulb" size={25} tintColor={palette.ink} />
-          <Text style={styles.brand}>书灯</Text>
-          <Text style={styles.brandTag}>一盏照书的灯</Text>
-        </View>
         <View style={styles.titleRow}>
           <Text style={styles.title}>书架</Text>
           <Pressable
@@ -125,11 +120,11 @@ export function ShelfScreen() {
             disabled={importing}
             style={({ pressed }) => [styles.importButton, (pressed || importing) && styles.pressed]}
           >
-            {importing ? <ActivityIndicator color={palette.ink} size="small" /> : <SymbolView name="plus" size={21} tintColor={palette.ink} />}
+            {importing ? <ActivityIndicator color={palette.paper} size="small" /> : <SymbolView name="plus" size={22} tintColor={palette.paper} />}
           </Pressable>
         </View>
         <View style={styles.search}>
-          <SymbolView name="magnifyingglass" size={17} tintColor={palette.ink3} />
+          <SymbolView name="magnifyingglass" size={21} tintColor={palette.ink2} />
           <TextInput
             value={query}
             onChangeText={setQuery}
@@ -157,34 +152,38 @@ export function ShelfScreen() {
         ) : (
           <>
             {continueBook ? (
-              <View style={styles.sectionBlock}>
-                <Text style={styles.sectionTitle}>继续阅读</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`继续阅读${continueBook.title}`}
-                  onPress={() => openBook(continueBook)}
-                  style={({ pressed }) => [styles.continueCard, pressed && styles.pressed]}
-                >
-                  <View style={[styles.continueCover, { backgroundColor: coverColor(continueBook.id) }]}>
-                    <View style={styles.coverInset} />
-                    <Text style={styles.continueCoverTitle} numberOfLines={2}>{continueBook.title}</Text>
-                    <View style={styles.coverRule} />
-                    <Text style={styles.continueCoverAuthor} numberOfLines={1}>{continueBook.author ?? '作者未知'}</Text>
-                  </View>
-                  <View style={styles.continueMeta}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`继续阅读${continueBook.title}`}
+                onPress={() => openBook(continueBook)}
+                style={({ pressed }) => [styles.continueCard, pressed && styles.pressed]}
+              >
+                <View style={[styles.continueCover, { backgroundColor: coverColor(continueBook.id) }]}>
+                  <View style={styles.coverInset} />
+                  <Text style={styles.continueCoverTitle} numberOfLines={2}>{continueBook.title}</Text>
+                  <View style={styles.coverRule} />
+                  <Text style={styles.continueCoverAuthor} numberOfLines={1}>{continueBook.author ?? '作者未知'}</Text>
+                </View>
+                <View style={styles.continueMeta}>
+                  <View>
+                    <Text style={styles.continueEyebrow}>继续阅读</Text>
                     <Text style={styles.continueTitle} numberOfLines={2}>{continueBook.title}</Text>
                     <Text style={styles.continueAuthor} numberOfLines={1}>{continueBook.author ?? '作者未知'}</Text>
-                    <Text style={styles.continueDetail} numberOfLines={1}>{continueDetail}</Text>
+                  </View>
+                  <View>
                     <View style={styles.progressLine}>
                       <View style={[styles.progressFill, { width: `${Math.max(3, continueBook.progressPercent ?? 0)}%` }]} />
                     </View>
                     <View style={styles.continueFooter}>
-                      <Text style={styles.continueLabel}>接着读</Text>
-                      <View style={styles.arrowCircle}><SymbolView name="arrow.right" size={12} tintColor={palette.paper} /></View>
+                      <View style={styles.continueAction}>
+                        <Text style={styles.continueLabel}>接着读</Text>
+                        <SymbolView name="arrow.right" size={13} tintColor={palette.lampInk} />
+                      </View>
+                      <Text style={styles.continueDetail} numberOfLines={1}>{continueDetail}</Text>
                     </View>
                   </View>
-                </Pressable>
-              </View>
+                </View>
+              </Pressable>
             ) : null}
 
             <View style={styles.sectionRow}>
@@ -215,6 +214,7 @@ export function ShelfScreen() {
                       <Text style={styles.gridCoverTitle} numberOfLines={3}>{book.title}</Text>
                       <View style={styles.coverRule} />
                       <Text style={styles.gridCoverAuthor} numberOfLines={1}>{book.author ?? '作者未知'}</Text>
+                      <View style={styles.coverDot} />
                     </View>
                     <Text style={styles.gridTitle} numberOfLines={1}>{book.title}</Text>
                     <Text style={styles.gridAuthor} numberOfLines={1}>{book.author ?? '作者未知'}</Text>
@@ -238,16 +238,13 @@ function createStyles(palette: Palette) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: palette.paper },
     scroll: { flex: 1 },
-    content: { paddingHorizontal: spacing.screen, paddingTop: 13 },
-    brandRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 25 },
-    brand: { fontSize: type.brand, fontWeight: '600', color: palette.ink },
-    brandTag: { marginLeft: 'auto', fontSize: type.caption, color: palette.ink2 },
-    titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
+    content: { paddingHorizontal: spacing.screen, paddingTop: 4 },
+    titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 0 },
     title: { fontSize: type.title, fontWeight: '700', color: palette.ink },
-    importButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: palette.paperDeep, alignItems: 'center', justifyContent: 'center' },
+    importButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: palette.ink, alignItems: 'center', justifyContent: 'center' },
     pressed: { opacity: 0.72 },
-    search: { flexDirection: 'row', alignItems: 'center', height: 44, borderRadius: radius.field, backgroundColor: palette.paperDeep, paddingHorizontal: 12, marginTop: 12, gap: 8 },
-    searchInput: { flex: 1, fontSize: type.body, color: palette.ink, padding: 0 },
+    search: { flexDirection: 'row', alignItems: 'center', height: 56, borderRadius: 28, borderWidth: 1, borderColor: palette.line, backgroundColor: 'transparent', paddingHorizontal: 18, marginTop: 22, marginHorizontal: 8, gap: 10 },
+    searchInput: { flex: 1, fontSize: 17, color: palette.ink, padding: 0 },
     notice: { fontSize: type.caption, color: palette.ink2, marginTop: 8 },
     error: { fontSize: type.caption, color: palette.error, marginTop: 8 },
     center: { paddingVertical: 80, alignItems: 'center', gap: 8 },
@@ -256,34 +253,35 @@ function createStyles(palette: Palette) {
     emptyTitle: { marginTop: 20, fontSize: 24, fontFamily: font.serif, fontWeight: '600', color: palette.ink },
     primaryButton: { marginTop: 24, width: 168, height: 44, borderRadius: 12, backgroundColor: palette.ink, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
     primaryText: { color: palette.paper, fontSize: 14, fontWeight: '500' },
-    sectionBlock: { marginTop: 22 },
     sectionTitle: { fontSize: type.section, fontWeight: '600', color: palette.ink },
-    continueCard: { flexDirection: 'row', marginTop: 12, padding: 17, borderRadius: radius.card, backgroundColor: palette.paperDeep },
-    continueCover: { width: 82, height: 116, borderRadius: radius.cover, padding: 10, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
-    coverInset: { position: 'absolute', top: 6, left: 6, right: 6, bottom: 6, borderWidth: 1, borderColor: 'rgba(40,43,38,0.18)', borderRadius: 2 },
+    continueCard: { flexDirection: 'row', marginTop: 28, padding: 12, minHeight: 124, borderRadius: radius.card, backgroundColor: palette.paperDeep },
+    continueCover: { width: 64, height: 90, borderRadius: radius.cover, padding: 7, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
+    coverInset: { position: 'absolute', top: 5, left: 5, right: 5, bottom: 5, borderWidth: 1, borderColor: 'rgba(40,43,38,0.18)', borderRadius: 2 },
+    coverDot: { position: 'absolute', bottom: 9, width: 4, height: 4, borderRadius: 2, backgroundColor: 'rgba(40,43,38,0.32)' },
     coverRule: { width: 14, height: 1, marginTop: 7, backgroundColor: 'rgba(40,43,38,0.4)' },
-    continueCoverTitle: { fontFamily: font.serif, fontSize: 16, lineHeight: 21, fontWeight: '600', color: '#282B26', textAlign: 'center' },
-    continueCoverAuthor: { marginTop: 7, fontSize: 8, fontWeight: '500', color: 'rgba(40,43,38,0.78)' },
-    continueMeta: { flex: 1, marginLeft: 17, justifyContent: 'space-between' },
-    continueTitle: { fontFamily: font.serif, fontSize: type.bookTitle, fontWeight: '600', color: palette.ink },
+    continueCoverTitle: { fontFamily: font.serif, fontSize: 11, lineHeight: 15, fontWeight: '600', color: '#282B26', textAlign: 'center' },
+    continueCoverAuthor: { marginTop: 5, fontSize: 6.5, fontWeight: '500', color: 'rgba(40,43,38,0.78)' },
+    continueMeta: { flex: 1, marginLeft: 12, justifyContent: 'space-between' },
+    continueEyebrow: { fontSize: type.caption, fontWeight: '600', color: palette.lampInk },
+    continueTitle: { marginTop: 2, fontFamily: font.serif, fontSize: type.bookTitle, fontWeight: '600', color: palette.ink },
     continueAuthor: { marginTop: 2, fontSize: type.caption, color: palette.ink3 },
-    continueDetail: { marginTop: 5, fontSize: type.captionSmall, color: palette.ink3 },
-    progressLine: { height: 2, borderRadius: 1, backgroundColor: palette.line, marginTop: 8, overflow: 'hidden' },
-    progressFill: { height: 2, borderRadius: 1, backgroundColor: palette.lampInk },
-    continueFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
-    continueLabel: { fontSize: type.subhead, fontWeight: '500', color: palette.lampInk },
-    arrowCircle: { width: 27, height: 27, borderRadius: 13.5, backgroundColor: palette.ink, alignItems: 'center', justifyContent: 'center' },
-    sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 24, marginBottom: 12, minHeight: 44 },
+    continueDetail: { marginLeft: 8, fontSize: type.captionSmall, color: palette.ink3 },
+    progressLine: { height: 1, backgroundColor: palette.line, marginTop: 8, overflow: 'hidden' },
+    progressFill: { height: 1, backgroundColor: palette.lampInk },
+    continueFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
+    continueAction: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    continueLabel: { fontSize: 15, fontWeight: '500', color: palette.lampInk },
+    sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 26, marginBottom: 0, minHeight: 44 },
     sectionIdentity: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
     sortControl: { flexDirection: 'row', alignItems: 'center', gap: 3 },
     sortText: { fontSize: type.footnote, color: palette.ink2 },
     count: { fontSize: type.captionSmall, color: palette.ink3 },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 22 },
+    grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 24 },
     gridCard: { gap: 0 },
     gridCover: { borderRadius: radius.cover, padding: 12, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
     gridCoverTitle: { fontFamily: font.serif, fontSize: 19, lineHeight: 25, fontWeight: '600', color: '#282B26', textAlign: 'center' },
     gridCoverAuthor: { marginTop: 7, fontSize: 8, fontWeight: '500', color: 'rgba(40,43,38,0.78)' },
-    gridTitle: { fontFamily: font.serif, fontSize: 14, lineHeight: 19, fontWeight: '600', color: palette.ink, marginTop: 8 },
+    gridTitle: { fontFamily: font.serif, fontSize: 17, lineHeight: 23, fontWeight: '600', color: palette.ink, marginTop: 8 },
     gridAuthor: { fontSize: type.captionSmall, color: palette.ink3, marginTop: 2 },
     gridProgress: { fontSize: type.captionSmall, color: palette.ink3, marginTop: 3 },
     gridProgressOn: { color: palette.lampInk },

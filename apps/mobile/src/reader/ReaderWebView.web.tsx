@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { colors } from '../ui/theme';
+import { usePalette, type Palette } from '../ui/theme';
 import { readerFixtures } from './readerFixtures';
 import { readerWebHtml } from './readerWebHtml';
 import {
@@ -36,6 +36,8 @@ type SelectionState = {
  * react-native-webview 不支持 Web，iframe 能真实运行阅读器并验证协议/选字坐标。
  */
 export function ReaderWebView({ bookId, initialAnnotations, selectionBar = true, onEvent }: ReaderWebViewProps) {
+  const palette = usePalette();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const format = useMemo(() => (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub'), [bookId]);
@@ -129,7 +131,7 @@ export function ReaderWebView({ bookId, initialAnnotations, selectionBar = true,
         title="书灯阅读器"
         srcDoc={readerWebHtml}
         onLoad={injectOpen}
-        style={iframeStyle}
+        style={{ ...iframeStyle, backgroundColor: palette.paper }}
       />
       {selection && selectionBar ? (
         <ReaderSelectionBar
@@ -146,9 +148,10 @@ const iframeStyle = {
   borderWidth: 0,
   width: '100%',
   height: '100%',
-  backgroundColor: colors.paper,
 } satisfies CSSProperties;
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.paper },
-});
+function makeStyles(palette: Palette) {
+  return StyleSheet.create({
+  container: { flex: 1, backgroundColor: palette.paper },
+  });
+}

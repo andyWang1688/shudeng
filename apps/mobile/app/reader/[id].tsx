@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useColorScheme,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,7 +27,7 @@ import {
   type ShelfAnnotation,
   type StoredReaderLocator,
 } from '../../src/platform/library';
-import { colors, radius, spacing } from '../../src/ui/theme';
+import { radius, spacing, usePalette, type Palette } from '../../src/ui/theme';
 
 const KIND_LABEL: Record<ShelfAnnotation['kind'], string> = {
   highlight: '高亮',
@@ -71,6 +72,9 @@ export default function ReaderRoute() {
   const params = useLocalSearchParams<{ id?: string | string[]; locator?: string | string[] }>();
   const router = useRouter();
   const navigation = useNavigation();
+  const palette = usePalette();
+  const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const rawId = params.id;
   const bookId = Array.isArray(rawId) ? (rawId[0] ?? '') : (rawId ?? '');
   const [book, setBook] = useState<BookRow | null>(null);
@@ -202,6 +206,7 @@ export default function ReaderRoute() {
       pathname: '/book-chat',
       params: {
         bookId,
+        theme: scheme,
         ...(book ? { bookTitle: book.title } : {}),
         ...(selectionQuote ? { selectionQuote } : {}),
         locator: JSON.stringify({ type: 'pdf', page: pdfLatestPage.current }),
@@ -222,7 +227,7 @@ export default function ReaderRoute() {
   if (!checked) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={colors.lamp} />
+        <ActivityIndicator color={palette.lamp} />
         <Text style={styles.hint}>打开书籍…</Text>
       </View>
     );
@@ -342,36 +347,38 @@ function undefineProgressLocation(progress: BookProgress | null): string | null 
   return progress.locator.cfi.length > 0 ? progress.locator.cfi : null;
 }
 
-const styles = StyleSheet.create({
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: colors.paper, padding: spacing.lg },
-  hint: { fontSize: 13, color: colors.ink3 },
-  safeArea: { flex: 1, backgroundColor: colors.paper },
-  errorToolbar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
-  back: { fontSize: 15, color: colors.lamp },
-  errorTitle: { fontSize: 16, fontWeight: '600', color: colors.ink },
-  errorDetail: { fontSize: 13, lineHeight: 20, color: colors.ink2, textAlign: 'center' },
-  errorButton: { marginTop: spacing.sm, borderRadius: radius.field, backgroundColor: colors.paperDeep, paddingHorizontal: spacing.lg, paddingVertical: 10 },
-  errorButtonText: { fontSize: 13, fontWeight: '600', color: colors.ink },
-  pdfContainer: { flex: 1, backgroundColor: colors.paper },
+function makeStyles(palette: Palette) {
+  return StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: palette.paper, padding: spacing.lg },
+  hint: { fontSize: 13, color: palette.ink3 },
+  safeArea: { flex: 1, backgroundColor: palette.paper },
+  errorToolbar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line },
+  back: { fontSize: 15, color: palette.lamp },
+  errorTitle: { fontSize: 16, fontWeight: '600', color: palette.ink },
+  errorDetail: { fontSize: 13, lineHeight: 20, color: palette.ink2, textAlign: 'center' },
+  errorButton: { marginTop: spacing.sm, borderRadius: radius.field, backgroundColor: palette.paperDeep, paddingHorizontal: spacing.lg, paddingVertical: 10 },
+  errorButtonText: { fontSize: 13, fontWeight: '600', color: palette.ink },
+  pdfContainer: { flex: 1, backgroundColor: palette.paper },
   pdfActions: { position: 'absolute', right: spacing.sm, bottom: 28, flexDirection: 'row', gap: 6 },
-  pdfActionButton: { borderRadius: 18, backgroundColor: 'rgba(255,253,248,0.94)', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, paddingHorizontal: 12, paddingVertical: 8 },
-  pdfActionText: { fontSize: 12, fontWeight: '600', color: colors.ink },
-  pdfAskButton: { backgroundColor: colors.lamp },
-  pdfAskText: { fontSize: 12, fontWeight: '600', color: colors.ink },
+  pdfActionButton: { borderRadius: 18, backgroundColor: 'rgba(255,253,248,0.94)', borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, paddingHorizontal: 12, paddingVertical: 8 },
+  pdfActionText: { fontSize: 12, fontWeight: '600', color: palette.ink },
+  pdfAskButton: { backgroundColor: palette.lamp },
+  pdfAskText: { fontSize: 12, fontWeight: '600', color: palette.ink },
   pdfToast: { position: 'absolute', alignSelf: 'center', top: 86, borderRadius: 12, backgroundColor: 'rgba(36,33,28,0.82)', color: '#FFFDF8', fontSize: 12, paddingHorizontal: 12, paddingVertical: 6, overflow: 'hidden', zIndex: 20 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.28)', justifyContent: 'flex-end' },
-  panel: { maxHeight: '72%', backgroundColor: colors.paper, borderTopLeftRadius: radius.card, borderTopRightRadius: radius.card },
-  panelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
-  panelTitle: { fontSize: 16, fontWeight: '600', color: colors.ink },
-  panelClose: { fontSize: 14, color: colors.lamp },
+  panel: { maxHeight: '72%', backgroundColor: palette.paper, borderTopLeftRadius: radius.card, borderTopRightRadius: radius.card },
+  panelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line },
+  panelTitle: { fontSize: 16, fontWeight: '600', color: palette.ink },
+  panelClose: { fontSize: 14, color: palette.lamp },
   panelScroll: { flexGrow: 0 },
   panelContent: { padding: spacing.md, gap: spacing.sm },
-  panelEmpty: { fontSize: 13, lineHeight: 20, color: colors.ink3, paddingVertical: spacing.lg },
-  annotationRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.field, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, padding: spacing.sm },
+  panelEmpty: { fontSize: 13, lineHeight: 20, color: palette.ink3, paddingVertical: spacing.lg },
+  annotationRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.field, backgroundColor: palette.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, padding: spacing.sm },
   annotationMain: { flex: 1 },
-  annotationKind: { fontSize: 11, fontWeight: '600', color: colors.ink2 },
-  annotationQuote: { marginTop: 4, fontSize: 13, lineHeight: 19, color: colors.ink },
-  annotationBody: { marginTop: 3, fontSize: 12, lineHeight: 18, color: colors.ink2 },
+  annotationKind: { fontSize: 11, fontWeight: '600', color: palette.ink2 },
+  annotationQuote: { marginTop: 4, fontSize: 13, lineHeight: 19, color: palette.ink },
+  annotationBody: { marginTop: 3, fontSize: 12, lineHeight: 18, color: palette.ink2 },
   annotationDelete: { paddingHorizontal: 8, paddingVertical: 6 },
-  annotationDeleteText: { fontSize: 12, color: '#A63A2B' },
-});
+  annotationDeleteText: { fontSize: 12, color: palette.danger },
+  });
+}
