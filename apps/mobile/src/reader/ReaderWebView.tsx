@@ -92,11 +92,40 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
         }, true);
       }
       attach(document);
-      setInterval(function () {
+      function attachFrames() {
         document.querySelectorAll('iframe').forEach(function (frame) {
-          try { attach(frame.contentDocument); } catch (e) {}
+          if (frame.__readerBridge) return;
+          frame.__readerBridge = true;
+          function bind() {
+            try { attach(frame.contentDocument); } catch (e) {}
+          }
+          bind();
+          frame.addEventListener('load', bind);
         });
-      }, 400);
+      }
+      var pending = false;
+      function scheduleAttach() {
+        if (pending) return;
+        pending = true;
+        var next = window.requestAnimationFrame || function (cb) { setTimeout(cb, 16); };
+        next(function () { pending = false; attachFrames(); });
+      }
+      attachFrames();
+      if (typeof MutationObserver === 'function') {
+        // 翻页可能新增 iframe：只在新增节点包含 iframe 时重绑，替代 400ms 轮询。
+        new MutationObserver(function (records) {
+          for (var i = 0; i < records.length; i++) {
+            var added = records[i].addedNodes;
+            for (var j = 0; j < added.length; j++) {
+              var node = added[j];
+              if (node.nodeType === 1 && (node.tagName === 'IFRAME' || (node.querySelector && node.querySelector('iframe')))) {
+                scheduleAttach();
+                return;
+              }
+            }
+          }
+        }).observe(document.documentElement, { childList: true, subtree: true });
+      }
     })();
   `, []);
 

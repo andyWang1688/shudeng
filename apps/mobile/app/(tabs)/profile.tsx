@@ -3,9 +3,8 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { loadAIConfig, type AIConfig } from '../src/platform/aiConfig';
-import { BottomBar } from '../src/ui/BottomBar';
-import { spacing, type, usePalette, type Palette } from '../src/ui/theme';
+import { loadAIConfig, type AIConfig } from '../../src/platform/aiConfig';
+import { spacing, type, usePalette, type Palette } from '../../src/ui/theme';
 
 const PROVIDER_LABEL: Record<AIConfig['provider'], string> = {
   deepseek: 'DeepSeek',
@@ -80,7 +79,6 @@ export default function ProfileRoute() {
         </View>
         <Text style={styles.footer}>书灯 {APP_VERSION} · 读得慢一点，也想得明白一点</Text>
       </ScrollView>
-      <BottomBar active="profile" />
     </SafeAreaView>
   );
 }

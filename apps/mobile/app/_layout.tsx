@@ -22,11 +22,8 @@ export default function RootLayout() {
           animation: 'slide_from_right',
         }}
       >
-        {/* 根四栏是底部 Tab 语义：切换时不要 push 动画。 */}
-        <Stack.Screen name="index" options={{ animation: 'none' }} />
-        <Stack.Screen name="notes" options={{ animation: 'none' }} />
-        <Stack.Screen name="conversations" options={{ animation: 'none' }} />
-        <Stack.Screen name="profile" options={{ animation: 'none' }} />
+        {/* 根四栏是 Expo Router Tabs；自定义 tabBar 保留各 Tab 状态。 */}
+        <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
         <Stack.Screen name="ai-settings" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="reader/index" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="reader/[id]" options={{ animation: 'slide_from_right' }} />

@@ -2,13 +2,13 @@ import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
   useWindowDimensions,
+  type ListRenderItemInfo,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -21,11 +21,17 @@ import {
   migrateLegacyLibraryIfNeeded,
   type ShelfBookRecord,
 } from '../platform/library';
-import { bookCoverTone, font, radius, searchFieldChrome, searchFieldIconColor, searchFieldPlaceholderColor, searchFieldTextColor, spacing, type, usePalette, type Palette } from './theme';
-import { BottomBar } from './BottomBar';
+import { BookCover } from './components/BookCover';
+import { EmptyState } from './components/EmptyState';
+import { PageHeader } from './components/PageHeader';
+import { SearchField } from './components/SearchField';
+import { SectionHeader } from './components/SectionHeader';
+import { useHaptics } from './components/useHaptics';
+import { radius, spacing, type as typeScale, usePalette, type Palette } from './theme';
 
 export function ShelfScreen() {
   const router = useRouter();
+  const haptics = useHaptics();
   const { width } = useWindowDimensions();
   const palette = usePalette();
   const styles = useMemo(() => createStyles(palette), [palette]);
@@ -76,6 +82,7 @@ export function ShelfScreen() {
       const result = await importBookFromPicker();
       if (result.status === 'imported') {
         setNotice(`已导入《${result.book.title}》`);
+        haptics('success');
         await load();
       }
     } catch (cause) {
@@ -86,6 +93,7 @@ export function ShelfScreen() {
   };
 
   const openBook = (book: ShelfBookRecord) => {
+    haptics();
     router.push({ pathname: '/reader/[id]', params: { id: book.id } });
   };
 
@@ -99,133 +107,109 @@ export function ShelfScreen() {
   const continueDetail = continueBook
     ? `${continueBook.progressChapter ? `${continueBook.progressChapter.split(' · ')[0]} · ` : ''}${continueBook.progressLabel}${continueBook.progressPercent !== null && continueBook.format === 'PDF' ? ` · ${continueBook.progressPercent}%` : ''}`
     : '';
-  const continueTone = continueBook ? bookCoverTone(continueBook.title, continueBook.format) : null;
+
+  const renderBook = useCallback(({ item: book }: ListRenderItemInfo<ShelfBookRecord>) => (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`打开${book.title}`}
+      onPress={() => openBook(book)}
+      onLongPress={() => askDelete(book)}
+      android_ripple={{ color: palette.line }}
+      style={({ pressed }) => [styles.bookCard, { width: cardWidth }, pressed && styles.pressed]}
+    >
+      <BookCover title={book.title} author={book.author} format={book.format} width={cardWidth} height={cardWidth * 1.4} showDot />
+      <Text style={styles.bookTitle} numberOfLines={1}>{book.title}</Text>
+      <Text style={styles.bookAuthor} numberOfLines={1}>{book.author ?? '作者未知'}</Text>
+      <Text style={[styles.bookProgress, (book.progressPercent ?? 0) > 0 && styles.bookProgressOn]}>
+        {book.progressPercent === null ? '未开始' : `已读 ${book.progressPercent}%`}
+      </Text>
+    </Pressable>
+  ), [cardWidth, palette.line, styles, openBook, askDelete]);
+
+  const listHeader = (
+    <View>
+      <PageHeader
+        title="书架"
+        action={{ symbol: 'plus', label: '导入书籍', onPress: () => void handleImport(), busy: importing, variant: 'solid' }}
+      />
+      <SearchField value={query} onChangeText={setQuery} placeholder="书名或作者" style={styles.search} />
+      {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {continueBook ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`继续阅读${continueBook.title}`}
+          onPress={() => openBook(continueBook)}
+          android_ripple={{ color: palette.line }}
+          style={({ pressed }) => [styles.continueCard, pressed && styles.pressed]}
+        >
+          <BookCover title={continueBook.title} author={continueBook.author} format={continueBook.format} width={64} height={90} compact />
+          <View style={styles.continueMeta}>
+            <View>
+              <Text style={styles.continueEyebrow}>继续阅读</Text>
+              <Text style={styles.continueTitle} numberOfLines={2}>{continueBook.title}</Text>
+              <Text style={styles.continueAuthor} numberOfLines={1}>{continueBook.author ?? '作者未知'}</Text>
+            </View>
+            <View>
+              <View style={styles.progressLine}>
+                <View style={[styles.progressFill, { width: `${Math.max(3, continueBook.progressPercent ?? 0)}%` }]} />
+              </View>
+              <View style={styles.continueFooter}>
+                <View style={styles.continueAction}>
+                  <Text style={styles.continueLabel}>接着读</Text>
+                  <SymbolView name="arrow.right" size={13} tintColor={palette.lampInk} />
+                </View>
+                <Text style={styles.continueDetail} numberOfLines={1}>{continueDetail}</Text>
+              </View>
+            </View>
+          </View>
+        </Pressable>
+      ) : null}
+      {books.length > 0 ? (
+        <SectionHeader
+          title="我的书籍"
+          count={String(filtered.length)}
+          trailing={(
+            <View style={styles.sortControl}>
+              <Text style={styles.sortText}>最近阅读</Text>
+              <SymbolView name="chevron.down" size={10} tintColor={palette.ink2} />
+            </View>
+          )}
+        />
+      ) : null}
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <View style={styles.titleRow}>
-          <Text style={styles.title}>书架</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="导入书籍"
-            onPress={() => void handleImport()}
-            disabled={importing}
-            style={({ pressed }) => [styles.importButton, (pressed || importing) && styles.pressed]}
-          >
-            {importing ? <ActivityIndicator color={palette.paper} size="small" /> : <SymbolView name="plus" size={22} tintColor={palette.paper} />}
-          </Pressable>
-        </View>
-        <View style={styles.search}>
-          <SymbolView name="magnifyingglass" size={24} tintColor={searchFieldIconColor(palette)} />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="书名或作者"
-            placeholderTextColor={searchFieldPlaceholderColor(palette)}
-            style={styles.searchInput}
-            returnKeyType="search"
-          />
-        </View>
-
-        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        {loading ? (
-          <View style={styles.center}><ActivityIndicator color={palette.lamp} /><Text style={styles.hint}>正在打开书库…</Text></View>
-        ) : books.length === 0 ? (
-          <View style={styles.empty}>
-            <SymbolView name="lightbulb" size={44} tintColor={palette.lamp} />
-            <Text style={styles.emptyTitle}>书库还是空的</Text>
-            <Text style={styles.hint}>导入 EPUB 或 PDF，开始阅读。</Text>
-            <Pressable accessibilityRole="button" onPress={() => void handleImport()} style={styles.primaryButton}>
-              <SymbolView name="plus" size={15} tintColor={palette.paper} />
-              <Text style={styles.primaryText}>导入书籍</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <>
-            {continueBook ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`继续阅读${continueBook.title}`}
-                onPress={() => openBook(continueBook)}
-                style={({ pressed }) => [styles.continueCard, pressed && styles.pressed]}
-              >
-                <View style={[styles.continueCover, { backgroundColor: continueTone?.background }]}>
-                  <View style={[styles.coverInset, { borderColor: continueTone?.rule }]} />
-                  <Text style={[styles.continueCoverTitle, { color: continueTone?.ink }]} numberOfLines={2}>{continueBook.title}</Text>
-                  <View style={[styles.coverRule, { backgroundColor: continueTone?.rule }]} />
-                  <Text style={[styles.continueCoverAuthor, { color: continueTone?.ink }]} numberOfLines={1}>{continueBook.author ?? '作者未知'}</Text>
-                </View>
-                <View style={styles.continueMeta}>
-                  <View>
-                    <Text style={styles.continueEyebrow}>继续阅读</Text>
-                    <Text style={styles.continueTitle} numberOfLines={2}>{continueBook.title}</Text>
-                    <Text style={styles.continueAuthor} numberOfLines={1}>{continueBook.author ?? '作者未知'}</Text>
-                  </View>
-                  <View>
-                    <View style={styles.progressLine}>
-                      <View style={[styles.progressFill, { width: `${Math.max(3, continueBook.progressPercent ?? 0)}%` }]} />
-                    </View>
-                    <View style={styles.continueFooter}>
-                      <View style={styles.continueAction}>
-                        <Text style={styles.continueLabel}>接着读</Text>
-                        <SymbolView name="arrow.right" size={13} tintColor={palette.lampInk} />
-                      </View>
-                      <Text style={styles.continueDetail} numberOfLines={1}>{continueDetail}</Text>
-                    </View>
-                  </View>
-                </View>
-              </Pressable>
-            ) : null}
-
-            <View style={styles.sectionRow}>
-              <View style={styles.sectionIdentity}>
-                <Text style={styles.sectionTitle}>我的书籍</Text>
-                <Text style={styles.count}>{filtered.length}</Text>
-              </View>
-              <View style={styles.sortControl}>
-                <Text style={styles.sortText}>最近阅读</Text>
-                <SymbolView name="chevron.down" size={10} tintColor={palette.ink2} />
-              </View>
-            </View>
-            {filtered.length === 0 ? (
-              <View style={styles.center}><Text style={styles.emptyTitle}>没有找到相关书籍</Text><Text style={styles.hint}>换个书名或作者试试。</Text></View>
+      <FlatList
+        data={loading ? [] : filtered}
+        keyExtractor={(book) => book.id}
+        renderItem={renderBook}
+        numColumns={2}
+        columnWrapperStyle={styles.gridRow}
+        contentContainerStyle={styles.content}
+        ListHeaderComponent={listHeader}
+        ListEmptyComponent={(
+          <View style={styles.emptyWrap}>
+            {loading ? (
+              <ActivityIndicator color={palette.lamp} />
+            ) : books.length === 0 ? (
+              <EmptyState
+                symbol="lightbulb"
+                title="书库还是空的"
+                description="导入 EPUB 或 PDF，开始阅读。"
+                actionLabel="导入书籍"
+                onAction={() => void handleImport()}
+              />
             ) : (
-              <View style={styles.grid}>
-                {filtered.map((book) => {
-                  const tone = bookCoverTone(book.title, book.format);
-                  return (
-                    <Pressable
-                      key={book.id}
-                      accessibilityRole="button"
-                      accessibilityLabel={`打开${book.title}`}
-                      onPress={() => openBook(book)}
-                      onLongPress={() => askDelete(book)}
-                      style={({ pressed }) => [styles.gridCard, { width: cardWidth }, pressed && styles.pressed]}
-                    >
-                      <View style={[styles.gridCover, { height: cardWidth * 1.4, backgroundColor: tone.background }]}>
-                        <View style={[styles.coverInset, { borderColor: tone.rule }]} />
-                        <Text style={[styles.gridCoverTitle, { color: tone.ink }]} numberOfLines={3}>{book.title}</Text>
-                        <View style={[styles.coverRule, { backgroundColor: tone.rule }]} />
-                        <Text style={[styles.gridCoverAuthor, { color: tone.ink }]} numberOfLines={1}>{book.author ?? '作者未知'}</Text>
-                        <View style={[styles.coverDot, { backgroundColor: tone.ink }]} />
-                      </View>
-                      <Text style={styles.gridTitle} numberOfLines={1}>{book.title}</Text>
-                      <Text style={styles.gridAuthor} numberOfLines={1}>{book.author ?? '作者未知'}</Text>
-                      <Text style={[styles.gridProgress, (book.progressPercent ?? 0) > 0 && styles.gridProgressOn]}>
-                        {book.progressPercent === null ? '未开始' : `已读 ${book.progressPercent}%`}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+              <EmptyState title="没有找到相关书籍" description="换个书名或作者试试。" />
             )}
-          </>
+          </View>
         )}
-        <View style={{ height: 24 }} />
-      </ScrollView>
-      <BottomBar active="shelf" />
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      />
     </SafeAreaView>
   );
 }
@@ -233,53 +217,30 @@ export function ShelfScreen() {
 function createStyles(palette: Palette) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: palette.paper },
-    scroll: { flex: 1 },
-    content: { paddingHorizontal: spacing.screen, paddingTop: 4 },
-    titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 0 },
-    title: { fontSize: type.title, fontWeight: '700', color: palette.ink },
-    importButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: palette.ink, alignItems: 'center', justifyContent: 'center' },
+    content: { paddingHorizontal: spacing.screen, paddingTop: 4, paddingBottom: 24 },
+    search: { marginTop: 22, marginHorizontal: 8 },
+    notice: { marginTop: 8, fontSize: typeScale.caption, color: palette.ink2 },
+    error: { marginTop: 8, fontSize: typeScale.caption, color: palette.error },
+    emptyWrap: { paddingTop: 32, alignItems: 'center' },
+    gridRow: { justifyContent: 'space-between' },
+    bookCard: { marginBottom: 24 },
+    bookTitle: { marginTop: 8, fontFamily: 'Songti SC', fontSize: 17, lineHeight: 23, fontWeight: '600', color: palette.ink },
+    bookAuthor: { marginTop: 2, fontSize: typeScale.captionSmall, color: palette.ink3 },
+    bookProgress: { marginTop: 3, fontSize: typeScale.captionSmall, color: palette.ink3 },
+    bookProgressOn: { color: palette.lampInk },
     pressed: { opacity: 0.72 },
-    search: { ...searchFieldChrome(palette), flexDirection: 'row', alignItems: 'center', height: 56, paddingHorizontal: 18, marginTop: 22, marginHorizontal: 8, gap: 10 },
-    searchInput: { flex: 1, fontSize: 17, color: searchFieldTextColor(palette), padding: 0 },
-    notice: { fontSize: type.caption, color: palette.ink2, marginTop: 8 },
-    error: { fontSize: type.caption, color: palette.error, marginTop: 8 },
-    center: { paddingVertical: 80, alignItems: 'center', gap: 8 },
-    hint: { fontSize: type.caption, color: palette.ink2, textAlign: 'center' },
-    empty: { alignItems: 'center', paddingTop: 64, gap: 0 },
-    emptyTitle: { marginTop: 20, fontSize: 24, fontFamily: font.serif, fontWeight: '600', color: palette.ink },
-    primaryButton: { marginTop: 24, width: 168, height: 44, borderRadius: 12, backgroundColor: palette.ink, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-    primaryText: { color: palette.paper, fontSize: 14, fontWeight: '500' },
-    sectionTitle: { fontSize: type.section, fontWeight: '600', color: palette.ink },
     continueCard: { flexDirection: 'row', marginTop: 28, padding: 12, minHeight: 124, borderRadius: radius.card, backgroundColor: palette.paperDeep },
-    continueCover: { width: 64, height: 90, borderRadius: radius.cover, padding: 7, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
-    coverInset: { position: 'absolute', top: 5, left: 5, right: 5, bottom: 5, borderWidth: 1, borderColor: 'rgba(40,43,38,0.18)', borderRadius: 2 },
-    coverDot: { position: 'absolute', bottom: 9, width: 4, height: 4, borderRadius: 2, backgroundColor: 'rgba(40,43,38,0.32)' },
-    coverRule: { width: 14, height: 1, marginTop: 7, backgroundColor: 'rgba(40,43,38,0.4)' },
-    continueCoverTitle: { fontFamily: font.serif, fontSize: 11, lineHeight: 15, fontWeight: '600', textAlign: 'center' },
-    continueCoverAuthor: { marginTop: 5, fontSize: 6.5, fontWeight: '500', opacity: 0.8 },
     continueMeta: { flex: 1, marginLeft: 12, justifyContent: 'space-between' },
-    continueEyebrow: { fontSize: type.caption, fontWeight: '600', color: palette.lampInk },
-    continueTitle: { marginTop: 2, fontFamily: font.serif, fontSize: type.bookTitle, fontWeight: '600', color: palette.ink },
-    continueAuthor: { marginTop: 2, fontSize: type.caption, color: palette.ink3 },
-    continueDetail: { marginLeft: 8, fontSize: type.captionSmall, color: palette.ink3 },
+    continueEyebrow: { fontSize: typeScale.caption, fontWeight: '600', color: palette.lampInk },
+    continueTitle: { marginTop: 2, fontFamily: 'Songti SC', fontSize: typeScale.bookTitle, fontWeight: '600', color: palette.ink },
+    continueAuthor: { marginTop: 2, fontSize: typeScale.caption, color: palette.ink3 },
     progressLine: { height: 1, backgroundColor: palette.line, marginTop: 8, overflow: 'hidden' },
     progressFill: { height: 1, backgroundColor: palette.lampInk },
     continueFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
     continueAction: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     continueLabel: { fontSize: 15, fontWeight: '500', color: palette.lampInk },
-    sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 26, marginBottom: 0, minHeight: 44 },
-    sectionIdentity: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+    continueDetail: { marginLeft: 8, fontSize: typeScale.captionSmall, color: palette.ink3 },
     sortControl: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-    sortText: { fontSize: type.footnote, color: palette.ink2 },
-    count: { fontSize: type.captionSmall, color: palette.ink3 },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 24 },
-    gridCard: { gap: 0 },
-    gridCover: { borderRadius: radius.cover, padding: 12, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
-    gridCoverTitle: { fontFamily: font.serif, fontSize: 19, lineHeight: 25, fontWeight: '600', textAlign: 'center' },
-    gridCoverAuthor: { marginTop: 7, fontSize: 8, fontWeight: '500', opacity: 0.8 },
-    gridTitle: { fontFamily: font.serif, fontSize: 17, lineHeight: 23, fontWeight: '600', color: palette.ink, marginTop: 8 },
-    gridAuthor: { fontSize: type.captionSmall, color: palette.ink3, marginTop: 2 },
-    gridProgress: { fontSize: type.captionSmall, color: palette.ink3, marginTop: 3 },
-    gridProgressOn: { color: palette.lampInk },
+    sortText: { fontSize: typeScale.footnote, color: palette.ink2 },
   });
 }

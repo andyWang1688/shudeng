@@ -1,42 +1,53 @@
 import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { SymbolView } from 'expo-symbols';
-import { useRouter } from 'expo-router';
-import { spacing, type, usePalette, type Palette } from './theme';
+import { spacing, type as typeScale, usePalette, type Palette } from './theme';
+import { useHaptics } from './components/useHaptics';
 
-export type TabKey = 'shelf' | 'notes' | 'conversations' | 'profile';
+type TabRoute = { readonly key: string; readonly name: string };
+type TabBarProps = {
+  readonly state: { readonly index: number; readonly routes: readonly TabRoute[] };
+  readonly navigateToTab: (routeKey: string) => void;
+};
 
-const TABS: ReadonlyArray<{ key: TabKey; label: string; href: string; symbol: string; selectedSymbol: string }> = [
-  { key: 'shelf', label: '书架', href: '/', symbol: 'books.vertical', selectedSymbol: 'books.vertical.fill' },
-  { key: 'notes', label: '笔记', href: '/notes', symbol: 'square.and.pencil', selectedSymbol: 'square.and.pencil' },
-  { key: 'conversations', label: '对话', href: '/conversations', symbol: 'bubble.left.and.bubble.right', selectedSymbol: 'bubble.left.and.bubble.right.fill' },
-  { key: 'profile', label: '我的', href: '/profile', symbol: 'person.crop.circle', selectedSymbol: 'person.crop.circle.fill' },
-];
+const TAB_META: Record<string, { label: string; symbol: string; selectedSymbol: string }> = {
+  index: { label: '书架', symbol: 'books.vertical', selectedSymbol: 'books.vertical.fill' },
+  notes: { label: '笔记', symbol: 'square.and.pencil', selectedSymbol: 'square.and.pencil' },
+  conversations: { label: '对话', symbol: 'bubble.left.and.bubble.right', selectedSymbol: 'bubble.left.and.bubble.right.fill' },
+  profile: { label: '我的', symbol: 'person.crop.circle', selectedSymbol: 'person.crop.circle.fill' },
+};
 
-export function BottomBar({ active }: { readonly active: TabKey }) {
-  const router = useRouter();
+/** Expo Router Tabs 自定义底栏：navigation.navigate 保留各 Tab 的滚动/列表状态。 */
+export function BottomBar({ state, navigateToTab }: TabBarProps) {
+  const haptics = useHaptics();
   const palette = usePalette();
   const { width } = useWindowDimensions();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const barHeight = width >= 390 ? 83 : 68;
   return (
     <View style={[styles.bar, { height: barHeight }]}>
-      {TABS.map((tab) => {
-        const on = tab.key === active;
+      {state.routes.map((route, index) => {
+        const meta = TAB_META[route.name];
+        if (!meta) return null;
+        const on = state.index === index;
         return (
           <Pressable
-            key={tab.key}
+            key={route.key}
             accessibilityRole="button"
-            accessibilityLabel={tab.label}
+            accessibilityLabel={meta.label}
             accessibilityState={on ? { selected: true } : {}}
-            onPress={() => { if (!on) router.replace(tab.href); }}
-            style={styles.item}
+            onPress={() => {
+              if (on) return;
+              haptics();
+              navigateToTab(route.key);
+            }}
+            style={({ pressed }) => [styles.item, pressed && styles.pressed]}
           >
             <View style={[styles.marker, on && styles.markerOn]} />
             <View style={styles.iconSlot}>
-              <SymbolView name={(on ? tab.selectedSymbol : tab.symbol) as never} size={22} tintColor={on ? palette.ink : palette.ink3} />
+              <SymbolView name={(on ? meta.selectedSymbol : meta.symbol) as never} size={22} tintColor={on ? palette.ink : palette.ink3} />
             </View>
-            <Text style={[styles.label, on && styles.on]}>{tab.label}</Text>
+            <Text style={[styles.label, on && styles.on]}>{meta.label}</Text>
           </Pressable>
         );
       })}
@@ -54,10 +65,11 @@ function createStyles(palette: Palette) {
       paddingHorizontal: 6,
     },
     item: { flex: 1, alignItems: 'center' },
+    pressed: { opacity: 0.7 },
     marker: { marginTop: 8, width: 19, height: 3, borderRadius: 1.5, backgroundColor: 'transparent' },
     markerOn: { backgroundColor: palette.lamp },
     iconSlot: { marginTop: 5, width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
-    label: { marginTop: 3, fontSize: type.captionSmall, lineHeight: 12, fontWeight: '500', color: palette.ink3 },
+    label: { marginTop: 3, fontSize: typeScale.captionSmall, lineHeight: 12, fontWeight: '500', color: palette.ink3 },
     on: { color: palette.ink },
   });
 }
