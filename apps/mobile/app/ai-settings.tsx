@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { radius, spacing, usePalette, type Palette } from '../src/ui/theme';
@@ -14,10 +14,19 @@ const PRESETS: Record<Provider, { label: string; model: string; baseUrl: string 
   anthropic: { label: 'Anthropic', model: 'claude-sonnet-4-5', baseUrl: 'https://api.anthropic.com' },
 };
 
+function buildConfig(provider: Provider, model: string, baseUrl: string, apiKey: string): AIConfig {
+  if (!apiKey.trim()) throw new Error('请填写 API Key');
+  if (!model.trim()) throw new Error('请填写模型名称');
+  if (!baseUrl.trim()) throw new Error('请填写 Base URL');
+  return { provider, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: apiKey.trim() };
+}
+
 export default function AiSettingsRoute() {
   const router = useRouter();
   const palette = usePalette();
   const styles = useMemo(() => createStyles(palette), [palette]);
+  const mountedRef = useRef(true);
+  const testAbortRef = useRef<AbortController | null>(null);
   const [provider, setProvider] = useState<Provider>('deepseek');
   const [model, setModel] = useState(PRESETS.deepseek.model);
   const [baseUrl, setBaseUrl] = useState(PRESETS.deepseek.baseUrl);
@@ -40,6 +49,8 @@ export default function AiSettingsRoute() {
     });
     return () => {
       mounted = false;
+      mountedRef.current = false;
+      testAbortRef.current?.abort();
     };
   }, []);
 
@@ -51,21 +62,62 @@ export default function AiSettingsRoute() {
     if (baseUrl.trim() === previousPreset.baseUrl || baseUrl.trim().length === 0) setBaseUrl(PRESETS[next].baseUrl);
   };
 
-  const save = async () => {
+  const save = async (): Promise<void> => {
+    let config: AIConfig;
     try {
-      if (!apiKey.trim()) throw new Error('请填写 API Key');
-      if (!model.trim()) throw new Error('请填写模型名称');
-      if (!baseUrl.trim()) throw new Error('请填写 Base URL');
-      setTesting(true);
-      setMessage('正在保存并测试连接…');
-      const config = { provider, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: apiKey.trim() } as const;
-      await saveAIConfig(config);
-      const result = await testAIConnection(config);
-      setMessage(result.ok ? `连接成功。${result.message}` : `已保存，但连接失败：${result.message}`);
+      config = buildConfig(provider, model, baseUrl, apiKey);
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : String(cause));
+      const text = cause instanceof Error ? cause.message : String(cause);
+      setMessage(text);
+      Alert.alert('AI 服务', text);
+      return;
+    }
+    const controller = new AbortController();
+    testAbortRef.current?.abort();
+    testAbortRef.current = controller;
+    setTesting(true);
+    setMessage('正在保存并测试连接…');
+    try {
+      await saveAIConfig(config);
+      if (!mountedRef.current) return;
+      if (controller.signal.aborted) {
+        setMessage('已取消连接测试。');
+        return;
+      }
+      const result = await testAIConnection(config, { signal: controller.signal });
+      if (!mountedRef.current) return;
+      if (controller.signal.aborted) {
+        setMessage('已取消连接测试。');
+        return;
+      }
+      const text = result.ok ? `连接成功。${result.message}` : `已保存，但连接失败：${result.message}`;
+      setMessage(text);
+      if (!result.ok) Alert.alert('AI 服务连接失败', text);
+    } catch (cause) {
+      if (mountedRef.current && !controller.signal.aborted) {
+        setMessage(cause instanceof Error ? cause.message : String(cause));
+      }
     } finally {
-      setTesting(false);
+      if (testAbortRef.current === controller) testAbortRef.current = null;
+      if (mountedRef.current) setTesting(false);
+    }
+  };
+
+  const saveOnly = async (): Promise<void> => {
+    let config: AIConfig;
+    try {
+      config = buildConfig(provider, model, baseUrl, apiKey);
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : String(cause);
+      setMessage(text);
+      Alert.alert('AI 服务', text);
+      return;
+    }
+    try {
+      await saveAIConfig(config);
+      if (mountedRef.current) setMessage('已保存。连接测试可稍后再试。');
+    } catch (cause) {
+      if (mountedRef.current) setMessage(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
@@ -106,10 +158,41 @@ export default function AiSettingsRoute() {
           placeholderTextColor={palette.ink3}
           style={styles.input}
         />
-        <Pressable accessibilityRole="button" disabled={testing || !loaded} onPress={() => void save()} style={[styles.button, (testing || !loaded) && styles.disabled]}>
-          {testing ? <ActivityIndicator size="small" color={palette.ink} /> : <Text style={styles.buttonText}>保存并测试连接</Text>}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={testing ? '正在测试连接' : '保存并测试连接'}
+          disabled={testing || !loaded}
+          onPress={() => void save()}
+          style={[styles.button, (testing || !loaded) && styles.disabled]}
+        >
+          {testing ? (
+            <View style={styles.busyRow}>
+              <ActivityIndicator size="small" color={palette.ink} />
+              <Text style={styles.buttonText}>正在测试连接…</Text>
+            </View>
+          ) : (
+            <Text style={styles.buttonText}>保存并测试连接</Text>
+          )}
         </Pressable>
-        {message ? <Text style={[styles.message, message.startsWith('连接成功') && styles.messageOk]}>{message}</Text> : null}
+        {testing ? (
+          <Pressable accessibilityRole="button" onPress={() => testAbortRef.current?.abort()} style={styles.cancelTest}>
+            <Text style={styles.cancelTestText}>取消测试</Text>
+          </Pressable>
+        ) : null}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="只保存，不测试"
+          disabled={testing || !loaded}
+          onPress={() => void saveOnly()}
+          style={[styles.secondaryButton, (testing || !loaded) && styles.disabled]}
+        >
+          <Text style={styles.secondaryText}>只保存，不测试</Text>
+        </Pressable>
+        {message ? (
+          <Text style={[styles.message, (message.startsWith('连接成功') || message.startsWith('已保存。')) && styles.messageOk]}>
+            {message}
+          </Text>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -132,7 +215,12 @@ function createStyles(palette: Palette) {
     input: { borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, borderRadius: radius.field, backgroundColor: palette.surface, paddingHorizontal: 10, paddingVertical: 10, fontSize: 13, color: palette.ink },
     button: { marginTop: spacing.md, backgroundColor: palette.lamp, borderRadius: radius.field, paddingVertical: 12, alignItems: 'center' },
     buttonText: { fontSize: 14, fontWeight: '600', color: palette.ink },
+    busyRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     disabled: { opacity: 0.6 },
+    cancelTest: { alignSelf: 'center', paddingVertical: 8, marginTop: 2 },
+    cancelTestText: { fontSize: 12, color: palette.ink2 },
+    secondaryButton: { marginTop: 2, borderRadius: radius.field, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, backgroundColor: palette.surface, paddingVertical: 11, alignItems: 'center' },
+    secondaryText: { fontSize: 13, color: palette.ink2 },
     message: { fontSize: 12, lineHeight: 18, color: palette.error, marginTop: 8 },
     messageOk: { color: palette.lampInk },
   });

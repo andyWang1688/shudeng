@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { loadAIConfig, type AIConfig } from '../../src/platform/aiConfig';
+import { useAppearance, type AppearanceMode } from '../../src/ui/appearance';
 import { spacing, type, usePalette, type Palette } from '../../src/ui/theme';
 
 const PROVIDER_LABEL: Record<AIConfig['provider'], string> = {
@@ -14,10 +15,17 @@ const PROVIDER_LABEL: Record<AIConfig['provider'], string> = {
 
 const APP_VERSION = '0.4.8';
 
+const APPEARANCE_LABEL: Record<AppearanceMode, string> = {
+  system: '跟随系统',
+  light: '浅色',
+  dark: '深色',
+};
+
 export default function ProfileRoute() {
   const router = useRouter();
   const palette = usePalette();
   const styles = useMemo(() => createStyles(palette), [palette]);
+  const { mode } = useAppearance();
   const [config, setConfig] = useState<AIConfig | null>(null);
 
   useEffect(() => {
@@ -47,16 +55,22 @@ export default function ProfileRoute() {
             <SymbolView name="chevron.right" size={17} tintColor={palette.ink3} />
           </Pressable>
           <View style={styles.separator} />
-          <View style={styles.row}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="外观"
+            accessibilityValue={{ text: APPEARANCE_LABEL[mode] }}
+            onPress={() => router.push('/appearance')}
+            style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+          >
             <View style={styles.iconSlot}>
               <SymbolView name="sun.max" size={20} tintColor={palette.ink2} />
             </View>
             <View style={styles.rowBody}>
               <Text style={styles.rowTitle}>外观</Text>
             </View>
-            <Text style={styles.rowValue}>跟随系统</Text>
+            <Text style={styles.rowValue}>{APPEARANCE_LABEL[mode]}</Text>
             <SymbolView name="chevron.right" size={17} tintColor={palette.ink3} />
-          </View>
+          </Pressable>
         </View>
 
         <Text style={styles.sectionHeader}>关于</Text>
@@ -64,7 +78,7 @@ export default function ProfileRoute() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="关于书灯"
-            onPress={() => Alert.alert('关于书灯', '书灯 · 本地阅读与 AI 助手\n版本 ' + APP_VERSION)}
+            onPress={() => router.push('/about')}
             style={({ pressed }) => [styles.row, pressed && styles.pressed]}
           >
             <View style={styles.iconSlot}>

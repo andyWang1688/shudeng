@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import Pdf, { type PdfRef } from 'react-native-pdf';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAppearance } from '../ui/appearance';
 import { spacing, usePalette, type Palette } from '../ui/theme';
 import { ReaderChrome } from './ReaderChrome';
 
@@ -40,7 +41,8 @@ export function ImportedPdfReader({
   const router = useRouter();
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const isDark = useColorScheme() === 'dark';
+  const { resolvedMode } = useAppearance();
+  const isDark = resolvedMode === 'dark';
   const insets = useSafeAreaInsets();
   const pdfRef = useRef<PdfRef>(null);
   const [totalPages, setTotalPages] = useState(0);

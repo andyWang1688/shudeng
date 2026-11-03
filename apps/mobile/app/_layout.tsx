@@ -1,19 +1,26 @@
 import '../src/shims/installGlobals';
 import { useMemo } from 'react';
-import { useColorScheme } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { darkColors, lightColors } from '../src/ui/theme';
+import { AppearanceProvider, useAppearance } from '../src/ui/appearance';
+import { usePalette } from '../src/ui/theme';
 
 export default function RootLayout() {
-  const scheme = useColorScheme();
-  const dark = scheme === 'dark';
-  const palette = dark ? darkColors : lightColors;
+  return (
+    <AppearanceProvider>
+      <RootLayoutContent />
+    </AppearanceProvider>
+  );
+}
+
+function RootLayoutContent() {
+  const palette = usePalette();
+  const { resolvedMode } = useAppearance();
   const contentStyle = useMemo(() => ({ backgroundColor: palette.paper }), [palette]);
   return (
     <SafeAreaProvider>
-      <StatusBar style={dark ? 'light' : 'dark'} />
+      <StatusBar style={resolvedMode === 'dark' ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
           headerShown: false,
@@ -25,6 +32,8 @@ export default function RootLayout() {
         {/* 根四栏是 Expo Router Tabs；自定义 tabBar 保留各 Tab 状态。 */}
         <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
         <Stack.Screen name="ai-settings" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="appearance" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="about" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="reader/index" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="reader/[id]" options={{ animation: 'slide_from_right' }} />
         {/* 书内问答是浮层：底部上滑，透出下层阅读页。 */}

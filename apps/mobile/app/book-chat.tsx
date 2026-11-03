@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
-import { View, useColorScheme, useWindowDimensions } from 'react-native';
+import { View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useAppearance } from '../src/ui/appearance';
 import { ChatComposer, ChatList, ChatLoadingState, ChatSheet, useBookChat } from '../src/ui/chat';
 import { darkColors, lightColors, type Palette } from '../src/ui/theme';
 
@@ -15,14 +16,14 @@ export default function BookChatRoute() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const systemScheme = useColorScheme();
+  const { resolvedMode } = useAppearance();
   const params = useLocalSearchParams<{
     bookId?: string | string[];
     bookTitle?: string | string[];
     selectionQuote?: string | string[];
     locator?: string | string[];
     initialQuestion?: string | string[];
-    /** 透明 modal 内 useColorScheme 可能读不到下层 scheme；由入口显式传 dark/light。 */
+    /** 入口显式传 dark/light；缺省回退到外观偏好的 resolvedMode。 */
     theme?: string | string[];
   }>();
   const themeParam = paramValue(params.theme);
@@ -31,7 +32,7 @@ export default function BookChatRoute() {
       ? darkColors
       : themeParam === 'light'
         ? lightColors
-        : systemScheme === 'dark'
+        : resolvedMode === 'dark'
           ? darkColors
           : lightColors;
   const bookId = paramValue(params.bookId) ?? '';

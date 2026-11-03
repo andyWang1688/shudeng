@@ -3,6 +3,7 @@
  * `colors` 保留浅色静态导出给旧页面；根四栏用 `usePalette()` 跟随系统深色。
  */
 import { useColorScheme, type ViewStyle } from 'react-native';
+import { useAppearanceMode } from './appearance';
 
 export const lightColors = {
   paper: '#FCFBF8',
@@ -50,8 +51,10 @@ export type Palette = { readonly [K in keyof typeof lightColors]: string };
 export const colors: Palette = lightColors;
 
 export function usePalette(): Palette {
-  const scheme = useColorScheme();
-  return scheme === 'dark' ? darkColors : lightColors;
+  const mode = useAppearanceMode();
+  const systemScheme = useColorScheme();
+  const dark = mode === 'system' ? systemScheme === 'dark' : mode === 'dark';
+  return dark ? darkColors : lightColors;
 }
 
 /** 页面左右边距 24pt（baseline 实测 x=24），底栏总高 81pt（56 + 25 底部留白）。 */

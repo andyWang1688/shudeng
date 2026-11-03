@@ -7,7 +7,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  useColorScheme,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -27,6 +26,7 @@ import {
   type ShelfAnnotation,
   type StoredReaderLocator,
 } from '../../src/platform/library';
+import { useAppearance } from '../../src/ui/appearance';
 import { radius, spacing, usePalette, type Palette } from '../../src/ui/theme';
 
 const KIND_LABEL: Record<ShelfAnnotation['kind'], string> = {
@@ -73,7 +73,7 @@ export default function ReaderRoute() {
   const router = useRouter();
   const navigation = useNavigation();
   const palette = usePalette();
-  const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
+  const { resolvedMode } = useAppearance();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const rawId = params.id;
   const bookId = Array.isArray(rawId) ? (rawId[0] ?? '') : (rawId ?? '');
@@ -206,7 +206,7 @@ export default function ReaderRoute() {
       pathname: '/book-chat',
       params: {
         bookId,
-        theme: scheme,
+        theme: resolvedMode,
         ...(book ? { bookTitle: book.title } : {}),
         ...(selectionQuote ? { selectionQuote } : {}),
         locator: JSON.stringify({ type: 'pdf', page: pdfLatestPage.current }),

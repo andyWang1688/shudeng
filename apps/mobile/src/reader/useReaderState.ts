@@ -3,7 +3,8 @@
  * WebView 重开。只负责数据与副作用，UI 由 ReaderShell/子组件编排。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, useColorScheme } from 'react-native';
+import { Alert } from 'react-native';
+import { useAppearance } from '../ui/appearance';
 import {
   deleteReaderAnnotation,
   loadBookAnnotations,
@@ -36,7 +37,8 @@ export function useReaderState({
   initialAnnotations,
   onAnnotationsChanged,
 }: ReaderStateOptions) {
-  const readerTheme: 'light' | 'dark' = useColorScheme() === 'dark' ? 'dark' : 'light';
+  const { resolvedMode } = useAppearance();
+  const readerTheme: 'light' | 'dark' = resolvedMode;
   const readerRef = useRef<ReaderWebViewHandle>(null);
   const [annotations, setAnnotations] = useState<readonly ShelfAnnotation[]>(initialAnnotations ?? []);
   const [progress, setProgress] = useState(0);
