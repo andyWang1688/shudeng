@@ -21,16 +21,8 @@ import {
   migrateLegacyLibraryIfNeeded,
   type ShelfBookRecord,
 } from '../platform/library';
-import { font, radius, spacing, type, usePalette, type Palette } from './theme';
+import { bookCoverTone, font, radius, searchFieldChrome, searchFieldIconColor, searchFieldPlaceholderColor, searchFieldTextColor, spacing, type, usePalette, type Palette } from './theme';
 import { BottomBar } from './BottomBar';
-
-const COVER_COLORS = ['#E8E5D8', '#4F5A4A', '#DFE3D5', '#E7E1D6', '#D9D2C2', '#6B6257'];
-
-function coverColor(id: string): string {
-  let hash = 0;
-  for (let index = 0; index < id.length; index += 1) hash = (hash * 31 + id.charCodeAt(index)) >>> 0;
-  return COVER_COLORS[hash % COVER_COLORS.length] ?? COVER_COLORS[0]!;
-}
 
 export function ShelfScreen() {
   const router = useRouter();
@@ -107,6 +99,7 @@ export function ShelfScreen() {
   const continueDetail = continueBook
     ? `${continueBook.progressChapter ? `${continueBook.progressChapter.split(' · ')[0]} · ` : ''}${continueBook.progressLabel}`
     : '';
+  const continueTone = continueBook ? bookCoverTone(continueBook.title, continueBook.format) : null;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -124,12 +117,12 @@ export function ShelfScreen() {
           </Pressable>
         </View>
         <View style={styles.search}>
-          <SymbolView name="magnifyingglass" size={21} tintColor={palette.ink2} />
+          <SymbolView name="magnifyingglass" size={24} tintColor={searchFieldIconColor(palette)} />
           <TextInput
             value={query}
             onChangeText={setQuery}
             placeholder="书名或作者"
-            placeholderTextColor={palette.ink3}
+            placeholderTextColor={searchFieldPlaceholderColor(palette)}
             style={styles.searchInput}
             returnKeyType="search"
           />
@@ -158,11 +151,11 @@ export function ShelfScreen() {
                 onPress={() => openBook(continueBook)}
                 style={({ pressed }) => [styles.continueCard, pressed && styles.pressed]}
               >
-                <View style={[styles.continueCover, { backgroundColor: coverColor(continueBook.id) }]}>
-                  <View style={styles.coverInset} />
-                  <Text style={styles.continueCoverTitle} numberOfLines={2}>{continueBook.title}</Text>
-                  <View style={styles.coverRule} />
-                  <Text style={styles.continueCoverAuthor} numberOfLines={1}>{continueBook.author ?? '作者未知'}</Text>
+                <View style={[styles.continueCover, { backgroundColor: continueTone?.background }]}>
+                  <View style={[styles.coverInset, { borderColor: continueTone?.rule }]} />
+                  <Text style={[styles.continueCoverTitle, { color: continueTone?.ink }]} numberOfLines={2}>{continueBook.title}</Text>
+                  <View style={[styles.coverRule, { backgroundColor: continueTone?.rule }]} />
+                  <Text style={[styles.continueCoverAuthor, { color: continueTone?.ink }]} numberOfLines={1}>{continueBook.author ?? '作者未知'}</Text>
                 </View>
                 <View style={styles.continueMeta}>
                   <View>
@@ -200,29 +193,32 @@ export function ShelfScreen() {
               <View style={styles.center}><Text style={styles.emptyTitle}>没有找到相关书籍</Text><Text style={styles.hint}>换个书名或作者试试。</Text></View>
             ) : (
               <View style={styles.grid}>
-                {filtered.map((book) => (
-                  <Pressable
-                    key={book.id}
-                    accessibilityRole="button"
-                    accessibilityLabel={`打开${book.title}`}
-                    onPress={() => openBook(book)}
-                    onLongPress={() => askDelete(book)}
-                    style={({ pressed }) => [styles.gridCard, { width: cardWidth }, pressed && styles.pressed]}
-                  >
-                    <View style={[styles.gridCover, { height: cardWidth * 1.4, backgroundColor: coverColor(book.id) }]}>
-                      <View style={styles.coverInset} />
-                      <Text style={styles.gridCoverTitle} numberOfLines={3}>{book.title}</Text>
-                      <View style={styles.coverRule} />
-                      <Text style={styles.gridCoverAuthor} numberOfLines={1}>{book.author ?? '作者未知'}</Text>
-                      <View style={styles.coverDot} />
-                    </View>
-                    <Text style={styles.gridTitle} numberOfLines={1}>{book.title}</Text>
-                    <Text style={styles.gridAuthor} numberOfLines={1}>{book.author ?? '作者未知'}</Text>
-                    <Text style={[styles.gridProgress, (book.progressPercent ?? 0) > 0 && styles.gridProgressOn]}>
-                      {book.progressPercent === null ? '未开始' : `已读 ${book.progressPercent}%`}
-                    </Text>
-                  </Pressable>
-                ))}
+                {filtered.map((book) => {
+                  const tone = bookCoverTone(book.title, book.format);
+                  return (
+                    <Pressable
+                      key={book.id}
+                      accessibilityRole="button"
+                      accessibilityLabel={`打开${book.title}`}
+                      onPress={() => openBook(book)}
+                      onLongPress={() => askDelete(book)}
+                      style={({ pressed }) => [styles.gridCard, { width: cardWidth }, pressed && styles.pressed]}
+                    >
+                      <View style={[styles.gridCover, { height: cardWidth * 1.4, backgroundColor: tone.background }]}>
+                        <View style={[styles.coverInset, { borderColor: tone.rule }]} />
+                        <Text style={[styles.gridCoverTitle, { color: tone.ink }]} numberOfLines={3}>{book.title}</Text>
+                        <View style={[styles.coverRule, { backgroundColor: tone.rule }]} />
+                        <Text style={[styles.gridCoverAuthor, { color: tone.ink }]} numberOfLines={1}>{book.author ?? '作者未知'}</Text>
+                        <View style={[styles.coverDot, { backgroundColor: tone.ink }]} />
+                      </View>
+                      <Text style={styles.gridTitle} numberOfLines={1}>{book.title}</Text>
+                      <Text style={styles.gridAuthor} numberOfLines={1}>{book.author ?? '作者未知'}</Text>
+                      <Text style={[styles.gridProgress, (book.progressPercent ?? 0) > 0 && styles.gridProgressOn]}>
+                        {book.progressPercent === null ? '未开始' : `已读 ${book.progressPercent}%`}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
               </View>
             )}
           </>
@@ -243,8 +239,8 @@ function createStyles(palette: Palette) {
     title: { fontSize: type.title, fontWeight: '700', color: palette.ink },
     importButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: palette.ink, alignItems: 'center', justifyContent: 'center' },
     pressed: { opacity: 0.72 },
-    search: { flexDirection: 'row', alignItems: 'center', height: 56, borderRadius: 28, borderWidth: 1, borderColor: palette.line, backgroundColor: 'transparent', paddingHorizontal: 18, marginTop: 22, marginHorizontal: 8, gap: 10 },
-    searchInput: { flex: 1, fontSize: 17, color: palette.ink, padding: 0 },
+    search: { ...searchFieldChrome(palette), flexDirection: 'row', alignItems: 'center', height: 56, paddingHorizontal: 18, marginTop: 22, marginHorizontal: 8, gap: 10 },
+    searchInput: { flex: 1, fontSize: 17, color: searchFieldTextColor(palette), padding: 0 },
     notice: { fontSize: type.caption, color: palette.ink2, marginTop: 8 },
     error: { fontSize: type.caption, color: palette.error, marginTop: 8 },
     center: { paddingVertical: 80, alignItems: 'center', gap: 8 },
@@ -259,8 +255,8 @@ function createStyles(palette: Palette) {
     coverInset: { position: 'absolute', top: 5, left: 5, right: 5, bottom: 5, borderWidth: 1, borderColor: 'rgba(40,43,38,0.18)', borderRadius: 2 },
     coverDot: { position: 'absolute', bottom: 9, width: 4, height: 4, borderRadius: 2, backgroundColor: 'rgba(40,43,38,0.32)' },
     coverRule: { width: 14, height: 1, marginTop: 7, backgroundColor: 'rgba(40,43,38,0.4)' },
-    continueCoverTitle: { fontFamily: font.serif, fontSize: 11, lineHeight: 15, fontWeight: '600', color: '#282B26', textAlign: 'center' },
-    continueCoverAuthor: { marginTop: 5, fontSize: 6.5, fontWeight: '500', color: 'rgba(40,43,38,0.78)' },
+    continueCoverTitle: { fontFamily: font.serif, fontSize: 11, lineHeight: 15, fontWeight: '600', textAlign: 'center' },
+    continueCoverAuthor: { marginTop: 5, fontSize: 6.5, fontWeight: '500', opacity: 0.8 },
     continueMeta: { flex: 1, marginLeft: 12, justifyContent: 'space-between' },
     continueEyebrow: { fontSize: type.caption, fontWeight: '600', color: palette.lampInk },
     continueTitle: { marginTop: 2, fontFamily: font.serif, fontSize: type.bookTitle, fontWeight: '600', color: palette.ink },
@@ -279,8 +275,8 @@ function createStyles(palette: Palette) {
     grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 24 },
     gridCard: { gap: 0 },
     gridCover: { borderRadius: radius.cover, padding: 12, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
-    gridCoverTitle: { fontFamily: font.serif, fontSize: 19, lineHeight: 25, fontWeight: '600', color: '#282B26', textAlign: 'center' },
-    gridCoverAuthor: { marginTop: 7, fontSize: 8, fontWeight: '500', color: 'rgba(40,43,38,0.78)' },
+    gridCoverTitle: { fontFamily: font.serif, fontSize: 19, lineHeight: 25, fontWeight: '600', textAlign: 'center' },
+    gridCoverAuthor: { marginTop: 7, fontSize: 8, fontWeight: '500', opacity: 0.8 },
     gridTitle: { fontFamily: font.serif, fontSize: 17, lineHeight: 23, fontWeight: '600', color: palette.ink, marginTop: 8 },
     gridAuthor: { fontSize: type.captionSmall, color: palette.ink3, marginTop: 2 },
     gridProgress: { fontSize: type.captionSmall, color: palette.ink3, marginTop: 3 },

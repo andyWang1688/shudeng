@@ -6,25 +6,16 @@ import { SymbolView } from 'expo-symbols';
 import { loadAllAnnotations, type ShelfAnnotation, type ShelfBookRecord } from '../src/platform/library';
 import { BottomBar } from '../src/ui/BottomBar';
 import { recordTime } from '../src/ui/format';
-import { font, radius, spacing, type, usePalette, type Palette } from '../src/ui/theme';
+import { bookSwatchTone, font, searchFieldChrome, searchFieldIconColor, searchFieldPlaceholderColor, searchFieldTextColor, spacing, type, usePalette, type Palette } from '../src/ui/theme';
 
 type Item = { book: ShelfBookRecord; annotation: ShelfAnnotation };
-const FILTERS = ['全部', '高亮', '笔记', '书签'] as const;
-const COVER_COLORS = ['#E8E5D8', '#4F5A4A', '#DFE3D5', '#E7E1D6', '#D9D2C2', '#6B6257'];
 const KIND_LABEL: Record<ShelfAnnotation['kind'], string> = { highlight: '高亮', note: '笔记', bookmark: '书签' };
-
-function coverColor(id: string): string {
-  let hash = 0;
-  for (let index = 0; index < id.length; index += 1) hash = (hash * 31 + id.charCodeAt(index)) >>> 0;
-  return COVER_COLORS[hash % COVER_COLORS.length] ?? COVER_COLORS[0]!;
-}
 
 export default function NotesRoute() {
   const router = useRouter();
   const palette = usePalette();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const [items, setItems] = useState<readonly Item[]>([]);
-  const [filter, setFilter] = useState<(typeof FILTERS)[number]>('全部');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -37,13 +28,9 @@ export default function NotesRoute() {
     return () => { mounted = false; };
   }, []));
 
-  const kind = filter === '高亮' ? 'highlight' : filter === '笔记' ? 'note' : filter === '书签' ? 'bookmark' : null;
   const needle = query.trim().toLowerCase();
-  const filtered = items.filter(({ book, annotation }) => {
-    if (kind && annotation.kind !== kind) return false;
-    if (!needle) return true;
-    return (`${annotation.quote} ${annotation.body ?? ''} ${book.title} ${annotation.chapter ?? ''}`).toLowerCase().includes(needle);
-  });
+  const filtered = items.filter(({ book, annotation }) => !needle
+    || (`${annotation.quote} ${annotation.body ?? ''} ${book.title} ${annotation.chapter ?? ''}`).toLowerCase().includes(needle));
 
   const groups: Array<{ book: ShelfBookRecord; entries: Item[] }> = [];
   const byBook = new Map<string, { book: ShelfBookRecord; entries: Item[] }>();
@@ -63,21 +50,12 @@ export default function NotesRoute() {
         <View style={styles.titleRow}>
           <Text style={styles.title}>笔记</Text>
           <Pressable accessibilityRole="button" accessibilityLabel="导出笔记" style={styles.shareButton}>
-            <SymbolView name="square.and.arrow.up" size={19} tintColor={palette.ink} />
+            <SymbolView name="square.and.arrow.up" size={20} tintColor={palette.lampInk} />
           </Pressable>
         </View>
-        <Text style={styles.subtitle}>留下读过的痕迹，也留下自己的想法。</Text>
-        <View style={styles.filters}>
-          {FILTERS.map((item) => (
-            <Pressable key={item} accessibilityRole="button" onPress={() => setFilter(item)} style={styles.filterItem}>
-              <Text style={[styles.filterText, filter === item && styles.filterOn]}>{item}</Text>
-              {filter === item ? <View style={styles.filterLine} /> : null}
-            </Pressable>
-          ))}
-        </View>
         <View style={styles.search}>
-          <SymbolView name="magnifyingglass" size={17} tintColor={palette.ink3} />
-          <TextInput value={query} onChangeText={setQuery} placeholder="搜索阅读痕迹" placeholderTextColor={palette.ink3} style={styles.searchInput} />
+          <SymbolView name="magnifyingglass" size={24} tintColor={searchFieldIconColor(palette)} />
+          <TextInput value={query} onChangeText={setQuery} placeholder="搜索笔记" placeholderTextColor={searchFieldPlaceholderColor(palette)} style={styles.searchInput} />
         </View>
       </View>
 
@@ -90,6 +68,7 @@ export default function NotesRoute() {
             </View>
           ) : groups.map(({ book, entries }) => {
             const isCollapsed = collapsed[book.id] ?? false;
+            const swatch = bookSwatchTone(book.title, book.format);
             return (
               <View key={book.id}>
                 <Pressable
@@ -98,19 +77,21 @@ export default function NotesRoute() {
                   onPress={() => setCollapsed((current) => ({ ...current, [book.id]: !isCollapsed }))}
                   style={styles.groupHeader}
                 >
-                  <View style={[styles.groupSwatch, { backgroundColor: coverColor(book.id) }]}>
-                    <Text style={styles.groupSwatchText}>{book.title.slice(0, 1)}</Text>
+                  <View style={[styles.groupSwatch, { backgroundColor: swatch.background }]}>
+                    <Text style={[styles.groupSwatchText, { color: swatch.ink }]}>{book.title.slice(0, 1)}</Text>
                   </View>
                   <View style={styles.groupBody}>
                     <Text style={styles.groupTitle} numberOfLines={1}>{book.title}</Text>
-                    <Text style={styles.groupCount}>{entries.length} 条记录</Text>
+                    <Text style={styles.groupCount}>{entries.length} 条笔记</Text>
                   </View>
-                  <SymbolView name={isCollapsed ? 'chevron.right' : 'chevron.down'} size={13} tintColor={palette.ink3} />
+                  <SymbolView name={isCollapsed ? 'chevron.right' : 'chevron.down'} size={15} tintColor={palette.lamp} />
                 </Pressable>
-                {!isCollapsed ? entries.map(({ book: rowBook, annotation }) => {
+                {!isCollapsed ? (
+                  <View style={styles.entriesCard}>
+                    {entries.map(({ book: rowBook, annotation }, index) => {
                   const chapter = annotation.chapter && !annotation.chapter.includes('页') ? annotation.chapter : rowBook.title;
                   return (
-                    <View key={annotation.id} style={styles.entry}>
+                    <View key={annotation.id} style={[styles.entry, index === entries.length - 1 && styles.lastEntry]}>
                       {annotation.quote ? (
                         <View style={styles.quoteBlock}>
                           <Text style={styles.quote} numberOfLines={5}>“{annotation.quote}”</Text>
@@ -133,7 +114,9 @@ export default function NotesRoute() {
                       </View>
                     </View>
                   );
-                }) : null}
+                })}
+                  </View>
+                ) : null}
               </View>
             );
           })}
@@ -151,27 +134,23 @@ function createStyles(palette: Palette) {
     header: { paddingHorizontal: spacing.screen },
     titleRow: { marginTop: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     title: { fontSize: type.title, fontWeight: '700', color: palette.ink },
-    shareButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.paperDeep },
-    subtitle: { marginTop: 6, fontSize: type.caption, color: palette.ink3 },
-    filters: { flexDirection: 'row', marginTop: 29, borderBottomWidth: 1, borderBottomColor: palette.line },
-    filterItem: { flex: 1, alignItems: 'center', paddingBottom: 8 },
-    filterText: { fontSize: 14, color: palette.ink2 },
-    filterOn: { color: palette.ink, fontWeight: '600' },
-    filterLine: { position: 'absolute', bottom: -1, width: 22, height: 2, borderRadius: 1, backgroundColor: palette.ink },
-    search: { height: 44, borderRadius: radius.field, backgroundColor: palette.paperDeep, marginTop: 17, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8 },
-    searchInput: { flex: 1, padding: 0, fontSize: type.body, color: palette.ink },
+    shareButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.line },
+    search: { ...searchFieldChrome(palette), height: 56, marginTop: 18, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, gap: 10 },
+    searchInput: { flex: 1, padding: 0, fontSize: 17, color: searchFieldTextColor(palette) },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     content: { paddingHorizontal: spacing.screen, paddingTop: 12 },
     empty: { alignItems: 'center', paddingVertical: 80, gap: 8 },
     emptyTitle: { fontSize: type.section, fontWeight: '600', color: palette.ink },
     hint: { fontSize: type.caption, color: palette.ink2, textAlign: 'center' },
-    groupHeader: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderBottomColor: palette.line },
-    groupSwatch: { width: 22, height: 30, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
-    groupSwatchText: { fontSize: 10, fontWeight: '600', color: 'rgba(40,43,38,0.78)' },
+    groupHeader: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 10 },
+    groupSwatch: { width: 26, height: 28, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
+    groupSwatchText: { fontSize: 10, fontWeight: '600' },
     groupBody: { flex: 1 },
-    groupTitle: { fontSize: type.subhead, fontWeight: '600', color: palette.ink },
-    groupCount: { marginTop: 2, fontSize: type.captionSmall, color: palette.ink3 },
+    groupTitle: { fontSize: 17, fontWeight: '600', color: palette.ink },
+    groupCount: { marginTop: 3, fontSize: type.subhead, color: palette.ink3 },
+    entriesCard: { backgroundColor: palette.surface, borderRadius: 16, paddingHorizontal: 16, marginTop: 4, marginBottom: 8 },
     entry: { paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: palette.line },
+    lastEntry: { borderBottomWidth: 0 },
     quoteBlock: { borderLeftWidth: 2, borderLeftColor: palette.lamp, paddingLeft: 12 },
     quote: { fontFamily: font.serif, fontSize: 17, lineHeight: 30, color: palette.ink },
     body: { marginTop: 8, fontSize: type.body, lineHeight: 24, color: palette.ink2 },

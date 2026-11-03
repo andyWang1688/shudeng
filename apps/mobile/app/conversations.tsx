@@ -6,14 +6,41 @@ import { SymbolView } from 'expo-symbols';
 import { loadConversationSummaries, loadShelfBooks, type ConversationSummary, type ShelfBookRecord } from '../src/platform/library';
 import { BottomBar } from '../src/ui/BottomBar';
 import { conversationTime } from '../src/ui/format';
-import { font, radius, spacing, type, usePalette, type Palette } from '../src/ui/theme';
+import { bookSwatchTone, searchFieldChrome, searchFieldIconColor, searchFieldPlaceholderColor, searchFieldTextColor, spacing, type, usePalette, type Palette } from '../src/ui/theme';
 
-const COVER_COLORS = ['#E8E5D8', '#4F5A4A', '#DFE3D5', '#E7E1D6', '#D9D2C2', '#6B6257'];
-
-function coverColor(id: string): string {
-  let hash = 0;
-  for (let index = 0; index < id.length; index += 1) hash = (hash * 31 + id.charCodeAt(index)) >>> 0;
-  return COVER_COLORS[hash % COVER_COLORS.length] ?? COVER_COLORS[0]!;
+/**
+ * 预览只显示纯文本：先解掉助手消息里 `{"answer":"..."}` 的 JSON 包装（原版不显示原始 JSON），
+ * 再去代码块/链接/强调标记。
+ */
+function previewText(raw: string): string {
+  let text = raw.trim();
+  if (text.startsWith('{')) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const record = parsed as Record<string, unknown>;
+        const candidate = record.answer ?? record.content ?? record.text;
+        if (typeof candidate === 'string') text = candidate;
+      }
+    } catch {
+      // 不是完整 JSON 时继续尝试提取 answer 字符串（旧消息可能被截断）。
+    }
+    const wrapped = /^\s*\{\s*"(?:answer|content|text)"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(text);
+    if (wrapped?.[1]) {
+      try {
+        text = JSON.parse(`"${wrapped[1]}"`);
+      } catch {
+        text = wrapped[1];
+      }
+    }
+  }
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_~`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export default function ConversationsRoute() {
@@ -56,10 +83,9 @@ export default function ConversationsRoute() {
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <View style={styles.header}>
         <Text style={styles.title}>对话</Text>
-        <Text style={styles.subtitle}>读过的疑问，留在这本书里。</Text>
         <View style={styles.search}>
-          <SymbolView name="magnifyingglass" size={17} tintColor={palette.ink3} />
-          <TextInput value={query} onChangeText={setQuery} placeholder="搜索你的问题" placeholderTextColor={palette.ink3} style={styles.searchInput} />
+          <SymbolView name="magnifyingglass" size={24} tintColor={searchFieldIconColor(palette)} />
+          <TextInput value={query} onChangeText={setQuery} placeholder="搜索你的问题" placeholderTextColor={searchFieldPlaceholderColor(palette)} style={styles.searchInput} />
         </View>
       </View>
       {loading ? <View style={styles.center}><ActivityIndicator color={palette.lamp} /></View> : (
@@ -72,6 +98,7 @@ export default function ConversationsRoute() {
           ) : groups.map(({ book, bookId, entries }) => {
             const isCollapsed = collapsed[bookId] ?? false;
             const title = book?.title ?? '书内问答';
+            const swatch = bookSwatchTone(title, book?.format);
             return (
               <View key={bookId}>
                 <Pressable
@@ -80,22 +107,26 @@ export default function ConversationsRoute() {
                   onPress={() => setCollapsed((current) => ({ ...current, [bookId]: !isCollapsed }))}
                   style={styles.groupHeader}
                 >
-                  <View style={[styles.groupSwatch, { backgroundColor: coverColor(bookId) }]}>
-                    <Text style={styles.groupSwatchText}>{title.slice(0, 1)}</Text>
+                  <View style={[styles.groupSwatch, { backgroundColor: swatch.background }]}>
+                    <Text style={[styles.groupSwatchText, { color: swatch.ink }]}>{title.slice(0, 1)}</Text>
                   </View>
                   <View style={styles.groupBody}>
                     <Text style={styles.groupTitle} numberOfLines={1}>{title}</Text>
                     <Text style={styles.groupCount}>{entries.length} 段对话</Text>
                   </View>
-                  <SymbolView name={isCollapsed ? 'chevron.right' : 'chevron.down'} size={13} tintColor={palette.ink3} />
+                  <SymbolView name={isCollapsed ? 'chevron.right' : 'chevron.down'} size={15} tintColor={palette.lamp} />
                 </Pressable>
-                {!isCollapsed ? entries.map((item) => (
-                  <View key={item.conversationId} style={styles.entry}>
-                    <Text style={styles.question} numberOfLines={2}>{item.question}</Text>
-                    <Text style={styles.answer} numberOfLines={2}>{item.answer.replace(/[#*]/g, '').replace(/\s+/g, ' ')}</Text>
-                    <Text style={styles.meta}>{conversationTime(item.updatedAt)} · {Math.max(1, Math.round(item.turns / 2))} 次提问</Text>
+                {!isCollapsed ? (
+                  <View style={styles.entryCard}>
+                    {entries.map((item, index) => (
+                      <View key={item.conversationId} style={[styles.entry, index === entries.length - 1 && styles.lastEntry]}>
+                        <Text style={styles.question} numberOfLines={2}>{previewText(item.question)}</Text>
+                        <Text style={styles.answer} numberOfLines={2}>{previewText(item.answer)}</Text>
+                        <Text style={styles.meta}>{conversationTime(item.updatedAt)} · {Math.max(1, Math.round(item.turns / 2))} 次提问</Text>
+                      </View>
+                    ))}
                   </View>
-                )) : null}
+                ) : null}
               </View>
             );
           })}
@@ -112,22 +143,23 @@ function createStyles(palette: Palette) {
     safeArea: { flex: 1, backgroundColor: palette.paper },
     header: { paddingHorizontal: spacing.screen },
     title: { marginTop: 21, fontSize: type.title, fontWeight: '700', color: palette.ink },
-    subtitle: { marginTop: 10, fontSize: type.caption, color: palette.ink3 },
-    search: { height: 44, borderRadius: radius.field, backgroundColor: palette.paperDeep, marginTop: 17, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8 },
-    searchInput: { flex: 1, padding: 0, fontSize: type.body, color: palette.ink },
+    search: { ...searchFieldChrome(palette), height: 56, marginTop: 24, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, gap: 10 },
+    searchInput: { flex: 1, padding: 0, fontSize: 17, color: searchFieldTextColor(palette) },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     content: { paddingHorizontal: spacing.screen, paddingTop: 12 },
     empty: { alignItems: 'center', paddingVertical: 80, gap: 8 },
     emptyTitle: { fontSize: type.section, fontWeight: '600', color: palette.ink },
     hint: { fontSize: type.caption, color: palette.ink2, textAlign: 'center' },
-    groupHeader: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderBottomColor: palette.line },
-    groupSwatch: { width: 22, height: 30, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
-    groupSwatchText: { fontSize: 10, fontWeight: '600', color: 'rgba(40,43,38,0.78)' },
+    groupHeader: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 10 },
+    groupSwatch: { width: 26, height: 28, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
+    groupSwatchText: { fontSize: 10, fontWeight: '600' },
     groupBody: { flex: 1 },
-    groupTitle: { fontSize: type.subhead, fontWeight: '600', color: palette.ink },
-    groupCount: { marginTop: 2, fontSize: type.captionSmall, color: palette.ink3 },
+    groupTitle: { fontSize: 17, fontWeight: '600', color: palette.ink },
+    groupCount: { marginTop: 3, fontSize: type.subhead, color: palette.ink3 },
+    entryCard: { backgroundColor: palette.surface, borderRadius: 16, paddingHorizontal: 16, marginTop: 4, marginBottom: 8 },
     entry: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: palette.line },
-    question: { fontFamily: font.serif, fontSize: 18, lineHeight: 26, fontWeight: '600', color: palette.ink },
+    lastEntry: { borderBottomWidth: 0 },
+    question: { fontSize: 17, lineHeight: 24, fontWeight: '600', color: palette.ink },
     answer: { marginTop: 8, fontSize: type.body, lineHeight: 24, color: palette.ink2 },
     meta: { marginTop: 10, fontSize: type.captionSmall, color: palette.ink3 },
   });

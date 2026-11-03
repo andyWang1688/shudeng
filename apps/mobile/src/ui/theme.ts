@@ -2,7 +2,7 @@
  * 书灯设计令牌：对齐 docs/design/ui-development-standard.md、Swift BookDesign 与 design-baseline。
  * `colors` 保留浅色静态导出给旧页面；根四栏用 `usePalette()` 跟随系统深色。
  */
-import { useColorScheme } from 'react-native';
+import { useColorScheme, type ViewStyle } from 'react-native';
 
 export const lightColors = {
   paper: '#FCFBF8',
@@ -95,3 +95,57 @@ export const font = {
   system: undefined as string | undefined,
   serif: 'Songti SC',
 } as const;
+
+
+export type BookCoverTone = {
+  readonly background: string;
+  readonly ink: string;
+  readonly rule: string;
+};
+
+/** 真实 Swift v0.4.8 书封：瓦尔登湖深墨绿、红楼梦纸黄、论语/段永平暖纸色。 */
+export function bookCoverTone(title: string, format?: string): BookCoverTone {
+  const name = title.trim();
+  if (/瓦尔登湖/.test(name)) return { background: '#3F4C40', ink: '#F2EDE2', rule: 'rgba(242,237,226,0.45)' };
+  if (/红楼梦|石头记/.test(name)) return { background: '#EFE4CC', ink: '#2C2A24', rule: 'rgba(44,42,36,0.38)' };
+  if (/论语/.test(name)) return { background: '#D9D2C2', ink: '#2C2A24', rule: 'rgba(44,42,36,0.34)' };
+  if (/段永平|大道|投资/.test(name) || format === 'pdf') return { background: '#E7DECB', ink: '#2C2A24', rule: 'rgba(44,42,36,0.34)' };
+  const warm = ['#E8E1D2', '#DDD5C4', '#D6CDBA', '#E3D8C3'];
+  let hash = 0;
+  for (let index = 0; index < name.length; index += 1) hash = (hash * 31 + name.charCodeAt(index)) >>> 0;
+  return { background: warm[hash % warm.length] ?? '#E8E1D2', ink: '#2C2A24', rule: 'rgba(44,42,36,0.34)' };
+}
+
+/** 真实原版列表左侧小书脊：EPUB 统一深墨绿，PDF/其他用书封暖色。 */
+export function bookSwatchTone(title: string, format?: string): BookCoverTone {
+  if (!format || format === 'epub') return { background: '#3F4C40', ink: '#EFE4CC', rule: 'rgba(239,228,204,0.4)' };
+  return bookCoverTone(title, format);
+}
+
+/** 书架/笔记/对话统一搜索条：白色圆角立体条、细描边 + 轻微阴影。 */
+export function searchFieldTextColor(palette: Palette): string {
+  return palette.paper === darkColors.paper ? palette.ink : '#282B26';
+}
+
+export function searchFieldPlaceholderColor(palette: Palette): string {
+  return palette.paper === darkColors.paper ? palette.ink3 : '#8A8375';
+}
+
+export function searchFieldIconColor(palette: Palette): string {
+  return palette.paper === darkColors.paper ? palette.ink2 : '#57534A';
+}
+
+export function searchFieldChrome(palette: Palette): ViewStyle {
+  const dark = palette.paper === darkColors.paper;
+  return {
+    backgroundColor: dark ? palette.surface : '#FFFFFF',
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 15,
+    shadowColor: '#000000',
+    shadowOpacity: dark ? 0.12 : 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  };
+}

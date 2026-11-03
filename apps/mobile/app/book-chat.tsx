@@ -709,6 +709,25 @@ export default function BookChatRoute() {
                     </Pressable>
                   ) : null}
                 </View>
+                {/* Swift QuestionController 的上下文用量：16pt 圆环 + caption 文案；核心 AgentRunResult
+                    暂无 usage 字段，当前真实可用值只有 0%（空态无上下文）。 */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="上下文用量 0%"
+                  accessibilityHint="查看本次对话的上下文用量"
+                  onPress={() =>
+                    Alert.alert(
+                      '上下文用量',
+                      turns.length === 0
+                        ? '还没有开始对话，已用约 0 字。'
+                        : '当前版本暂未提供本次对话的上下文用量。',
+                    )
+                  }
+                  style={styles.contextUsage}
+                >
+                  <View style={styles.contextRing} />
+                  <Text style={styles.contextUsageText}>上下文 0%</Text>
+                </Pressable>
                 {running ? (
                   <Pressable accessibilityRole="button" style={styles.cancelButton} onPress={cancel}>
                     <Text style={styles.cancelText}>取消生成</Text>
@@ -844,6 +863,15 @@ function createStyles(palette: Palette) {
     composerSelectionText: { fontSize: 11, color: palette.ink2 },
     serviceHint: { flexDirection: 'row', alignItems: 'center', gap: 5 },
     serviceHintText: { fontSize: 11, lineHeight: 16, color: palette.ink2 },
+    contextUsage: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', minHeight: 24 },
+    contextRing: {
+      width: 16,
+      height: 16,
+      borderRadius: 8,
+      borderWidth: 2.4,
+      borderColor: palette.line,
+    },
+    contextUsageText: { fontSize: 10.5, lineHeight: 15, fontWeight: '500', color: palette.ink2 },
     field: {
       flexDirection: 'row',
       alignItems: 'center',

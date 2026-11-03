@@ -29,42 +29,56 @@ export default function ProfileRoute() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>我的</Text>
-        <View style={styles.identity}>
-          <View style={styles.bulb}>
-            <SymbolView name="lightbulb" size={34} tintColor={palette.ink} />
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <Text style={styles.sectionHeader}>设置</Text>
+        <View style={styles.card}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="AI 服务"
+            onPress={() => router.push('/ai-settings')}
+            style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+          >
+            <View style={styles.iconSlot}>
+              <SymbolView name="lightbulb" size={20} tintColor={palette.lamp} />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>AI 服务</Text>
+              <Text style={styles.rowDetail} numberOfLines={1}>{aiDetail}</Text>
+            </View>
+            <SymbolView name="chevron.right" size={17} tintColor={palette.ink3} />
+          </Pressable>
+          <View style={styles.separator} />
+          <View style={styles.row}>
+            <View style={styles.iconSlot}>
+              <SymbolView name="sun.max" size={20} tintColor={palette.ink2} />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>外观</Text>
+            </View>
+            <Text style={styles.rowValue}>跟随系统</Text>
+            <SymbolView name="chevron.right" size={17} tintColor={palette.ink3} />
           </View>
-          <Text style={styles.name}>书灯</Text>
-          <Text style={styles.tagline}>一盏照书的灯</Text>
         </View>
 
-        <Pressable accessibilityRole="button" onPress={() => router.push('/ai-settings')} style={({ pressed }) => [styles.row, styles.firstRow, pressed && styles.pressed]}>
-          <View style={styles.rowIconSlot}><SymbolView name="lightbulb" size={20} tintColor={palette.lamp} /></View>
-          <View style={styles.rowBody}>
-            <Text style={styles.rowTitle}>AI 服务</Text>
-            <Text style={styles.rowDetail} numberOfLines={1}>{aiDetail}</Text>
-          </View>
-          <SymbolView name="chevron.right" size={17} tintColor={palette.ink3} />
-        </Pressable>
-
-        <View style={styles.row}>
-          <View style={styles.rowIconSlot}><SymbolView name="sun.max" size={20} tintColor={palette.lamp} /></View>
-          <View style={styles.rowBody}><Text style={styles.rowTitle}>外观</Text></View>
-          <Text style={styles.rowValue}>跟随系统</Text>
-          <SymbolView name="chevron.right" size={17} tintColor={palette.ink3} />
+        <Text style={styles.sectionHeader}>关于</Text>
+        <View style={styles.card}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="关于书灯"
+            onPress={() => Alert.alert('关于书灯', '书灯 · 本地阅读与 AI 助手\n版本 ' + APP_VERSION)}
+            style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+          >
+            <View style={styles.iconSlot}>
+              <SymbolView name="doc.text" size={20} tintColor={palette.ink2} />
+            </View>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>关于书灯</Text>
+            </View>
+            <Text style={styles.rowValue}>{APP_VERSION}</Text>
+            <SymbolView name="chevron.right" size={17} tintColor={palette.ink3} />
+          </Pressable>
         </View>
-
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => Alert.alert('关于书灯', '书灯 · 本地阅读与 AI 助手\n版本 ' + APP_VERSION)}
-          style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-        >
-          <View style={styles.rowIconSlot}><SymbolView name="doc.text" size={20} tintColor={palette.lamp} /></View>
-          <View style={styles.rowBody}><Text style={styles.rowTitle}>关于书灯</Text></View>
-          <Text style={styles.rowValue}>{APP_VERSION}</Text>
-          <SymbolView name="chevron.right" size={17} tintColor={palette.ink3} />
-        </Pressable>
+        <Text style={styles.footer}>书灯 {APP_VERSION} · 读得慢一点，也想得明白一点</Text>
       </ScrollView>
       <BottomBar active="profile" />
     </SafeAreaView>
@@ -74,35 +88,45 @@ export default function ProfileRoute() {
 function createStyles(palette: Palette) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: palette.paper },
-    content: { paddingHorizontal: spacing.screen, paddingBottom: 16 },
-    title: { marginTop: 11, fontSize: type.title, fontWeight: '700', color: palette.ink },
-    identity: { alignItems: 'center', marginTop: 27, marginBottom: 0 },
-    bulb: {
-      width: 70,
-      height: 70,
-      borderRadius: 16,
-      backgroundColor: palette.surface,
-      borderWidth: 1,
-      borderColor: palette.line,
-      alignItems: 'center',
-      justifyContent: 'center',
+    content: { paddingHorizontal: spacing.md, paddingTop: spacing.xs, paddingBottom: 24 },
+    sectionHeader: {
+      marginTop: spacing.lg,
+      marginBottom: spacing.xs,
+      paddingHorizontal: spacing.xxs,
+      fontSize: type.subhead,
+      color: palette.ink3,
     },
-    name: { marginTop: 19, fontSize: 20, fontWeight: '600', color: palette.ink },
-    tagline: { marginTop: 14, fontSize: type.body, color: palette.ink2 },
-    firstRow: { marginTop: 38, borderTopWidth: 1, borderTopColor: palette.line },
+    card: {
+      backgroundColor: palette.surface,
+      borderRadius: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.line,
+      overflow: 'hidden',
+    },
     row: {
-      minHeight: 66,
+      minHeight: 52,
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: palette.line,
+      gap: spacing.sm,
+      paddingHorizontal: spacing.md,
     },
     pressed: { opacity: 0.7 },
-    rowIconSlot: { width: 26, alignItems: 'flex-start' },
+    separator: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: palette.line,
+      marginLeft: spacing.md + 26 + spacing.sm,
+    },
+    iconSlot: { width: 26 },
     rowBody: { flex: 1 },
     rowTitle: { fontSize: type.body, color: palette.ink },
-    rowDetail: { marginTop: 3, fontSize: type.caption, color: palette.ink2 },
+    rowDetail: { marginTop: 2, fontSize: type.caption, color: palette.ink2 },
     rowValue: { fontSize: type.caption, color: palette.ink2 },
+    footer: {
+      marginTop: spacing.xs,
+      paddingHorizontal: spacing.xxs,
+      fontSize: type.footnote,
+      lineHeight: 18,
+      color: palette.ink3,
+    },
   });
 }
