@@ -645,7 +645,7 @@ export async function loadConversationSummaries(): Promise<readonly Conversation
   const layer = await getDataLayer();
   const rows = await layer.driver.all<Record<string, SQLiteValue>>(
     `SELECT conversation_id, COUNT(*) AS turns, MAX(created_at) AS updated_at
-     FROM messages WHERE role IN ('user','assistant') AND conversation_id LIKE 'book:%'
+     FROM messages WHERE role IN ('user','assistant')
      GROUP BY conversation_id ORDER BY updated_at DESC`,
   );
   const summaries: ConversationSummary[] = [];
@@ -657,7 +657,7 @@ export async function loadConversationSummaries(): Promise<readonly Conversation
     const answer = [...messages].reverse().find((message) => message.role === 'assistant')?.content ?? '';
     summaries.push({
       conversationId,
-      bookId: conversationId.slice(CONVERSATION_PREFIX.length),
+      bookId: conversationId.startsWith(CONVERSATION_PREFIX) ? conversationId.slice(CONVERSATION_PREFIX.length) : '',
       question,
       answer,
       turns: typeof row.turns === 'number' ? row.turns : messages.length,
