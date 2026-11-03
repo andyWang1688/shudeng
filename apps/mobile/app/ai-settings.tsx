@@ -76,9 +76,8 @@ export default function AiSettingsRoute() {
     testAbortRef.current?.abort();
     testAbortRef.current = controller;
     setTesting(true);
-    setMessage('正在保存并测试连接…');
+    setMessage('正在测试连接…');
     try {
-      await saveAIConfig(config);
       if (!mountedRef.current) return;
       if (controller.signal.aborted) {
         setMessage('已取消连接测试。');
@@ -90,9 +89,14 @@ export default function AiSettingsRoute() {
         setMessage('已取消连接测试。');
         return;
       }
-      const text = result.ok ? `连接成功。${result.message}` : `已保存，但连接失败：${result.message}`;
-      setMessage(text);
-      if (!result.ok) Alert.alert('AI 服务连接失败', text);
+      if (!result.ok) {
+        setMessage(`连接失败，未保存：${result.message}`);
+        Alert.alert('AI 服务连接失败', `连接失败，未保存。${result.message}`);
+        return;
+      }
+      await saveAIConfig(config);
+      if (!mountedRef.current) return;
+      setMessage(`连接成功，已保存。${result.message}`);
     } catch (cause) {
       if (mountedRef.current && !controller.signal.aborted) {
         setMessage(cause instanceof Error ? cause.message : String(cause));
