@@ -18,7 +18,7 @@ export function BottomBar({ active }: { readonly active: TabKey }) {
   const palette = usePalette();
   const { width } = useWindowDimensions();
   const styles = useMemo(() => createStyles(palette), [palette]);
-  const barHeight = width >= 390 ? 83 : spacing.bottomBar;
+  const barHeight = width >= 390 ? 83 : 68;
   return (
     <View style={[styles.bar, { height: barHeight }]}>
       {TABS.map((tab) => {
