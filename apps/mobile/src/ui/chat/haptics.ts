@@ -1,11 +1,15 @@
-import { Platform, Vibration } from 'react-native';
+import { AccessibilityInfo, Platform } from 'react-native';
+import * as Haptics from 'expo-haptics';
 
-/** 无 expo-haptics 依赖时的轻触反馈；模拟器/不支持设备静默。 */
-export function tapFeedback(): void {
-  if (Platform.OS === 'web') return;
-  try {
-    Vibration.vibrate(5);
-  } catch {
-    // 触感不是业务路径，失败忽略。
-  }
+let reduceMotion = false;
+void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => { reduceMotion = enabled; });
+AccessibilityInfo.addEventListener('reduceMotionChanged', (enabled) => { reduceMotion = enabled; });
+
+/** 关键动作轻触感；与共享 useHaptics 同一依赖，尊重 Reduce Motion。 */
+export function tapFeedback(kind: 'light' | 'success' = 'light'): void {
+  if (Platform.OS === 'web' || reduceMotion) return;
+  const action = kind === 'success'
+    ? Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    : Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  void action.catch(() => undefined);
 }

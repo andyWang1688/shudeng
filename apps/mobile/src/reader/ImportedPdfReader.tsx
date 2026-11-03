@@ -50,7 +50,7 @@ export function ImportedPdfReader({
   const [chromeVisible, setChromeVisible] = useState(true);
   const [retryKey, setRetryKey] = useState(0);
 
-  const progressText = totalPages > 0 ? `${Math.round((page / totalPages) * 100)}%` : '0%';
+  const progressText = totalPages > 0 ? `${Math.floor((page / totalPages) * 100)}%` : '0%';
   const pageText = totalPages > 0 ? `第 ${page} / ${totalPages} 页` : '准备加载 PDF';
 
   return (

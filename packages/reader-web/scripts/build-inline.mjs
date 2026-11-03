@@ -6,8 +6,9 @@
  *  - apps/mobile/src/reader/readerWebHtml.ts（生成文件，TypeScript 字符串）
  *  - apps/mobile/src/reader/readerFixtures.ts（生成文件，EPUB/PDF fixture base64）
  *
- * 为什么要自包含：WKWebView 的 source={{html}} 没有可解析的 base URL，相对 worker URL 会失败；
- * pdf.worker 模块已 import 进主 bundle（主线程 fake worker），不再需要独立 worker 文件/URL。
+ * 为什么要自包含：WKWebView 的 source={{html}} 没有可解析的 base URL，相对 URL 会失败。
+ * native 只走 EPUB（foliate）；PDF 由 RN PDFKit 渲染，不 import pdf.js。
+ * Web 开发/预览入口（src/main.ts）仍保留 PDF.js。
  * JS/CSS 全部内联后，WebView 只加载一个 html 字符串，不依赖本地静态服务器。
  */
 import { execFileSync } from 'node:child_process'
@@ -45,6 +46,9 @@ let html = indexHtml
   )
 
 if (!html.includes('__readerHost')) throw new Error('reader js not inlined')
+if (/pdf\.worker|PDFDocument|pdfjs-dist/.test(html)) {
+  throw new Error('inline build must not contain pdf.js（native PDF 不走 reader-web）')
+}
 
 writeFileSync(resolve(DIST, 'index.html'), html)
 
@@ -75,6 +79,6 @@ writeFileSync(
 )
 
 console.log(
-  `inline reader-web: ${(html.length / 1024 / 1024).toFixed(2)}MB html ` +
-  `(js ${(js.length / 1024 / 1024).toFixed(2)}MB, worker inlined)`,
+  `inline reader-web (EPUB only, no pdf.js): ${(html.length / 1024 / 1024).toFixed(2)}MB html ` +
+  `(js ${(js.length / 1024 / 1024).toFixed(2)}MB)`,
 )

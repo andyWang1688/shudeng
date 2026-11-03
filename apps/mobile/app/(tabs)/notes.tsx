@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   SectionList,
+  Share,
   StyleSheet,
   Text,
   View,
@@ -16,6 +18,7 @@ import { PageHeader } from '../../src/ui/components/PageHeader';
 import { SearchField } from '../../src/ui/components/SearchField';
 import { SectionHeader } from '../../src/ui/components/SectionHeader';
 import { groupByKey } from '../../src/ui/components/groupBy';
+import { useHaptics } from '../../src/ui/components/useHaptics';
 import { recordTime } from '../../src/ui/format';
 import { font, spacing, type as typeScale, usePalette, type Palette } from '../../src/ui/theme';
 
@@ -23,13 +26,36 @@ type NoteItem = { book: ShelfBookRecord; annotation: ShelfAnnotation };
 type NoteSection = { book: ShelfBookRecord; count: number; collapsed: boolean; data: NoteItem[] };
 const KIND_LABEL: Record<ShelfAnnotation['kind'], string> = { highlight: '高亮', note: '笔记', bookmark: '书签' };
 
+function buildExportText(entries: readonly NoteItem[]): string {
+  return groupByKey(entries, (item) => item.book.id)
+    .map(({ items: bookEntries }) => {
+      const book = bookEntries[0]!.book;
+      const header = `《${book.title}》${book.author ? ` · ${book.author}` : ''}`;
+      const rows = bookEntries.map(({ annotation }) => {
+        const place = [
+          annotation.chapter,
+          annotation.page ? `第 ${annotation.page} 页` : null,
+          KIND_LABEL[annotation.kind],
+          recordTime(annotation.createdAt),
+        ].filter((part): part is string => Boolean(part)).join(' · ');
+        return [place, annotation.quote ? `“${annotation.quote}”` : null, annotation.body]
+          .filter((part): part is string => Boolean(part))
+          .join('\n');
+      });
+      return [header, ...rows].join('\n\n');
+    })
+    .join('\n\n---\n\n');
+}
+
 export default function NotesRoute() {
   const router = useRouter();
+  const haptics = useHaptics();
   const palette = usePalette();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const [items, setItems] = useState<readonly NoteItem[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   useFocusEffect(useCallback(() => {
@@ -49,6 +75,25 @@ export default function NotesRoute() {
     const book = entries[0]!.book;
     return { book, count: entries.length, collapsed: collapsed[book.id] ?? false, data: collapsed[book.id] ? [] : entries };
   });
+
+  const handleExport = async (): Promise<void> => {
+    const exportable = items.filter(({ annotation }) => annotation.kind !== 'bookmark');
+    if (exportable.length === 0) {
+      Alert.alert('暂无可导出的笔记', '阅读时选中文字写下的高亮和笔记会出现在这里。');
+      return;
+    }
+    if (exporting) return;
+    setExporting(true);
+    haptics();
+    try {
+      const result = await Share.share({ message: buildExportText(exportable), title: '导出笔记' });
+      if (result.action === Share.sharedAction) haptics('success');
+    } catch (cause) {
+      Alert.alert('分享失败', cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const renderNote: SectionListRenderItem<NoteItem, NoteSection> = ({ item, index, section }) => {
     const { book, annotation } = item;
@@ -87,7 +132,7 @@ export default function NotesRoute() {
       <View style={styles.header}>
         <PageHeader
           title="笔记"
-          action={{ symbol: 'square.and.arrow.up', label: '导出笔记', variant: 'outline' }}
+          action={{ symbol: 'square.and.arrow.up', label: '导出笔记', variant: 'outline', busy: exporting, onPress: () => void handleExport() }}
         />
         <SearchField value={query} onChangeText={setQuery} placeholder="搜索笔记" style={styles.search} />
       </View>
