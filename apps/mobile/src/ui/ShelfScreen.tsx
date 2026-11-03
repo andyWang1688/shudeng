@@ -70,7 +70,7 @@ export function ShelfScreen() {
     : books.filter((book) => book.title.toLowerCase().includes(needle) || (book.author ?? '').toLowerCase().includes(needle));
   const continueBook = filtered.find((book) => (book.progressPercent ?? 0) > 0) ?? filtered[0] ?? null;
   const library = filtered;
-  const cardWidth = (width - spacing.lg * 2 - spacing.md) / 2;
+  const cardWidth = (width - spacing.lg * 2 - 21) / 2;
 
   const handleImport = async () => {
     if (importing) return;
@@ -238,10 +238,10 @@ const styles = StyleSheet.create({
   arrow: { color: colors.paper, fontSize: 15 },
   sectionRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: spacing.lg, marginBottom: spacing.sm },
   count: { fontSize: type.caption, color: colors.ink3 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: spacing.lg },
-  gridCard: { gap: 5 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 22 },
+  gridCard: { gap: 0 },
   gridCover: { borderRadius: radius.coverRight, borderTopLeftRadius: radius.coverLeft, borderBottomLeftRadius: radius.coverLeft, padding: 12, justifyContent: 'space-between' },
-  gridTitle: { fontFamily: font.serif, fontSize: 16, lineHeight: 21, color: colors.ink, marginTop: 3 },
-  gridAuthor: { fontSize: type.caption, color: colors.ink2 },
-  gridProgress: { fontSize: type.caption, color: colors.ink3 },
+  gridTitle: { fontFamily: font.serif, fontSize: 14, lineHeight: 19, color: colors.ink, marginTop: 8 },
+  gridAuthor: { fontSize: type.caption, color: colors.ink3, marginTop: 2 },
+  gridProgress: { fontSize: type.caption, color: colors.ink3, marginTop: 3 },
 });
