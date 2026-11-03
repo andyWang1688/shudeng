@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { initializeDatabase } from '../platform';
 import { SymbolView } from 'expo-symbols';
+
 import {
   deleteShelfBook,
   importBookFromPicker,
@@ -68,7 +69,11 @@ export function ShelfScreen() {
   const filtered = needle.length === 0
     ? books
     : books.filter((book) => book.title.toLowerCase().includes(needle) || (book.author ?? '').toLowerCase().includes(needle));
-  const continueBook = filtered.find((book) => (book.progressPercent ?? 0) > 0) ?? filtered[0] ?? null;
+  const continueBook = filtered.reduce<ShelfBookRecord | null>((best, book) => {
+    if ((book.progressPercent ?? 0) <= 0) return best;
+    if (!best) return book;
+    return (book.progressUpdatedAt ?? 0) > (best.progressUpdatedAt ?? 0) ? book : best;
+  }, null) ?? filtered[0] ?? null;
   const library = filtered;
   const cardWidth = (width - spacing.lg * 2 - 21) / 2;
 
@@ -109,8 +114,8 @@ export function ShelfScreen() {
         </View>
         <View style={styles.titleRow}>
           <Text style={styles.title}>书架</Text>
-          <Pressable accessibilityRole="button" accessibilityLabel="导入书籍" onPress={() => void handleImport()} style={styles.importButton} disabled={importing}>
-            <SymbolView name={importing ? 'ellipsis' : 'plus'} size={21} tintColor={colors.paper} />
+          <Pressable accessibilityRole="button" accessibilityLabel="导入书籍" onPress={() => void handleImport()} style={[styles.importButton, importing && styles.disabled]} disabled={importing}>
+            <SymbolView name={importing ? 'ellipsis' : 'plus'} size={21} tintColor={colors.ink} />
           </Pressable>
         </View>
         <View style={styles.search}>
@@ -156,7 +161,7 @@ export function ShelfScreen() {
                       <View style={[styles.progressFill, { width: `${Math.max(3, continueBook.progressPercent ?? 0)}%` }]} />
                     </View>
                     <View style={styles.continueFooter}>
-                      <Text style={styles.continueLabel}>{continueBook.progressLabel}</Text>
+                      <Text style={styles.continueLabel} numberOfLines={1}>{continueBook.progressChapter ? `${continueBook.progressChapter.split(' · ')[0]} · ` : ''}{continueBook.progressLabel}</Text>
                       <View style={styles.arrowCircle}><Text style={styles.arrow}>→</Text></View>
                     </View>
                   </View>
@@ -165,8 +170,14 @@ export function ShelfScreen() {
             ) : null}
 
             <View style={styles.sectionRow}>
-              <Text style={styles.sectionTitle}>我的书籍</Text>
-              <Text style={styles.count}>{books.length}</Text>
+              <View style={styles.sectionIdentity}>
+                <Text style={styles.sectionTitle}>我的书籍</Text>
+                <Text style={styles.count}>{library.length}</Text>
+              </View>
+              <View style={styles.sortControl}>
+                <Text style={styles.sortText}>最近阅读</Text>
+                <SymbolView name="chevron.down" size={10} tintColor={colors.ink2} />
+              </View>
             </View>
             <View style={styles.grid}>
               {library.map((book) => (
@@ -206,7 +217,8 @@ const styles = StyleSheet.create({
   brandTag: { marginLeft: 'auto', fontSize: type.caption, color: colors.ink2 },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xs },
   title: { fontSize: type.title, fontWeight: '700', color: colors.ink },
-  importButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
+  importButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.paperDeep, alignItems: 'center', justifyContent: 'center' },
+  disabled: { opacity: 0.5 },
   importText: { color: colors.paper, fontSize: 28, lineHeight: 30, fontWeight: '300' },
   search: { flexDirection: 'row', alignItems: 'center', height: 44, borderRadius: radius.field, backgroundColor: colors.paperDeep, paddingHorizontal: spacing.sm, marginTop: spacing.xs, gap: spacing.xs },
   searchIcon: { fontSize: 22, color: colors.ink2 },
@@ -236,7 +248,10 @@ const styles = StyleSheet.create({
   continueLabel: { fontSize: type.caption, color: colors.ink2 },
   arrowCircle: { width: 27, height: 27, borderRadius: 14, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
   arrow: { color: colors.paper, fontSize: 15 },
-  sectionRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: spacing.lg, marginBottom: spacing.sm },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.lg, marginBottom: spacing.sm, minHeight: 44 },
+  sectionIdentity: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  sortControl: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  sortText: { fontSize: 13, color: colors.ink2 },
   count: { fontSize: type.caption, color: colors.ink3 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 22 },
   gridCard: { gap: 0 },

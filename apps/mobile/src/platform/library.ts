@@ -20,6 +20,8 @@ export type ShelfBookRecord = {
   readonly progressPercent: number | null;
   readonly progressPage: number | null;
   readonly progressLabel: string;
+  readonly progressChapter: string | null;
+  readonly progressUpdatedAt: number | null;
 };
 
 export type StoredReaderLocator =
@@ -519,6 +521,8 @@ export async function loadShelfBooks(): Promise<readonly ShelfBookRecord[]> {
       progressPercent: percent,
       progressPage: page,
       progressLabel,
+      progressChapter: item?.chapter ?? null,
+      progressUpdatedAt: item?.updatedAt ?? null,
     };
   });
 }
@@ -585,6 +589,8 @@ export async function importBookFromPicker(): Promise<ImportBookResult> {
       progressPercent: null,
       progressPage: null,
       progressLabel: '未开始',
+      progressChapter: null,
+      progressUpdatedAt: null,
     },
   };
 }
