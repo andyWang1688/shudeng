@@ -32,7 +32,7 @@ export class EpubReader {
   private view: FoliateView
   private title = ''
   private theme: ReaderTheme = 'light'
-  private fontSize = 18
+  private fontSize = 20
   private flow: ReaderFlow = 'paginated'
   private annotations = new Map<string, AnnotationPayload>()
   private annotationByCfi = new Map<string, AnnotationPayload>()
@@ -289,9 +289,12 @@ export class EpubReader {
       html, body {
         background: ${paper} !important;
         color: ${ink} !important;
+        font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif !important;
         font-size: ${this.fontSize}px !important;
-        line-height: 1.75 !important;
+        line-height: 1.95 !important;
+        text-align: justify !important;
       }
+      h1, h2, h3, h4 { font-family: "Songti SC", "STSong", serif !important; font-weight: 600 !important; }
       a { color: ${ink} !important; }
       ::selection { background: rgba(214, 176, 94, 0.35) !important; }
     `
@@ -302,7 +305,7 @@ export class EpubReader {
 
   private applyFlow(): void {
     this.view.renderer?.setAttribute?.('flow', this.flow === 'scrolled' ? 'scrolled' : 'paginated')
-    this.view.renderer?.setAttribute?.('margin', '28px')
+    this.view.renderer?.setAttribute?.('margin', '29px')
     this.view.renderer?.setAttribute?.('max-column-count', '1')
   }
 

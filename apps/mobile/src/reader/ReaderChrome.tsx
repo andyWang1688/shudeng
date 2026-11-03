@@ -12,8 +12,9 @@ export type ReaderChromeProps = {
   readonly visible: boolean;
   readonly annotationCount?: number;
   readonly onBack: () => void;
-  readonly onBookmark?: () => void;
   readonly onAnnotations?: () => void;
+  /** Swift 阅读器右上「更多」：书签等次要操作放入该菜单。 */
+  readonly onMore?: () => void;
   readonly onAsk: () => void;
 };
 
@@ -29,8 +30,8 @@ export function ReaderChrome({
   visible,
   annotationCount = 0,
   onBack,
-  onBookmark,
   onAnnotations,
+  onMore,
   onAsk,
 }: ReaderChromeProps) {
   const insets = useSafeAreaInsets();
@@ -62,15 +63,15 @@ export function ReaderChrome({
             {chapter ? <Text style={styles.chapter} numberOfLines={1}>{chapter}</Text> : null}
           </View>
           <View style={styles.actions}>
-            {onBookmark ? (
-              <Pressable accessibilityRole="button" accessibilityLabel="书签" onPress={onBookmark} style={styles.iconButton}>
-                <SymbolView name="bookmark" size={19} tintColor={colors.ink2} />
-              </Pressable>
-            ) : null}
             {onAnnotations ? (
               <Pressable accessibilityRole="button" accessibilityLabel="标注" onPress={onAnnotations} style={styles.iconButton}>
                 <SymbolView name="list.bullet" size={19} tintColor={colors.ink2} />
                 {annotationCount > 0 ? <Text style={styles.badge}>{annotationCount}</Text> : null}
+              </Pressable>
+            ) : null}
+            {onMore ? (
+              <Pressable accessibilityRole="button" accessibilityLabel="更多" onPress={onMore} style={styles.iconButton}>
+                <SymbolView name="ellipsis" size={19} tintColor={colors.ink2} />
               </Pressable>
             ) : null}
           </View>

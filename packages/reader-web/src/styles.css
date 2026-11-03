@@ -38,7 +38,7 @@ body {
   overflow: hidden;
   background: var(--paper);
   color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Songti SC', serif;
+  font-family: 'Songti SC', 'STSong', 'PingFang SC', serif;
   -webkit-tap-highlight-color: transparent;
 }
 

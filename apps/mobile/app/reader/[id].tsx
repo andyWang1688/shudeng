@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import type { BookRow } from '@shudeng/core/db';
 import { ReaderShell } from '../../src/ui/ReaderShell';
 import { ImportedPdfReader } from '../../src/reader/ImportedPdfReader';
@@ -70,6 +70,7 @@ function parseReaderLocator(raw: string | string[] | undefined): StoredReaderLoc
 export default function ReaderRoute() {
   const params = useLocalSearchParams<{ id?: string | string[]; locator?: string | string[] }>();
   const router = useRouter();
+  const navigation = useNavigation();
   const rawId = params.id;
   const bookId = Array.isArray(rawId) ? (rawId[0] ?? '') : (rawId ?? '');
   const [book, setBook] = useState<BookRow | null>(null);
@@ -85,7 +86,16 @@ export default function ReaderRoute() {
   const [pdfPage, setPdfPage] = useState(1);
   const [pdfTotal, setPdfTotal] = useState(0);
   const [pdfNotice, setPdfNotice] = useState<string | null>(null);
-  const referenceMode = params.locator !== undefined && params.locator !== '';
+  const previousRouteName = (() => {
+    try {
+      const state = navigation.getState() as { index?: number; routes?: Array<{ name?: string }> } | undefined;
+      const index = state?.index ?? 0;
+      return state?.routes?.[index - 1]?.name;
+    } catch {
+      return undefined;
+    }
+  })();
+  const referenceMode = previousRouteName === 'book-chat';
   const pdfLatestPage = useRef(1);
   const pdfTotalRef = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -236,6 +246,13 @@ export default function ReaderRoute() {
   }
 
   if (book.format === 'pdf') {
+    const showPdfMoreMenu = () => {
+      Alert.alert('阅读选项', undefined, [
+        { text: '添加书签', onPress: () => void bookmarkPdf() },
+        { text: '标注', onPress: () => setPdfPanelOpen(true) },
+        { text: '取消', style: 'cancel' },
+      ]);
+    };
     const initialPage = jump?.type === 'pdf' ? jump.page : progress?.locator.type === 'pdf' ? progress.locator.page : undefined;
     const pdfAnnotations = annotations.filter((annotation) => annotation.kind === 'bookmark' || annotation.kind === 'note');
     return (
@@ -256,6 +273,7 @@ export default function ReaderRoute() {
           onBack={() => router.back()}
           onBookmark={() => void bookmarkPdf()}
           onAnnotations={() => setPdfPanelOpen(true)}
+          onMore={showPdfMoreMenu}
           onAsk={() => askPdfBook()}
         />
         {pdfNotice ? <Text style={[styles.pdfToast, { top: 70 }]}>{pdfNotice}</Text> : null}

@@ -111,9 +111,9 @@ function createStyles(palette: Palette) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: palette.paper },
     header: { paddingHorizontal: spacing.screen },
-    title: { marginTop: 6, fontSize: type.title, fontWeight: '700', color: palette.ink },
-    subtitle: { marginTop: 4, fontSize: type.caption, color: palette.ink3 },
-    search: { height: 44, borderRadius: radius.field, backgroundColor: palette.paperDeep, marginTop: 16, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8 },
+    title: { marginTop: 21, fontSize: type.title, fontWeight: '700', color: palette.ink },
+    subtitle: { marginTop: 10, fontSize: type.caption, color: palette.ink3 },
+    search: { height: 44, borderRadius: radius.field, backgroundColor: palette.paperDeep, marginTop: 17, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8 },
     searchInput: { flex: 1, padding: 0, fontSize: type.body, color: palette.ink },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     content: { paddingHorizontal: spacing.screen, paddingTop: 12 },

@@ -39,7 +39,7 @@ export default function ProfileRoute() {
           <Text style={styles.tagline}>一盏照书的灯</Text>
         </View>
 
-        <Pressable accessibilityRole="button" onPress={() => router.push('/ai-settings')} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+        <Pressable accessibilityRole="button" onPress={() => router.push('/ai-settings')} style={({ pressed }) => [styles.row, styles.firstRow, pressed && styles.pressed]}>
           <View style={styles.rowIconSlot}><SymbolView name="lightbulb" size={20} tintColor={palette.lamp} /></View>
           <View style={styles.rowBody}>
             <Text style={styles.rowTitle}>AI 服务</Text>
@@ -75,8 +75,8 @@ function createStyles(palette: Palette) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: palette.paper },
     content: { paddingHorizontal: spacing.screen, paddingBottom: 16 },
-    title: { marginTop: 6, fontSize: type.title, fontWeight: '700', color: palette.ink },
-    identity: { alignItems: 'center', marginTop: 32, marginBottom: 8 },
+    title: { marginTop: 11, fontSize: type.title, fontWeight: '700', color: palette.ink },
+    identity: { alignItems: 'center', marginTop: 27, marginBottom: 0 },
     bulb: {
       width: 70,
       height: 70,
@@ -87,8 +87,9 @@ function createStyles(palette: Palette) {
       alignItems: 'center',
       justifyContent: 'center',
     },
-    name: { marginTop: 12, fontSize: 20, fontWeight: '600', color: palette.ink },
-    tagline: { marginTop: 4, fontSize: type.body, color: palette.ink2 },
+    name: { marginTop: 19, fontSize: 20, fontWeight: '600', color: palette.ink },
+    tagline: { marginTop: 14, fontSize: type.body, color: palette.ink2 },
+    firstRow: { marginTop: 38, borderTopWidth: 1, borderTopColor: palette.line },
     row: {
       minHeight: 66,
       flexDirection: 'row',

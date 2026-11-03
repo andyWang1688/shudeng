@@ -641,6 +641,71 @@ export async function appendBookChatTurn(input: {
   }
 }
 
+function citationHref(locatorJson: string | null): string | null {
+  if (!locatorJson) return null;
+  const match = /"href"\s*:\s*"([^"]+)"/.exec(locatorJson);
+  return match?.[1] ?? null;
+}
+
+/**
+ * 旧迁移会话只有 UUID，没有 bookId；用 citations 的 quote/chapter/page/href
+ * 匹配 anchors → books，给会话补上所属书。匹配不到时返回 null（UI 归入「书内问答」）。
+ */
+async function inferLegacyConversationBookId(layer: ShudengDataLayer, conversationId: string): Promise<string | null> {
+  const citations = await layer.driver.all<Record<string, SQLiteValue>>(
+    'SELECT quote, locator_json, chapter, page FROM citations WHERE conversation_id = ? LIMIT 12',
+    [conversationId],
+  );
+  if (citations.length === 0) return null;
+  const scores = new Map<string, number>();
+  const addScore = (bookId: string, score: number): void => {
+    scores.set(bookId, (scores.get(bookId) ?? 0) + score);
+  };
+  for (const citation of citations) {
+    const quote = typeof citation.quote === 'string' && citation.quote.trim().length > 0 ? citation.quote.trim() : null;
+    const chapter = typeof citation.chapter === 'string' && citation.chapter.trim().length > 0 ? citation.chapter.trim() : null;
+    const page = typeof citation.page === 'number' ? citation.page : null;
+    let kind: string | null = null;
+    if (typeof citation.locator_json === 'string') {
+      try {
+        const parsed: unknown = JSON.parse(citation.locator_json);
+        if (isRecord(parsed) && typeof parsed.kind === 'string') kind = parsed.kind;
+      } catch {
+        // 旧 locator 不是 JSON 时忽略。
+      }
+    }
+    const candidates = await layer.driver.all<{ book_id: string; format: string }>(
+      `SELECT DISTINCT a.book_id AS book_id, b.format AS format
+       FROM anchors a JOIN books b ON b.id = a.book_id
+       WHERE (? IS NOT NULL AND a.quote = ?)
+          OR (? IS NOT NULL AND a.chapter = ?)
+          OR (? IS NOT NULL AND a.page = ?)`,
+      [quote, quote, chapter, chapter, page, page],
+    );
+    for (const candidate of candidates) {
+      if (kind === 'pdf' && candidate.format !== 'pdf') continue;
+      if (kind !== null && kind !== 'pdf' && candidate.format !== 'epub') continue;
+      addScore(candidate.book_id, 3);
+    }
+    const href = citationHref(typeof citation.locator_json === 'string' ? citation.locator_json : null);
+    if (href) {
+      const byHref = await layer.driver.all<{ book_id: string; format: string }>(
+        `SELECT DISTINCT a.book_id AS book_id, b.format AS format
+         FROM anchors a JOIN books b ON b.id = a.book_id
+         WHERE a.locator_json LIKE ?`,
+        [`%${href}%`],
+      );
+      for (const candidate of byHref) {
+        if (kind === 'pdf' && candidate.format !== 'pdf') continue;
+        if (kind !== null && kind !== 'pdf' && candidate.format !== 'epub') continue;
+        addScore(candidate.book_id, 2);
+      }
+    }
+  }
+  const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
+  return ranked[0]?.[0] ?? null;
+}
+
 export async function loadConversationSummaries(): Promise<readonly ConversationSummary[]> {
   const layer = await getDataLayer();
   const rows = await layer.driver.all<Record<string, SQLiteValue>>(
@@ -655,9 +720,13 @@ export async function loadConversationSummaries(): Promise<readonly Conversation
     const messages = await layer.store.listMessages(conversationId);
     const question = [...messages].reverse().find((message) => message.role === 'user')?.content ?? '';
     const answer = [...messages].reverse().find((message) => message.role === 'assistant')?.content ?? '';
+    let bookId = conversationId.startsWith(CONVERSATION_PREFIX) ? conversationId.slice(CONVERSATION_PREFIX.length) : '';
+    if (!bookId) {
+      bookId = (await inferLegacyConversationBookId(layer, conversationId)) ?? '';
+    }
     summaries.push({
       conversationId,
-      bookId: conversationId.startsWith(CONVERSATION_PREFIX) ? conversationId.slice(CONVERSATION_PREFIX.length) : '',
+      bookId,
       question,
       answer,
       turns: typeof row.turns === 'number' ? row.turns : messages.length,

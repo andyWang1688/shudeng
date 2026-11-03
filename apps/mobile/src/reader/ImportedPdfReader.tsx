@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import Pdf, { type PdfRef } from 'react-native-pdf';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,6 +16,7 @@ type Props = {
   readonly onBack?: () => void;
   readonly onBookmark?: () => void;
   readonly onAnnotations?: () => void;
+  readonly onMore?: () => void;
   readonly onAsk?: () => void;
   readonly onLoadComplete?: (totalPages: number) => void;
   readonly onPageChanged?: (page: number, total: number) => void;
@@ -30,8 +31,8 @@ export function ImportedPdfReader({
   referenceMode = false,
   annotationCount = 0,
   onBack,
-  onBookmark,
   onAnnotations,
+  onMore,
   onAsk,
   onLoadComplete,
   onPageChanged,
@@ -44,6 +45,7 @@ export function ImportedPdfReader({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [chromeVisible, setChromeVisible] = useState(true);
+  const [retryKey, setRetryKey] = useState(0);
 
   const progressText = totalPages > 0 ? `${Math.round((page / totalPages) * 100)}%` : '0%';
   const pageText = totalPages > 0 ? `第 ${page} / ${totalPages} 页` : '准备加载 PDF';
@@ -73,7 +75,7 @@ export function ImportedPdfReader({
         enablePaging={false}
         enableAntialiasing
         spacing={8}
-        key={`${bookId}-${fileUri}`}
+        key={`${bookId}-${fileUri}-${retryKey}`}
       />
 
       <ReaderChrome
@@ -84,8 +86,8 @@ export function ImportedPdfReader({
         visible={chromeVisible}
         annotationCount={annotationCount}
         onBack={onBack ?? (() => router.back())}
-        {...(onBookmark ? { onBookmark } : {})}
         {...(onAnnotations ? { onAnnotations } : {})}
+        {...(onMore ? { onMore } : {})}
         onAsk={onAsk ?? (() => router.back())}
       />
 
@@ -96,7 +98,13 @@ export function ImportedPdfReader({
         </View>
       ) : null}
       {error ? (
-        <Text style={[styles.error, { bottom: insets.bottom + 78 }]}>{error}</Text>
+        <View style={[styles.errorOverlay, { top: insets.top + 80 }]}>
+          <Text style={styles.errorTitle}>PDF 打开失败</Text>
+          <Text style={styles.errorDetail} numberOfLines={3}>{error}</Text>
+          <Pressable accessibilityRole="button" onPress={() => { setError(null); setLoading(true); setRetryKey((value) => value + 1); }} style={styles.retryButton}>
+            <Text style={styles.retryText}>重试</Text>
+          </Pressable>
+        </View>
       ) : null}
     </View>
   );
@@ -104,8 +112,12 @@ export function ImportedPdfReader({
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.paper },
-  pdf: { flex: 1, width: '100%', backgroundColor: colors.paperDeep },
+  pdf: { flex: 1, width: '100%', backgroundColor: colors.paper },
   loading: { position: 'absolute', left: 0, right: 0, alignItems: 'center', gap: 8, zIndex: 25 },
   message: { fontSize: 13, color: colors.ink3 },
-  error: { position: 'absolute', left: 12, right: 12, zIndex: 30, color: '#7a2f24', backgroundColor: '#f6e3df', borderRadius: 8, padding: spacing.sm, fontSize: 12 },
+  errorOverlay: { position: 'absolute', left: spacing.lg, right: spacing.lg, zIndex: 30, alignItems: 'center', gap: 10, borderRadius: 16, backgroundColor: colors.paper, padding: spacing.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line },
+  errorTitle: { color: colors.ink, fontSize: 15, fontWeight: '600' },
+  errorDetail: { color: colors.ink3, fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  retryButton: { borderRadius: 12, backgroundColor: colors.lampWash, paddingHorizontal: spacing.lg, paddingVertical: 8 },
+  retryText: { color: colors.ink, fontSize: 13, fontWeight: '600' },
 });

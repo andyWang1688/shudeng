@@ -103,6 +103,9 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectionState | null>(null);
+  const [readerReady, setReaderReady] = useState(false);
+  const [readerError, setReaderError] = useState<string | null>(null);
+  const [readerReload, setReaderReload] = useState(0);
   const [panelOpen, setPanelOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteBody, setNoteBody] = useState('');
@@ -110,6 +113,11 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
   const latestProgress = useRef<{ locator: StoredReaderLocator; percent: number; chapter: string | null } | null>(null);
   const lastSavedAt = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setReaderReady(false);
+    setReaderError(null);
+  }, [bookId, readerReload]);
 
   const showNotice = useCallback((message: string) => {
     setNotice(message);
@@ -170,6 +178,7 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
     switch (event.type) {
       case 'ready':
         setError(null);
+        setReaderReady(true);
         break;
       case 'selection': {
         const locator = toStoredLocator(event.locator);
@@ -281,6 +290,14 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
     });
   };
 
+  const showMoreMenu = () => {
+    Alert.alert('阅读选项', undefined, [
+      { text: '添加书签', onPress: () => void saveBookmark() },
+      { text: '标注与书签', onPress: () => setPanelOpen(true) },
+      { text: '取消', style: 'cancel' },
+    ]);
+  };
+
   const highlightSelection = () => {
     if (!selection) return;
     readerRef.current?.highlightSelection(selection.locator, selection.quote);
@@ -297,6 +314,7 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
     <View style={styles.screen}>
       <View style={[styles.content, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         <ReaderWebView
+          key={`${bookId}-${readerReload}`}
           ref={readerRef}
           bookId={bookId}
           initialLocation={initialLocation}
@@ -306,6 +324,21 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
           onTap={() => setChromeVisible((value) => !value)}
           onEvent={onReaderEvent}
         />
+        {!readerReady && !readerError ? (
+          <View style={styles.loadingOverlay} pointerEvents="none">
+            <ActivityIndicator color={colors.lamp} />
+            <Text style={styles.loadingText}>正在打开书籍…</Text>
+          </View>
+        ) : null}
+        {readerError ? (
+          <View style={styles.errorOverlay}>
+            <Text style={styles.errorTitle}>无法打开阅读器</Text>
+            <Text style={styles.errorDetail} numberOfLines={3}>{readerError}</Text>
+            <Pressable accessibilityRole="button" onPress={() => { setReaderReady(false); setReaderError(null); setReaderReload((value) => value + 1); }} style={styles.retryButton}>
+              <Text style={styles.retryText}>重试</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
       <ReaderChrome
@@ -316,8 +349,8 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
         visible={chromeVisible}
         annotationCount={annotations.length}
         onBack={() => router.back()}
-        onBookmark={() => void saveBookmark()}
         onAnnotations={() => setPanelOpen(true)}
+        onMore={showMoreMenu}
         onAsk={askAboutBook}
       />
 
@@ -427,6 +460,13 @@ const styles = StyleSheet.create({
   content: { flex: 1, backgroundColor: colors.paper },
   noticeToast: { position: 'absolute', alignSelf: 'center', left: 24, right: 24, alignItems: 'center', zIndex: 30 },
   noticeText: { borderRadius: 10, backgroundColor: 'rgba(36,33,28,0.86)', color: colors.paper, fontSize: 12, paddingHorizontal: 12, paddingVertical: 6, overflow: 'hidden' },
+  loadingOverlay: { position: 'absolute', left: 0, right: 0, top: '40%', alignItems: 'center', gap: 10, zIndex: 25 },
+  loadingText: { color: colors.ink3, fontSize: 13 },
+  errorOverlay: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: '28%', zIndex: 30, alignItems: 'center', gap: 10, borderRadius: radius.card, backgroundColor: colors.paper, padding: spacing.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line },
+  errorTitle: { color: colors.ink, fontSize: 15, fontWeight: '600' },
+  errorDetail: { color: colors.ink3, fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  retryButton: { borderRadius: radius.field, backgroundColor: colors.lampWash, paddingHorizontal: spacing.lg, paddingVertical: 8 },
+  retryText: { color: colors.ink, fontSize: 13, fontWeight: '600' },
   errorBanner: { position: 'absolute', left: 12, right: 12, zIndex: 35, backgroundColor: '#F6E3DF', paddingHorizontal: spacing.sm, paddingVertical: 7, borderRadius: radius.field },
   errorText: { fontSize: 12, color: '#7A2F24' },
   selectionBar: {

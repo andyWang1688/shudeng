@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { spacing, type, usePalette, type Palette } from './theme';
@@ -16,9 +16,11 @@ const TABS: ReadonlyArray<{ key: TabKey; label: string; href: string; symbol: st
 export function BottomBar({ active }: { readonly active: TabKey }) {
   const router = useRouter();
   const palette = usePalette();
+  const { width } = useWindowDimensions();
   const styles = useMemo(() => createStyles(palette), [palette]);
+  const barHeight = width >= 390 ? 83 : spacing.bottomBar;
   return (
-    <View style={styles.bar}>
+    <View style={[styles.bar, { height: barHeight }]}>
       {TABS.map((tab) => {
         const on = tab.key === active;
         return (
@@ -45,7 +47,6 @@ export function BottomBar({ active }: { readonly active: TabKey }) {
 function createStyles(palette: Palette) {
   return StyleSheet.create({
     bar: {
-      height: spacing.bottomBar,
       flexDirection: 'row',
       borderTopWidth: 1,
       borderTopColor: palette.line,

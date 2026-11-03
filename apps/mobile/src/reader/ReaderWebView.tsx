@@ -65,43 +65,36 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
   const format = useMemo(() => (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub'), [bookId]);
   const fixture = readerFixtures[format];
 
-  const html = useMemo(() => {
-    const hideWebChrome = `<style>
-      #chrome, #footer { display: none !important; }
-      #app { padding: 0 !important; height: 100% !important; }
-      #reader { height: 100vh !important; }
-    </style>`;
-    const tapBridge = `<script>
-      (function () {
-        function sendTap() {
-          try { window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'reader:tap' })); } catch (e) {}
-        }
-        function attach(doc) {
-          if (!doc || doc.__readerTapBridge) return;
-          doc.__readerTapBridge = true;
-          doc.addEventListener('click', function (event) {
-            var selection = doc.getSelection && doc.getSelection();
-            if (selection && selection.type === 'Range' && selection.toString().trim()) return;
-            if (event.target && event.target.closest && event.target.closest('a,button,input,textarea')) return;
-            var win = doc.defaultView;
-            var width = win ? win.innerWidth : doc.documentElement.clientWidth;
-            var x = typeof event.clientX === 'number' ? event.clientX : 0;
-            if (width > 0 && (x < width * 0.3 || x > width * 0.7)) return;
-            sendTap();
-          }, true);
-        }
-        attach(document);
-        setInterval(function () {
-          document.querySelectorAll('iframe').forEach(function (frame) {
-            try { attach(frame.contentDocument); } catch (e) {}
-          });
-        }, 400);
-      })();
-    </script>`;
-    return readerWebHtml
-      .replace('</head>', hideWebChrome + '</head>')
-      .replace('</body>', tapBridge + '</body>');
-  }, []);
+  const parityScript = useMemo(() => `
+    (function () {
+      var hide = document.createElement('style');
+      hide.textContent = '#chrome, #footer { display: none !important; } #app { padding: 0 !important; height: 100% !important; } #reader { height: 100vh !important; }';
+      (document.head || document.documentElement).appendChild(hide);
+      function sendTap() {
+        try { window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'reader:tap' })); } catch (e) {}
+      }
+      function attach(doc) {
+        if (!doc || doc.__readerTapBridge) return;
+        doc.__readerTapBridge = true;
+        doc.addEventListener('click', function (event) {
+          var selection = doc.getSelection && doc.getSelection();
+          if (selection && selection.type === 'Range' && selection.toString().trim()) return;
+          if (event.target && event.target.closest && event.target.closest('a,button,input,textarea')) return;
+          var win = doc.defaultView;
+          var width = win ? win.innerWidth : doc.documentElement.clientWidth;
+          var x = typeof event.clientX === 'number' ? event.clientX : 0;
+          if (width > 0 && (x < width * 0.3 || x > width * 0.7)) return;
+          sendTap();
+        }, true);
+      }
+      attach(document);
+      setInterval(function () {
+        document.querySelectorAll('iframe').forEach(function (frame) {
+          try { attach(frame.contentDocument); } catch (e) {}
+        });
+      }, 400);
+    })();
+  `, []);
 
   const send = useCallback((message: object) => {
     const json = JSON.stringify(message);
@@ -214,7 +207,8 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
         ref={webViewRef}
         style={styles.webView}
         originWhitelist={['*']}
-        source={{ html }}
+        source={{ html: readerWebHtml }}
+        injectedJavaScript={parityScript}
         javaScriptEnabled
         domStorageEnabled
         setSupportMultipleWindows={false}
