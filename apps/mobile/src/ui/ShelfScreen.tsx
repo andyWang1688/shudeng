@@ -97,7 +97,7 @@ export function ShelfScreen() {
   };
 
   const continueDetail = continueBook
-    ? `${continueBook.progressChapter ? `${continueBook.progressChapter.split(' · ')[0]} · ` : ''}${continueBook.progressLabel}`
+    ? `${continueBook.progressChapter ? `${continueBook.progressChapter.split(' · ')[0]} · ` : ''}${continueBook.progressLabel}${continueBook.progressPercent !== null && continueBook.format === 'PDF' ? ` · ${continueBook.progressPercent}%` : ''}`
     : '';
   const continueTone = continueBook ? bookCoverTone(continueBook.title, continueBook.format) : null;
 

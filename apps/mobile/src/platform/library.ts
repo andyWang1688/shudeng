@@ -725,12 +725,35 @@ function citationHref(locatorJson: string | null): string | null {
  * 旧迁移会话只有 UUID，没有 bookId；用 citations 的 quote/chapter/page/href
  * 匹配 anchors → books，给会话补上所属书。匹配不到时返回 null（UI 归入「书内问答」）。
  */
+let legacyQuestionBookCache: Map<string, string> | null = null;
+
+/** 旧 reading-questions.json 自带 bookID；用于 citations 缺失的旧对话归书。 */
+function legacyQuestionBookIds(): Map<string, string> {
+  if (legacyQuestionBookCache) return legacyQuestionBookCache;
+  const map = new Map<string, string>();
+  const questions = parseOptional<unknown>('reading-questions.json');
+  if (Array.isArray(questions)) {
+    for (const item of questions) {
+      if (!isRecord(item)) continue;
+      const id = typeof item.id === 'string' ? item.id : null;
+      const bookID = typeof item.bookID === 'string' ? item.bookID : null;
+      if (id && bookID) map.set(id, bookID);
+      const followUps = Array.isArray(item.followUps) ? item.followUps : [];
+      for (const follow of followUps) {
+        if (isRecord(follow) && typeof follow.id === 'string' && bookID) map.set(follow.id, bookID);
+      }
+    }
+  }
+  legacyQuestionBookCache = map;
+  return map;
+}
+
 async function inferLegacyConversationBookId(layer: ShudengDataLayer, conversationId: string): Promise<string | null> {
   const citations = await layer.driver.all<Record<string, SQLiteValue>>(
     'SELECT quote, locator_json, chapter, page FROM citations WHERE conversation_id = ? LIMIT 12',
     [conversationId],
   );
-  if (citations.length === 0) return null;
+  if (citations.length === 0) return legacyQuestionBookIds().get(conversationId) ?? null;
   const scores = new Map<string, number>();
   const addScore = (bookId: string, score: number): void => {
     scores.set(bookId, (scores.get(bookId) ?? 0) + score);
