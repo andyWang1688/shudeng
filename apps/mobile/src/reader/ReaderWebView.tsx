@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { ElementRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
@@ -12,6 +12,7 @@ import {
   type IncomingMessage,
   type ReaderAnnotationSeed,
   type ReaderEvent,
+  type ReaderLocator,
   type SelectionRect,
 } from './readerProtocol';
 import { ReaderSelectionBar } from './ReaderSelectionBar';
@@ -32,7 +33,13 @@ type ReaderWebViewProps = {
   readonly initialAnnotations?: readonly ReaderAnnotationSeed[];
   /** 是否显示 ReaderWebView 内置选字浮层；宿主自己渲染选字栏时传 false。默认 true。 */
   readonly selectionBar?: boolean;
+  readonly onTap?: () => void;
   readonly onEvent: (event: ReaderEvent) => void;
+};
+
+export type ReaderWebViewHandle = {
+  highlightSelection: (locator: ReaderLocator, quote: string) => void;
+  clearSelection: () => void;
 };
 
 type SelectionState = {
@@ -46,7 +53,10 @@ type SelectionState = {
  * 通过 reader:open/ready/selection/progress/annotation 协议与网页阅读器双向通信。
  * Expo Web 使用 ReaderWebView.web.tsx 的 iframe 实现；这里只在 iOS/Android 生效。
  */
-export function ReaderWebView({ bookId, initialLocation, openOverride, initialAnnotations, selectionBar = true, onEvent }: ReaderWebViewProps) {
+export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView(
+  { bookId, initialLocation, openOverride, initialAnnotations, selectionBar = true, onTap, onEvent },
+  ref,
+) {
   const webViewRef = useRef<ElementRef<typeof WebView>>(null);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const openSent = useRef(false);
@@ -54,6 +64,44 @@ export function ReaderWebView({ bookId, initialLocation, openOverride, initialAn
 
   const format = useMemo(() => (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub'), [bookId]);
   const fixture = readerFixtures[format];
+
+  const html = useMemo(() => {
+    const hideWebChrome = `<style>
+      #chrome, #footer { display: none !important; }
+      #app { padding: 0 !important; height: 100% !important; }
+      #reader { height: 100vh !important; }
+    </style>`;
+    const tapBridge = `<script>
+      (function () {
+        function sendTap() {
+          try { window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'reader:tap' })); } catch (e) {}
+        }
+        function attach(doc) {
+          if (!doc || doc.__readerTapBridge) return;
+          doc.__readerTapBridge = true;
+          doc.addEventListener('click', function (event) {
+            var selection = doc.getSelection && doc.getSelection();
+            if (selection && selection.type === 'Range' && selection.toString().trim()) return;
+            if (event.target && event.target.closest && event.target.closest('a,button,input,textarea')) return;
+            var win = doc.defaultView;
+            var width = win ? win.innerWidth : doc.documentElement.clientWidth;
+            var x = typeof event.clientX === 'number' ? event.clientX : 0;
+            if (width > 0 && (x < width * 0.3 || x > width * 0.7)) return;
+            sendTap();
+          }, true);
+        }
+        attach(document);
+        setInterval(function () {
+          document.querySelectorAll('iframe').forEach(function (frame) {
+            try { attach(frame.contentDocument); } catch (e) {}
+          });
+        }, 400);
+      })();
+    </script>`;
+    return readerWebHtml
+      .replace('</head>', hideWebChrome + '</head>')
+      .replace('</body>', tapBridge + '</body>');
+  }, []);
 
   const send = useCallback((message: object) => {
     const json = JSON.stringify(message);
@@ -79,6 +127,27 @@ export function ReaderWebView({ bookId, initialLocation, openOverride, initialAn
       })(); true;
     `);
   }, [bookId, fixture, initialLocation, openOverride]);
+
+  useImperativeHandle(ref, () => ({
+    highlightSelection: (locator: ReaderLocator, quote: string) => {
+      send({
+        type: 'reader:annotation:add',
+        payload: {
+          id: `reader-${Date.now()}`,
+          format,
+          locator,
+          text: quote,
+          color: 'yellow',
+        },
+      });
+      send({ type: 'reader:selection:clear' });
+      setSelection(null);
+    },
+    clearSelection: () => {
+      send({ type: 'reader:selection:clear' });
+      setSelection(null);
+    },
+  }), [format, send]);
 
   const handleMessage = useCallback((incoming: IncomingMessage) => {
     if (incoming.type === 'reader:ready') {
@@ -145,14 +214,19 @@ export function ReaderWebView({ bookId, initialLocation, openOverride, initialAn
         ref={webViewRef}
         style={styles.webView}
         originWhitelist={['*']}
-        source={{ html: readerWebHtml }}
+        source={{ html }}
         javaScriptEnabled
         domStorageEnabled
         setSupportMultipleWindows={false}
         onLoadEnd={injectOpen}
         onMessage={(event) => {
           const parsed = parseIncomingMessage(event.nativeEvent.data);
-          if (parsed) handleMessage(parsed);
+          if (!parsed) return;
+          if ((parsed as { type?: string }).type === 'reader:tap') {
+            onTap?.();
+            return;
+          }
+          handleMessage(parsed);
         }}
         onError={(event) => {
           onEvent({ type: 'error', message: event.nativeEvent.description });
@@ -167,7 +241,7 @@ export function ReaderWebView({ bookId, initialLocation, openOverride, initialAn
       ) : null}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.paper },

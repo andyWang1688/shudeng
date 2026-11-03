@@ -85,6 +85,7 @@ export default function ReaderRoute() {
   const [pdfPage, setPdfPage] = useState(1);
   const [pdfTotal, setPdfTotal] = useState(0);
   const [pdfNotice, setPdfNotice] = useState<string | null>(null);
+  const referenceMode = params.locator !== undefined && params.locator !== '';
   const pdfLatestPage = useRef(1);
   const pdfTotalRef = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -244,25 +245,20 @@ export default function ReaderRoute() {
           bookId={bookId}
           title={book.title}
           fileUri={fileUri}
+          referenceMode={referenceMode}
+          annotationCount={pdfAnnotations.length}
           {...(initialPage ? { initialPage } : {})}
           onLoadComplete={(total) => {
             pdfTotalRef.current = total;
             setPdfTotal(total);
           }}
           onPageChanged={(page, total) => savePdfPage(page, total)}
+          onBack={() => router.back()}
+          onBookmark={() => void bookmarkPdf()}
+          onAnnotations={() => setPdfPanelOpen(true)}
+          onAsk={() => askPdfBook()}
         />
-        {pdfNotice ? <Text style={styles.pdfToast}>{pdfNotice}</Text> : null}
-        <View style={styles.pdfActions}>
-          <Pressable accessibilityRole="button" accessibilityLabel="PDF 书签" onPress={() => void bookmarkPdf()} style={styles.pdfActionButton}>
-            <Text style={styles.pdfActionText}>书签</Text>
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="PDF 标注" onPress={() => setPdfPanelOpen(true)} style={styles.pdfActionButton}>
-            <Text style={styles.pdfActionText}>标注{pdfAnnotations.length > 0 ? ` ${pdfAnnotations.length}` : ''}</Text>
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="问书灯" onPress={() => askPdfBook()} style={[styles.pdfActionButton, styles.pdfAskButton]}>
-            <Text style={styles.pdfAskText}>问书灯</Text>
-          </Pressable>
-        </View>
+        {pdfNotice ? <Text style={[styles.pdfToast, { top: 70 }]}>{pdfNotice}</Text> : null}
         <Modal visible={pdfPanelOpen} transparent animationType="slide" onRequestClose={() => setPdfPanelOpen(false)}>
           <View style={styles.modalBackdrop}>
             <View style={styles.panel}>
@@ -316,6 +312,7 @@ export default function ReaderRoute() {
       title={book.title}
       openOverride={{ format: 'epub', title: book.title, dataBase64: epubBase64 ?? '', mimeType: 'application/epub+zip' }}
       initialAnnotations={annotations}
+      referenceMode={referenceMode}
       onJumpToLocator={jumpToLocator}
       onAnnotationsChanged={setAnnotations}
     />

@@ -10,10 +10,11 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ReaderWebView, type ReaderEvent } from '../reader/ReaderWebView';
-import { SymbolView } from 'expo-symbols';
+import { ReaderWebView, type ReaderEvent, type ReaderWebViewHandle } from '../reader/ReaderWebView';
+import { ReaderChrome } from '../reader/ReaderChrome';
+
 import type { ReaderAnnotationSeed, ReaderLocator } from '../reader/readerProtocol';
 import {
   deleteReaderAnnotation,
@@ -41,6 +42,8 @@ type ReaderShellProps = {
   readonly initialAnnotations?: readonly ShelfAnnotation[];
   readonly onJumpToLocator?: (locator: StoredReaderLocator) => void;
   readonly onAnnotationsChanged?: (annotations: readonly ShelfAnnotation[]) => void;
+  /** 从 AI 引用进入：左上角显示「返回问答」。 */
+  readonly referenceMode?: boolean;
 };
 
 type SelectionState = {
@@ -89,8 +92,11 @@ function toSeed(annotation: ShelfAnnotation, format: BookFormat): ReaderAnnotati
   };
 }
 
-export function ReaderShell({ bookId, initialLocation, title, openOverride, initialAnnotations, onJumpToLocator, onAnnotationsChanged }: ReaderShellProps) {
+export function ReaderShell({ bookId, initialLocation, title, openOverride, initialAnnotations, onJumpToLocator, onAnnotationsChanged, referenceMode = false }: ReaderShellProps) {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const readerRef = useRef<ReaderWebViewHandle>(null);
+  const [chromeVisible, setChromeVisible] = useState(true);
   const [annotations, setAnnotations] = useState<readonly ShelfAnnotation[]>(initialAnnotations ?? []);
   const [progress, setProgress] = useState(0);
   const [chapter, setChapter] = useState<string | null>(null);
@@ -275,68 +281,76 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
     });
   };
 
+  const highlightSelection = () => {
+    if (!selection) return;
+    readerRef.current?.highlightSelection(selection.locator, selection.quote);
+    onReaderEvent({ type: 'annotationAdded', locator: selection.locator, quote: selection.quote });
+    setSelection(null);
+  };
+
   const seedAnnotations = (initialAnnotations ?? []).flatMap((annotation) => {
     const seed = toSeed(annotation, 'EPUB');
     return seed ? [seed] : [];
   });
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-      <View style={styles.toolbar}>
-        <Pressable accessibilityRole="button" accessibilityLabel="返回书架" onPress={() => router.back()} style={styles.iconButton}>
-          <SymbolView name="chevron.left" size={20} tintColor={colors.ink} />
-        </Pressable>
-        <Text style={styles.title} numberOfLines={1}>{title ?? '阅读'}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel="书签" onPress={() => void saveBookmark()} style={styles.iconButton}>
-          <SymbolView name="bookmark" size={20} tintColor={colors.ink} />
-        </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="标注" onPress={() => setPanelOpen(true)} style={styles.iconButton}>
-          <SymbolView name="list.bullet" size={20} tintColor={colors.ink} />
-        </Pressable>
+    <View style={styles.screen}>
+      <View style={[styles.content, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <ReaderWebView
+          ref={readerRef}
+          bookId={bookId}
+          initialLocation={initialLocation}
+          openOverride={openOverride}
+          initialAnnotations={seedAnnotations}
+          selectionBar={false}
+          onTap={() => setChromeVisible((value) => !value)}
+          onEvent={onReaderEvent}
+        />
       </View>
 
+      <ReaderChrome
+        title={title ?? '阅读'}
+        chapter={chapter}
+        progressText={`${Math.round(progress * 100)}%`}
+        referenceMode={referenceMode}
+        visible={chromeVisible}
+        annotationCount={annotations.length}
+        onBack={() => router.back()}
+        onBookmark={() => void saveBookmark()}
+        onAnnotations={() => setPanelOpen(true)}
+        onAsk={askAboutBook}
+      />
+
       {error ? (
-        <Pressable accessibilityRole="button" onPress={() => setError(null)} style={styles.errorBanner}>
+        <Pressable accessibilityRole="button" onPress={() => setError(null)} style={[styles.errorBanner, { top: insets.top + 58 }]}>
           <Text style={styles.errorText} numberOfLines={2}>{error}</Text>
         </Pressable>
       ) : null}
-
-      <ReaderWebView
-        bookId={bookId}
-        initialLocation={initialLocation}
-        openOverride={openOverride}
-        initialAnnotations={seedAnnotations}
-        onEvent={onReaderEvent}
-      />
-      <Pressable accessibilityRole="button" accessibilityLabel="问书灯" onPress={askAboutBook} style={styles.askCapsule}>
-        <SymbolView name="lightbulb" size={17} tintColor={colors.ink} />
-        <Text style={styles.askCapsuleText}>问问书灯</Text>
-      </Pressable>
+      {notice ? (
+        <View style={[styles.noticeToast, { top: insets.top + 58 }]} pointerEvents="none">
+          <Text style={styles.noticeText}>{notice}</Text>
+        </View>
+      ) : null}
 
       {selection ? (
-        <View style={styles.selectionBar}>
+        <View style={[styles.selectionBar, { bottom: insets.bottom + 72 }]}>
           <Text style={styles.selectionQuote} numberOfLines={2}>{selection.quote}</Text>
           <View style={styles.selectionActions}>
+            <Pressable accessibilityRole="button" accessibilityLabel="高亮" onPress={highlightSelection} style={styles.selectionButton}>
+              <Text style={styles.selectionButtonText}>高亮</Text>
+            </Pressable>
             <Pressable accessibilityRole="button" onPress={() => { setNoteOpen(true); setNoteBody(''); }} style={styles.selectionButton}>
               <Text style={styles.selectionButtonText}>写笔记</Text>
             </Pressable>
             <Pressable accessibilityRole="button" onPress={askAboutSelection} style={styles.selectionButton}>
               <Text style={styles.selectionButtonText}>问书灯</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" onPress={() => setSelection(null)} style={styles.selectionCancel}>
+            <Pressable accessibilityRole="button" onPress={() => { readerRef.current?.clearSelection(); setSelection(null); }} style={styles.selectionCancel}>
               <Text style={styles.selectionCancelText}>取消</Text>
             </Pressable>
           </View>
         </View>
       ) : null}
-
-      <View style={styles.footer}>
-        {notice ? <Text style={styles.notice} numberOfLines={1}>{notice}</Text> : <Text style={styles.footerText}>{chapter ? `章节：${chapter}` : '继续阅读'}</Text>}
-        <Text style={styles.percent}>{Math.round(progress * 100)}%</Text>
-        <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${Math.max(1, Math.round(progress * 100))}%` }]} />
-        </View>
-      </View>
 
       <Modal visible={panelOpen} transparent animationType="slide" onRequestClose={() => setPanelOpen(false)}>
         <View style={styles.modalBackdrop}>
@@ -404,56 +418,34 @@ export function ReaderShell({ bookId, initialLocation, title, openOverride, init
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.paper },
-  toolbar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.line,
-    backgroundColor: colors.paper,
-    gap: 6,
-  },
-  backButton: { paddingVertical: 6 },
-  backText: { fontSize: 14, color: colors.lamp },
-  title: { flex: 1, fontSize: 15, fontWeight: '600', color: colors.ink },
-  iconButton: { paddingVertical: 7, paddingHorizontal: 5 },
-  iconText: { fontSize: 12, color: colors.ink2 },
-  askCapsule: {
-    position: 'absolute',
-    bottom: 54,
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
-    borderRadius: 22,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-  },
-  askCapsuleText: { fontSize: 13, fontWeight: '600', color: colors.ink },
-  errorBanner: { backgroundColor: '#F6E3DF', paddingHorizontal: spacing.sm, paddingVertical: 7 },
+  screen: { flex: 1, backgroundColor: colors.paper },
+  content: { flex: 1, backgroundColor: colors.paper },
+  noticeToast: { position: 'absolute', alignSelf: 'center', left: 24, right: 24, alignItems: 'center', zIndex: 30 },
+  noticeText: { borderRadius: 10, backgroundColor: 'rgba(36,33,28,0.86)', color: colors.paper, fontSize: 12, paddingHorizontal: 12, paddingVertical: 6, overflow: 'hidden' },
+  errorBanner: { position: 'absolute', left: 12, right: 12, zIndex: 35, backgroundColor: '#F6E3DF', paddingHorizontal: spacing.sm, paddingVertical: 7, borderRadius: radius.field },
   errorText: { fontSize: 12, color: '#7A2F24' },
   selectionBar: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
+    position: 'absolute',
+    left: spacing.sm,
+    right: spacing.sm,
+    zIndex: 40,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    borderRadius: radius.card,
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.sm,
     paddingTop: spacing.xs,
     paddingBottom: spacing.sm,
     gap: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
   },
   selectionQuote: { fontSize: 12, lineHeight: 17, color: colors.ink2 },
   selectionActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
