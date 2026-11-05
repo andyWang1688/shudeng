@@ -1,416 +1,543 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AgentRunSession, VerifiedCitation } from '@shudeng/core';
+import { AppState } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import type { AgentContextEstimate, AgentContextUsage, AgentRunSession } from '@shudeng/core';
+import { getBookChatAvailability, startBookChatTurn, type BookChatAvailability } from '../../platform/ai';
 import {
-  BookChatConfigError,
-  BookChatIndexError,
-  getBookChatAvailability,
-  startBookChatTurn,
-  type BookChatAvailability,
-} from '../../platform/ai';
-import { appendBookChatTurn } from '../../platform/library';
-import { friendlyError, serviceName } from './format';
-import type { ChatTurn, ToolLine } from './types';
+  appendBookChatTurn,
+  createBookConversationId,
+  loadBookConversation,
+  registerConversationRun,
+  cancelConversationRun,
+  isBookConversationDeleted,
+} from '../../platform/library';
+import { friendlyError, serviceName, streamingAnswer } from './format';
+import { nativeToolDetail, nativeToolPreview, nativeToolSummary, nativeToolTitle } from './toolPresentation';
+import { questionSelection, selectionFields, type QuestionSelection } from './selectionPresentation';
+import { captureQuestionOrigin, resolveQuestionOrigin, type QuestionOriginSnapshot } from '../../platform/library/questionOrigin';
+import type { ChatTurn } from './types';
+import {
+  activeConversationRun,
+  mergeConversationRun,
+  finishConversationRun,
+  publishConversationRun,
+  subscribeConversationRun,
+  discardConversationRun,
+  type ConversationRunSnapshot,
+  hasUnsavedConversationTurn,
+} from './conversationRuntime';
+import { createTurnPersistence } from './turnPersistence';
+import type { QuestionPresentation } from '../reader-question/session';
 
 export interface UseBookChatOptions {
   readonly bookId: string;
+  readonly conversationId?: string | undefined;
   readonly bookTitleParam?: string | undefined;
   readonly selectionQuote?: string | undefined;
   readonly initialQuestion?: string | undefined;
+  readonly readingPosition?: string | undefined;
+  readonly presentation?: QuestionPresentation | undefined;
 }
 
-export interface UseBookChatResult {
-  readonly availability: BookChatAvailability | null;
-  readonly loadError: string | null;
-  readonly loading: boolean;
-  readonly question: string;
-  readonly setQuestion: (value: string) => void;
-  readonly turns: ChatTurn[];
-  readonly running: boolean;
-  readonly title: string;
-  readonly format: 'epub' | 'pdf';
-  readonly configMissing: boolean;
-  readonly indexMissing: boolean;
-  readonly canSend: boolean;
-  readonly placeholder: string;
-  readonly service: string;
-  readonly selectionPending: boolean;
-  readonly indexDetail: string;
-  readonly send: (override?: string) => Promise<void>;
-  readonly retry: (turn: ChatTurn) => void;
-  readonly cancel: () => void;
-}
+let sequence = 0;
+const nextId = () => `turn-${Date.now()}-${++sequence}`;
 
-let turnSequence = 0;
-function nextTurnId(): string {
-  turnSequence += 1;
-  return `turn-${Date.now()}-${turnSequence}`;
-}
-
-type TurnUpdate =
-  | { readonly kind: 'reasoning'; readonly delta: string }
-  | { readonly kind: 'text'; readonly delta: string }
-  | { readonly kind: 'toolStarted'; readonly callId: string; readonly name: string }
-  | { readonly kind: 'toolFinished'; readonly callId: string; readonly isError: boolean; readonly durationMs: number }
-  | { readonly kind: 'citation'; readonly citation: VerifiedCitation }
-  | { readonly kind: 'patch'; readonly patch: Partial<ChatTurn> };
-
-/** 把一帧内累积的流式增量合成一次 turn 更新；只在原 assistant turn 上改。 */
-function applyTurnUpdates(turn: ChatTurn, updates: readonly TurnUpdate[]): ChatTurn {
-  let text = turn.text;
-  let reasoning = turn.reasoning;
-  let tools: ToolLine[] = turn.tools;
-  let citations = turn.citations;
-  let warnings = turn.warnings;
-  let status = turn.status;
-  let error = turn.error;
-  let sourceQuestion = turn.sourceQuestion;
-  for (const update of updates) {
-    switch (update.kind) {
-      case 'reasoning':
-        reasoning += update.delta;
-        break;
-      case 'text':
-        text += update.delta;
-        break;
-      case 'toolStarted':
-        tools = [...tools, { callId: update.callId, name: update.name, status: 'running' }];
-        break;
-      case 'toolFinished':
-        tools = tools.map((tool) =>
-          tool.callId === update.callId
-            ? { ...tool, status: update.isError ? 'error' : 'done', detail: `${Math.round(update.durationMs)}ms` }
-            : tool,
-        );
-        break;
-      case 'citation':
-        if (!citations.some((citation) => citation.id === update.citation.id)) {
-          citations = [...citations, update.citation];
-        }
-        break;
-      case 'patch': {
-        const patch = update.patch;
-        if (patch.text !== undefined) text = patch.text;
-        if (patch.citations !== undefined) citations = patch.citations;
-        if (patch.warnings !== undefined) warnings = patch.warnings;
-        if (patch.status !== undefined) status = patch.status;
-        if (patch.error !== undefined) error = patch.error;
-        if (patch.sourceQuestion !== undefined) sourceQuestion = patch.sourceQuestion;
-        break;
-      }
-    }
-  }
-  return {
-    ...turn,
-    text,
-    reasoning,
-    tools,
-    citations,
-    warnings,
-    status,
-    ...(error !== undefined ? { error } : {}),
-    ...(sourceQuestion !== undefined ? { sourceQuestion } : {}),
-  };
-}
-
-/** 书内问答的所有数据/Agent 生命周期；视图只消费状态与回调。 */
-export function useBookChat(options: UseBookChatOptions): UseBookChatResult {
+/** Owns one independent conversation, its durable history, and exactly one active run. */
+export function useBookChat(options: UseBookChatOptions) {
   const { bookId, bookTitleParam, selectionQuote, initialQuestion } = options;
+  const [conversationId] = useState(() => options.conversationId ?? createBookConversationId());
   const [availability, setAvailability] = useState<BookChatAvailability | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [question, setQuestion] = useState(initialQuestion ?? '');
+  const [question, setLocalQuestion] = useState(options.presentation?.getSnapshot().draft ?? initialQuestion ?? '');
+  const setQuestion = useCallback((value: string) => {
+    const selection = options.presentation?.getSnapshot().selection;
+    options.presentation?.update({ draft: value, ...(selection ? { selection: {
+      start: Math.min(selection.start, value.length), end: Math.min(selection.end, value.length),
+    } } : {}) });
+    setLocalQuestion(value);
+  }, [options.presentation]);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [running, setRunning] = useState(false);
-  const sessionRef = useRef<AgentRunSession | null>(null);
-  const historyRef = useRef<Array<{ question: string; answer: string }>>([]);
-  const selectionUsedRef = useRef(false);
-  const initialSentRef = useRef(false);
+  const [contextUsage, setContextUsage] = useState<AgentContextUsage | undefined>();
+  const [contextEstimate, setContextEstimate] = useState<AgentContextEstimate | undefined>();
+  const firstBookTitle = useRef<string | undefined>(undefined);
+  const session = useRef<AgentRunSession | null>(null);
+  const runningRef = useRef(false);
+  const cancelRequested = useRef(false);
+  const history = useRef<Array<{ id: string; question: string; answer: string }>>([]);
+  const savingTurns = useRef(new Set<string>());
+  const selectionUsed = useRef(options.presentation?.getSnapshot().selectionConsumed ?? false);
+  const conversationSelection = useRef(questionSelection(selectionQuote !== undefined ? { selectionQuote } : {}));
+  const conversationOrigin = useRef<QuestionOriginSnapshot | null | undefined>(undefined);
+  const initialSent = useRef(options.presentation?.getSnapshot().initialQuestionConsumed ?? false);
+  const mounted = useRef(true);
+  const latestSnapshot = useRef<ConversationRunSnapshot | undefined>(undefined);
 
-  // 流式增量按帧合并：一次 rAF 最多一次 setTurns，避免每个 delta 重渲染整棵列表。
-  const pendingUpdatesRef = useRef<TurnUpdate[]>([]);
-  const pendingAssistantIdRef = useRef<string | null>(null);
-  const frameRef = useRef<number | null>(null);
-
-  const flushPending = useCallback(() => {
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
-    const updates = pendingUpdatesRef.current;
-    const assistantId = pendingAssistantIdRef.current;
-    if (!assistantId || updates.length === 0) return;
-    pendingUpdatesRef.current = [];
-    pendingAssistantIdRef.current = null;
-    setTurns((current) => {
-      let changed = false;
-      const next = current.map((turn) => {
-        if (turn.id !== assistantId || turn.role !== 'assistant') return turn;
-        changed = true;
-        return applyTurnUpdates(turn, updates);
-      });
-      return changed ? next : current;
-    });
-  }, []);
-
-  const scheduleUpdate = useCallback(
-    (assistantId: string, update: TurnUpdate) => {
-      pendingAssistantIdRef.current = assistantId;
-      pendingUpdatesRef.current.push(update);
-      if (frameRef.current !== null) return;
-      frameRef.current = requestAnimationFrame(() => {
-        frameRef.current = null;
-        flushPending();
-      });
-    },
-    [flushPending],
+  useEffect(
+    () =>
+      subscribeConversationRun(conversationId, (snapshot) => {
+        latestSnapshot.current = snapshot;
+        const { turn, running: busy } = snapshot;
+        if (!mounted.current) return;
+        runningRef.current = busy;
+        setRunning(busy);
+        if (turn.contextUsage) setContextUsage(turn.contextUsage);
+        if (turn.contextEstimate) setContextEstimate(turn.contextEstimate);
+        setTurns((items) => mergeConversationRun(items, snapshot));
+        if (!busy && !turn.saveError) {
+          const entry = { id: turn.id, question: turn.sourceQuestion ?? '', answer: turn.text };
+          const index = history.current.findIndex(item => item.id === turn.id);
+          if (index >= 0) history.current[index] = entry;
+          else history.current.push(entry);
+        }
+      }),
+    [conversationId],
   );
 
-  const resetPending = useCallback(() => {
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
-    pendingUpdatesRef.current = [];
-    pendingAssistantIdRef.current = null;
-  }, []);
-
   useEffect(() => {
-    let mounted = true;
+    mounted.current = true;
+    let active = true;
     void (async () => {
-      if (!bookId) {
-        if (mounted) {
-          setLoadError('缺少 bookId，无法打开书内问答');
-          setLoading(false);
-        }
-        return;
-      }
       try {
         const next = await getBookChatAvailability(bookId);
-        if (!mounted) return;
+        const saved = await loadBookConversation(conversationId);
+        if (!active) return;
         setAvailability(next);
-        if (!next.book) setLoadError('这本书不在书架里');
+        const hasLegacyTurns = saved.some(message => message.details.legacyNative !== undefined || message.id.startsWith('legacy-q:'));
+        // Missing Native first-turn identity must not turn another round's selection or location into conversation context.
+        const firstAnswer = saved.find(message => message.isFirstLegacyTurn) ??
+          (hasLegacyTurns ? undefined : saved.find(message => message.role === 'assistant'));
+        conversationSelection.current ??= firstAnswer ? questionSelection(firstAnswer.details) : undefined;
+        const bookFormat = next.book?.format ?? options.presentation?.source?.format ?? 'epub';
+        if (firstAnswer && conversationOrigin.current === undefined) {
+          conversationOrigin.current = resolveQuestionOrigin({ bookId, format: bookFormat,
+            questionOrigin: firstAnswer.details.questionOrigin, legacyNative: firstAnswer.details.legacyNative }) ?? null;
+        }
+        firstBookTitle.current ??= saved.find(message => message.details.bookTitle)?.details.bookTitle ??
+          next.book?.title ?? bookTitleParam ?? '书内问答';
+        const restored: ChatTurn[] = saved.map((message, index) => {
+          const answer = message.role === 'user' ? saved[index + 1] : message;
+          const selected = questionSelection(message.role === 'user' && answer?.role === 'assistant' ? answer.details : message.details);
+          const origin = message.role === 'assistant' ? resolveQuestionOrigin({ bookId, format: bookFormat,
+            questionOrigin: message.details.questionOrigin, legacyNative: message.details.legacyNative }) : undefined;
+          return {
+            id: message.id,
+            role: message.role,
+            text: message.text,
+            reasoning: message.reasoning,
+            tools: [...(message.details.tools ?? [])],
+            ...(message.details.toolSummary !== undefined ? { toolSummary: message.details.toolSummary } : {}),
+            citations: message.citations,
+            warnings: [...(message.details.warnings ?? [])],
+            status: message.role === 'user' ? 'done' : message.details.status,
+            ...(message.details.error ? { error: message.details.error } : {}),
+            ...(message.details.agentQuestion ? { agentQuestion: message.details.agentQuestion } : {}),
+            ...selectionFields(selected),
+            ...(message.role === 'assistant' && (message.details.questionOrigin !== undefined || message.details.legacyNative)
+              ? { questionOrigin: origin ?? null } : {}),
+            ...(message.details.reasoningDurationMs !== undefined
+              ? { reasoningDurationMs: message.details.reasoningDurationMs }
+              : {}),
+            ...(message.details.modelSteps !== undefined ? { modelSteps: message.details.modelSteps } : {}),
+            ...(message.details.contextUsage ? { contextUsage: message.details.contextUsage } : {}),
+            ...(message.details.contextSummary ? { contextSummary: message.details.contextSummary } : {}),
+            ...(message.details.contextEstimate ? { contextEstimate: message.details.contextEstimate } : {}),
+            ...(message.details.sentMaterials ? { sentMaterials: message.details.sentMaterials } : {}),
+            ...(message.details.legacyNative ? { legacyNative: message.details.legacyNative } : {}),
+            ...(message.details.bookTitle ? { bookTitle: message.details.bookTitle } : {}),
+            ...(message.role === 'assistant' && index > 0
+              ? { sourceQuestion: saved[index - 1]?.text ?? '' }
+              : {}),
+          };
+        });
+        // A run can finish during either read. Its subscriber snapshot remains newer even
+        // after finish removes it from the active map, so never replace it with stale disk data.
+        const live = activeConversationRun(conversationId) ?? latestSnapshot.current;
+        const merged = live ? mergeConversationRun(restored, live) : restored;
+        setTurns(merged);
+        runningRef.current = live?.running ?? false;
+        setRunning(live?.running ?? false);
+        history.current = [];
+        for (let i = 1; i < merged.length; i++) {
+          const answer = merged[i];
+          const user = merged[i - 1];
+          if (answer?.role === 'assistant' && answer.status !== 'streaming' && !answer.saveError && user?.role === 'user') {
+            history.current.push({
+              id: answer.id,
+              question: user.text,
+              answer: answer.text,
+            });
+          }
+        }
+        const usage = [...merged].reverse().find((turn) => turn.contextUsage)?.contextUsage;
+        setContextUsage(usage);
+        setContextEstimate([...merged].reverse().find(turn => turn.contextEstimate)?.contextEstimate);
+        if (!next.book) setLoadError('原书已移除，仍可查看对话；重新导入后可继续提问。');
         else if (!next.index.available) setLoadError(next.index.detail);
       } catch (error) {
-        if (mounted) setLoadError(error instanceof Error ? error.message : String(error));
+        if (active) setLoadError(friendlyError(error instanceof Error ? error.message : String(error)));
       } finally {
-        if (mounted) setLoading(false);
+        if (active) setLoading(false);
       }
     })();
     return () => {
-      mounted = false;
-      sessionRef.current?.cancel();
-      resetPending();
+      active = false;
+      mounted.current = false;
     };
-  }, [bookId, resetPending]);
+  }, [bookId, conversationId, options.conversationId]);
 
-  const runTurn = useCallback(
-    async (turnOptions: {
-      displayQuestion: string;
-      agentQuestion: string;
-      attachSelection: boolean;
-      appendUser: boolean;
-    }): Promise<void> => {
-      if (running || !availability?.book || !availability.index.available || !availability.config) return;
-      const assistantId = nextTurnId();
-      resetPending();
+  useFocusEffect(
+    useCallback(() => {
+      if (loading) return;
+      let active = true;
+      void getBookChatAvailability(bookId)
+        .then((next) => {
+          if (!active) return;
+          setAvailability(next);
+          setLoadError(
+            !next.book
+              ? '原书已移除，仍可查看对话；重新导入后可继续提问。'
+              : !next.index.available
+                ? next.index.detail
+                : null,
+          );
+        })
+        .catch((error: unknown) => {
+          if (active) setLoadError(friendlyError(String(error)));
+        });
+      return () => {
+        active = false;
+      };
+    }, [bookId, loading]),
+  );
+
+  const persist = useCallback(
+    async (turn: ChatTurn) => {
+      await appendBookChatTurn({
+        bookId,
+        conversationId,
+        assistantId: turn.id,
+        question: turn.sourceQuestion ?? '',
+        answer: turn.text,
+        citations: turn.citations,
+        details: {
+          status: turn.status,
+          reasoning: turn.reasoning,
+          tools: turn.tools,
+          ...(turn.toolSummary !== undefined ? { toolSummary: turn.toolSummary } : {}),
+          warnings: turn.warnings,
+          ...(turn.agentQuestion ? { agentQuestion: turn.agentQuestion } : {}),
+          ...(turn.selectionQuote !== undefined ? { selectionQuote: turn.selectionQuote } : {}),
+          ...(turn.selectionContextQuote !== undefined ? { selectionContextQuote: turn.selectionContextQuote } : {}),
+          ...(turn.selectionAttached !== undefined ? { selectionAttached: turn.selectionAttached } : {}),
+          ...(turn.questionOrigin !== undefined ? { questionOrigin: turn.questionOrigin } : {}),
+          ...(turn.error ? { error: turn.error } : {}),
+          ...(turn.reasoningDurationMs !== undefined
+            ? { reasoningDurationMs: turn.reasoningDurationMs }
+            : {}),
+          ...(turn.modelSteps !== undefined ? { modelSteps: turn.modelSteps } : {}),
+          ...(turn.contextUsage ? { contextUsage: turn.contextUsage } : {}),
+          ...(turn.contextSummary ? { contextSummary: turn.contextSummary } : {}),
+          ...(turn.contextEstimate ? { contextEstimate: turn.contextEstimate } : {}),
+          ...(turn.sentMaterials ? { sentMaterials: turn.sentMaterials } : {}),
+          ...(turn.legacyNative ? { legacyNative: turn.legacyNative } : {}),
+          ...(turn.bookTitle ? { bookTitle: turn.bookTitle } : {}),
+        },
+      });
+    },
+    [bookId, conversationId],
+  );
+
+  const run = useCallback(
+    async (input: { display: string; agent: string; selection?: QuestionSelection; questionOrigin?: QuestionOriginSnapshot | null; retryId?: string }) => {
+      if (
+        runningRef.current ||
+        activeConversationRun(conversationId)?.running ||
+        hasUnsavedConversationTurn(conversationId, turns) ||
+        !availability?.book ||
+        !availability.config ||
+        !availability.index.available
+      )
+        return;
+      runningRef.current = true;
+      cancelRequested.current = false;
       setRunning(true);
-      if (turnOptions.appendUser) {
-        const userTurn: ChatTurn = {
-          id: nextTurnId(),
-          role: 'user',
-          text: turnOptions.displayQuestion,
-          reasoning: '',
-          tools: [],
-          citations: [],
-          warnings: [],
-          status: 'done',
-          sourceQuestion: turnOptions.displayQuestion,
-          agentQuestion: turnOptions.agentQuestion,
-          ...(turnOptions.attachSelection && selectionQuote ? { selectionQuote } : {}),
-          ...(availability.book ? { bookTitle: availability.book.title } : {}),
+      const unregister = registerConversationRun(conversationId, () => {
+        cancelRequested.current = true;
+        session.current?.cancel();
+      });
+      const id = input.retryId ?? nextId();
+      let current: ChatTurn = {
+        id,
+        role: 'assistant',
+        text: '',
+        reasoning: '',
+        tools: [],
+        citations: [],
+        warnings: [],
+        status: 'streaming',
+        sourceQuestion: input.display,
+        agentQuestion: input.agent,
+        bookTitle: firstBookTitle.current ?? availability.book.title,
+        ...selectionFields(input.selection),
+        ...(input.questionOrigin !== undefined ? { questionOrigin: input.questionOrigin } : {}),
+      };
+      setTurns((items) =>
+        input.retryId
+          ? items.map((item) => (item.id === id ? current : item))
+          : [
+              ...items,
+              {
+                id: id + ':user',
+                role: 'user',
+                text: input.display,
+                reasoning: '',
+                tools: [],
+                citations: [],
+                warnings: [],
+                status: 'done',
+                ...selectionFields(input.selection),
+              },
+              current,
+            ],
+      );
+      let frame: number | null = null;
+      const publishCurrent = () => publishConversationRun(conversationId, current, {
+        bookId, bookTitle: current.bookTitle ?? availability.book!.title,
+      });
+      publishCurrent();
+      const publish = () => {
+        if (frame !== null) return;
+        frame = requestAnimationFrame(() => {
+          frame = null;
+          publishCurrent();
+        });
+      };
+      const reportSaveError = (error: unknown) => {
+        current = {
+          ...current,
+          saveError: '对话保存失败：' + (error instanceof Error ? error.message : String(error)),
         };
-        setTurns((current) => [
-          ...current,
-          userTurn,
-          {
-            id: assistantId,
-            role: 'assistant',
-            text: '',
-            reasoning: '',
-            tools: [],
-            citations: [],
-            warnings: [],
-            status: 'streaming',
-          },
-        ]);
-      } else {
-        setTurns((current) => [
-          ...current,
-          {
-            id: assistantId,
-            role: 'assistant',
-            text: '',
-            reasoning: '',
-            tools: [],
-            citations: [],
-            warnings: [],
-            status: 'streaming',
-          },
-        ]);
-      }
+        publish();
+      };
+      const writer = createTurnPersistence(persist, reportSaveError);
+      const appState = AppState.addEventListener('change', (state) => {
+        if (state !== 'active') void writer.flush(current).catch(reportSaveError);
+      });
+      let reasoningStart: number | null = null;
+      let reasoningMs = 0;
+      let rawText = '';
+      const stopThinking = () => {
+        if (reasoningStart !== null) {
+          reasoningMs += Date.now() - reasoningStart;
+          reasoningStart = null;
+        }
+        current = { ...current, reasoningDurationMs: reasoningMs };
+      };
       try {
+        // Persist the question before the request, so termination cannot lose the reader's input.
+        await writer.flush(current);
         const started = await startBookChatTurn({
           bookId,
-          question: turnOptions.agentQuestion,
-          history: historyRef.current,
+          question: input.display,
+          ...(input.selection?.contextQuote ? { selectionQuote: input.selection.contextQuote } : {}),
+          history: (input.retryId ? history.current.filter(entry =>
+            turns.findIndex(turn => turn.id === entry.id) < turns.findIndex(turn => turn.id === input.retryId)) : history.current)
+            .map(({ question, answer }) => ({ question, answer })),
+          ...(input.questionOrigin ? { readingPosition: input.questionOrigin.readingPosition } : {}),
         });
-        sessionRef.current = started.session;
+        session.current = started.session;
+        if (cancelRequested.current) started.session.cancel();
+        let terminal = false;
         for await (const event of started.session.events) {
           switch (event.type) {
             case 'reasoningDelta':
-              scheduleUpdate(assistantId, { kind: 'reasoning', delta: event.delta });
+              if (reasoningStart === null) reasoningStart = Date.now();
+              current = { ...current, reasoning: current.reasoning + event.delta };
               break;
             case 'textDelta':
-              scheduleUpdate(assistantId, { kind: 'text', delta: event.delta });
+              stopThinking();
+              rawText += event.delta;
+              current = { ...current, text: streamingAnswer(rawText) };
               break;
             case 'toolStarted':
-              scheduleUpdate(assistantId, { kind: 'toolStarted', callId: event.callId, name: event.name });
+              stopThinking();
+              current = {
+                ...current,
+                tools: [...current.tools, { callId: event.callId || nextId(), name: event.name, status: 'running',
+                  title: nativeToolTitle(event.name), detail: nativeToolDetail(event.args), preview: '', durationMs: 0, finished: false }],
+              };
               break;
-            case 'toolFinished':
-              scheduleUpdate(assistantId, {
-                kind: 'toolFinished',
-                callId: event.callId,
-                isError: event.isError,
-                durationMs: event.durationMs,
-              });
-              break;
-            case 'citation':
-              scheduleUpdate(assistantId, { kind: 'citation', citation: event.citation });
-              break;
-            case 'completed': {
-              const result = event.result;
-              scheduleUpdate(assistantId, {
-                kind: 'patch',
-                patch: {
-                  text: result.answer,
-                  citations: result.citations,
-                  warnings: result.warnings,
-                  status: 'done',
-                  sourceQuestion: turnOptions.displayQuestion,
-                },
-              });
-              flushPending();
-              historyRef.current.push({ question: turnOptions.displayQuestion, answer: result.answer });
-              void appendBookChatTurn({
-                bookId,
-                question: turnOptions.displayQuestion,
-                answer: result.answer,
-                citations: result.citations.map((citation) => ({
-                  id: citation.id,
-                  quote: citation.quote,
-                  locator: citation.locator,
-                  ...(citation.chapter ? { chapter: citation.chapter } : {}),
-                  ...(citation.page ? { page: citation.page } : {}),
-                })),
-              }).catch(() => undefined);
+            case 'toolFinished': {
+              const callId = event.callId || current.tools[current.tools.length - 1]?.callId || nextId();
+              const index = current.tools.map(tool => tool.callId).lastIndexOf(callId);
+              const prior = index >= 0 ? current.tools[index] : undefined;
+              const { durationMs: _previousDuration, ...base } = prior ?? { callId, name: event.name, title: nativeToolTitle(event.name), detail: '' };
+              const finished = { ...base, status: event.isError ? 'error' as const : 'done' as const,
+                preview: nativeToolPreview(event.content), finished: true,
+                ...(Number.isFinite(event.durationMs) && event.durationMs >= 0 && event.durationMs <= Number.MAX_SAFE_INTEGER ? { durationMs: event.durationMs } : {}) };
+              current = {
+                ...current,
+                tools: index >= 0 ? current.tools.map((tool, position) => position === index ? finished : tool) : [...current.tools, finished],
+              };
               break;
             }
+            case 'citation':
+              current = {
+                ...current,
+                citations: [
+                  ...current.citations.filter((citation) => citation.id !== event.citation.id),
+                  event.citation,
+                ],
+              };
+              break;
+            case 'contextUsage':
+              current = { ...current, contextUsage: event.usage };
+              if (mounted.current) setContextUsage(event.usage);
+              break;
+            case 'requestContext':
+              current = { ...current, contextEstimate: event.estimate, sentMaterials: event.materials };
+              if (mounted.current) setContextEstimate(event.estimate);
+              break;
+            case 'contextCompacted':
+              current = { ...current, contextSummary: event.summary };
+              break;
+            case 'completed':
+              terminal = true;
+              stopThinking();
+              current = {
+                ...current,
+                text: event.result.answer,
+                citations: event.result.citations,
+                warnings: event.result.warnings,
+                status: 'done',
+                ...(Number.isSafeInteger(event.result.steps) && event.result.steps >= 0 ? { modelSteps: event.result.steps } : {}),
+                ...(Number.isSafeInteger(event.result.steps) && event.result.steps >= 0
+                  ? { toolSummary: nativeToolSummary(event.result.steps, event.result.citations.length, event.result.warnings) } : {}),
+                ...(event.result.contextSummary ? { contextSummary: event.result.contextSummary } : {}),
+                ...(event.result.contextEstimate ? { contextEstimate: event.result.contextEstimate } : {}),
+                ...(event.result.sentMaterials ? { sentMaterials: event.result.sentMaterials } : {}),
+              };
+              break;
             case 'failed':
-              scheduleUpdate(assistantId, {
-                kind: 'patch',
-                patch: {
-                  status: 'error',
-                  error: friendlyError(`${event.code}：${event.message}`),
-                  sourceQuestion: turnOptions.displayQuestion,
-                },
-              });
-              flushPending();
+              terminal = true;
+              stopThinking();
+              current = { ...current, status: 'error', error: friendlyError(event.message) };
               break;
             case 'cancelled':
-              scheduleUpdate(assistantId, {
-                kind: 'patch',
-                patch: { status: 'cancelled', sourceQuestion: turnOptions.displayQuestion },
-              });
-              flushPending();
+              terminal = true;
+              stopThinking();
+              current = { ...current, status: 'cancelled' };
               break;
             case 'started':
               break;
           }
+          writer.schedule(current);
+          publish();
         }
-        const result = await started.session.result;
-        if (result === null) {
-          scheduleUpdate(assistantId, {
-            kind: 'patch',
-            patch: { status: 'cancelled', sourceQuestion: turnOptions.displayQuestion },
-          });
-          flushPending();
+        await started.session.result;
+        if (!terminal) {
+          stopThinking();
+          current = { ...current, status: 'error', error: 'AI 服务没有完成回答，请重试。' };
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (error instanceof BookChatConfigError || error instanceof BookChatIndexError) setLoadError(message);
-        scheduleUpdate(assistantId, { kind: 'patch', patch: { status: 'error', error: friendlyError(message) } });
-        flushPending();
+        stopThinking();
+        current = {
+          ...current,
+          status: cancelRequested.current ? 'cancelled' : 'error',
+          error: friendlyError(error instanceof Error ? error.message : String(error)),
+        };
       } finally {
-        flushPending();
-        sessionRef.current = null;
-        setRunning(false);
+        appState.remove();
+        if (frame !== null) cancelAnimationFrame(frame);
+        try {
+          await writer.flush(current);
+          const { saveError: _, ...saved } = current;
+          current = saved;
+        } catch (error) {
+          current = {
+            ...current,
+            saveError: '对话保存失败：' + (error instanceof Error ? error.message : String(error)),
+          };
+        }
+        if (frame !== null) cancelAnimationFrame(frame);
+        if (isBookConversationDeleted(conversationId)) discardConversationRun(conversationId);
+        else finishConversationRun(conversationId, current);
+        session.current = null;
+        runningRef.current = false;
+        unregister();
       }
     },
-    [availability, bookId, flushPending, resetPending, running, scheduleUpdate, selectionQuote],
+    [availability, bookId, conversationId, persist, turns],
   );
 
   const send = useCallback(
-    async (override?: string): Promise<void> => {
+    async (override?: string) => {
       const text = (override ?? question).trim();
-      if (!text || running || !availability?.book || !availability.index.available || !availability.config) return;
+      if (!text || runningRef.current || hasUnsavedConversationTurn(conversationId, turns) ||
+        !availability?.book || !availability.config || !availability.index.available) return;
+      const selected = conversationSelection.current;
+      const origin = options.readingPosition !== undefined
+        ? captureQuestionOrigin({ bookId, format: availability.book.format, readingPosition: options.readingPosition }) ?? null
+        : conversationOrigin.current;
+      if (conversationOrigin.current === undefined) conversationOrigin.current = origin ?? null;
+      selectionUsed.current = true;
+      options.presentation?.update({ selectionConsumed: true });
       setQuestion('');
-      const useSelection = Boolean(selectionQuote) && !selectionUsedRef.current;
-      selectionUsedRef.current = true;
-      const agentQuestion = useSelection ? `我选中了书中这段原文：「${selectionQuote}」\n\n${text}` : text;
-      await runTurn({ displayQuestion: text, agentQuestion, attachSelection: useSelection, appendUser: true });
+      await run({
+        display: text,
+        agent: selected?.contextQuote ? '我选中了书中这段原文：「' + selected.contextQuote + '」\n\n' + text : text,
+        ...(selected ? { selection: selected } : {}),
+        ...(origin !== undefined ? { questionOrigin: origin } : {}),
+      });
     },
-    [availability, question, runTurn, running, selectionQuote],
+    [availability, bookId, conversationId, options.presentation, options.readingPosition, question, run, setQuestion, turns],
   );
 
   useEffect(() => {
     if (
-      initialSentRef.current ||
+      loading ||
+      initialSent.current ||
       !initialQuestion ||
-      !availability?.book ||
-      !availability.index.available ||
-      !availability.config ||
-      running
-    ) {
+      !availability?.config ||
+      !availability.index.available
+    )
       return;
-    }
-    initialSentRef.current = true;
+    initialSent.current = true;
+    options.presentation?.update({ initialQuestionConsumed: true });
     void send(initialQuestion);
-  }, [availability, initialQuestion, running, send]);
+  }, [availability, initialQuestion, loading, options.presentation, send]);
 
   const retry = useCallback(
-    (turn: ChatTurn): void => {
-      setTurns((current) => current.filter((item) => item.id !== turn.id));
-      const agentQuestion = turn.agentQuestion ?? turn.sourceQuestion;
-      if (!agentQuestion) return;
-      void runTurn({
-        displayQuestion: turn.sourceQuestion ?? agentQuestion,
-        agentQuestion,
-        attachSelection: false,
-        appendUser: false,
-      });
+    (turn: ChatTurn) => {
+      if (runningRef.current) return;
+      if (turn.saveError) {
+        if (savingTurns.current.has(turn.id)) return;
+        savingTurns.current.add(turn.id);
+        void persist(turn)
+          .then(() => {
+            const { saveError: _, ...saved } = turn;
+            finishConversationRun(conversationId, saved);
+          })
+          .catch((error: unknown) => setLoadError('对话保存失败：' + String(error)))
+          .finally(() => { savingTurns.current.delete(turn.id); });
+        return;
+      }
+      const agent = turn.agentQuestion ?? turn.sourceQuestion;
+      const selected = questionSelection(turn) ?? conversationSelection.current;
+      const origin = availability?.book ? resolveQuestionOrigin({ bookId, format: availability.book.format,
+        questionOrigin: turn.questionOrigin, legacyNative: turn.legacyNative }) : undefined;
+      if (agent)
+        void run({
+          display: turn.sourceQuestion ?? agent,
+          agent,
+          retryId: turn.id,
+          ...(selected ? { selection: selected } : {}),
+          ...(turn.questionOrigin !== undefined || turn.legacyNative ? { questionOrigin: origin ?? null } : {}),
+        });
     },
-    [runTurn],
-  );
-
-  const cancel = useCallback(() => {
-    sessionRef.current?.cancel();
-  }, []);
-
-  const title = availability?.book?.title ?? bookTitleParam ?? '书内问答';
-  const configMissing = availability !== null && availability.config === null;
-  const indexMissing = availability !== null && !availability.index.available;
-  const canSend = Boolean(
-    availability?.book && availability.config && availability.index.available && !running && question.trim(),
+    [availability, bookId, conversationId, persist, run],
   );
 
   return {
@@ -421,17 +548,31 @@ export function useBookChat(options: UseBookChatOptions): UseBookChatResult {
     setQuestion,
     turns,
     running,
-    title,
+    contextUsage,
+    contextEstimate,
+    hasExternalMaterials: turns.some(turn => turn.sentMaterials?.some(material => material.kind === 'external-tool')),
+    conversationId,
+    title: availability?.book?.title ?? bookTitleParam ?? '书内问答',
     format: availability?.book?.format ?? 'epub',
-    configMissing,
-    indexMissing,
-    canSend,
+    configMissing: availability !== null && availability.config === null,
+    indexMissing: availability !== null && !availability.index.available,
+    canSend: Boolean(
+      !loading &&
+        availability?.book &&
+        availability.config &&
+        availability.index.available &&
+        !hasUnsavedConversationTurn(conversationId, turns) &&
+        !running &&
+        question.trim(),
+    ),
     placeholder: turns.length > 0 ? '继续问书灯…' : '问问书灯…',
-    service: serviceName(availability?.config?.provider),
-    selectionPending: Boolean(selectionQuote) && !selectionUsedRef.current,
+    service: serviceName(availability?.config),
+    selectionPending: Boolean(selectionQuote) && !selectionUsed.current,
     indexDetail: availability?.index.detail ?? '',
     send,
     retry,
-    cancel,
+    cancel: () => {
+      cancelConversationRun(conversationId);
+    },
   };
 }

@@ -138,8 +138,12 @@ function chunkChapter(chapter: RagChapter, maxChars: number, signal?: Cancellati
 
 export class ParagraphTextChunker implements TextChunker {
   chunk(book: RagBook, options: ChunkerOptions = {}, context: { signal?: CancellationSignal } = {}): TextChunk[] {
+    return Array.from(this.iterate(book, options, context));
+  }
+
+  /** Callers can persist bounded batches instead of retaining a whole book's chunk objects. */
+  *iterate(book: RagBook, options: ChunkerOptions = {}, context: { signal?: CancellationSignal } = {}): Generator<TextChunk> {
     const maxChars = Math.max(80, Math.floor(options.maxChars ?? 120));
-    const chunks: TextChunk[] = [];
     for (const chapter of book.chapters) {
       assertNotAborted(context.signal);
       const source = chapterSource(chapter);
@@ -150,12 +154,17 @@ export class ParagraphTextChunker implements TextChunker {
           chapter: chapter.title,
           chapterOrdinal: chapter.ordinal,
           ...(chapter.page !== undefined ? { page: chapter.page } : {}),
+          ...(chapter.href ? {
+            href: chapter.href,
+            locations: { progression: source.text.length > 0 ? range.start / source.text.length : 0 },
+            text: { highlight: text },
+          } : {}),
           charStart: range.start,
           charEnd: range.end,
           ...(range.paragraphStart !== undefined ? { paragraphStart: range.paragraphStart } : {}),
           ...(range.paragraphEnd !== undefined ? { paragraphEnd: range.paragraphEnd } : {}),
         };
-        chunks.push({
+        yield {
           id: `${book.book.id}:c${chapter.ordinal}:${range.start}-${range.end}`,
           bookId: book.book.id,
           chapter: chapter.title,
@@ -166,10 +175,9 @@ export class ParagraphTextChunker implements TextChunker {
           text,
           locator,
           locatorJson: JSON.stringify(locator),
-        });
+        };
       }
     }
-    return chunks;
   }
 }
 

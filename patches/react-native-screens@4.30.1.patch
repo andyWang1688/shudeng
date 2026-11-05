@@ -1,0 +1,238 @@
+diff --git a/android/src/main/java/com/swmansion/rnscreens/ScreenViewManager.kt b/android/src/main/java/com/swmansion/rnscreens/ScreenViewManager.kt
+--- a/android/src/main/java/com/swmansion/rnscreens/ScreenViewManager.kt
++++ b/android/src/main/java/com/swmansion/rnscreens/ScreenViewManager.kt
+@@ -335,6 +335,11 @@
+         value: Boolean,
+     ) = Unit // represents a feature flag and is checked via getProps() in RNSScreenComponentDescriptor.h
+ 
++    override fun setSheetDetentReferenceHeight(
++        view: Screen,
++        value: Double,
++    ) = Unit // iOS-only reference height; Android keeps its existing detent semantics.
++
+     override fun setSheetAllowedDetents(
+         view: Screen,
+         value: ReadableArray?,
+diff --git a/ios/RNSScreen.h b/ios/RNSScreen.h
+--- a/ios/RNSScreen.h
++++ b/ios/RNSScreen.h
+@@ -115,6 +115,7 @@
+ 
+ // Props controlling UISheetPresentationController
+ @property (nonatomic) NSArray<NSNumber *> *sheetAllowedDetents;
++@property (nonatomic) CGFloat sheetDetentReferenceHeight;
+ @property (nonatomic) NSNumber *sheetLargestUndimmedDetent;
+ @property (nonatomic) BOOL sheetGrabberVisible;
+ @property (nonatomic) CGFloat sheetCornerRadius;
+diff --git a/ios/RNSScreen.mm b/ios/RNSScreen.mm
+--- a/ios/RNSScreen.mm
++++ b/ios/RNSScreen.mm
+@@ -2,6 +2,7 @@
+ 
+ #import "RNSModalScreen.h"
+ #import "RNSScreen.h"
++#import "RNSSheetDetentHeight.h"
+ #import "RNSScreenContainer.h"
+ #import "RNSScreenContentWrapper.h"
+ #import "RNSScreenWindowTraits.h"
+@@ -100,6 +101,7 @@
+   _shouldUpdateScrollEdgeEffects = NO;
+ #if !TARGET_OS_TV
+   _sheetExpandsWhenScrolledToEdge = YES;
++  _sheetDetentReferenceHeight = 0;
+ #endif // !TARGET_OS_TV
+   _sheetsScrollView = nil;
+   _sheetsScrollViewTag = 0;
+@@ -1100,10 +1102,12 @@
+ - (NSArray<UISheetPresentationControllerDetent *> *)detentsFromMaxHeightFractions:(NSArray<NSNumber *> *)fractions
+     API_AVAILABLE(ios(16.0))
+ {
++  const CGFloat referenceHeight = self.sheetDetentReferenceHeight;
+   return [self
+       detentsFromValues:fractions
+            withResolver:^CGFloat(id<UISheetPresentationControllerDetentResolutionContext> ctx, NSNumber *fraction) {
+-             return MIN(ctx.maximumDetentValue, ctx.maximumDetentValue * fraction.floatValue);
++             return rnscreens::resolveSheetDetentHeight(
++                 ctx.maximumDetentValue, fraction.doubleValue, referenceHeight);
+            }];
+ }
+ 
+@@ -1331,6 +1335,7 @@
+     [self setHomeIndicatorHidden:newScreenProps.homeIndicatorHidden];
+   }
+ 
++  [self setSheetDetentReferenceHeight:newScreenProps.sheetDetentReferenceHeight];
+   [self setSheetGrabberVisible:newScreenProps.sheetGrabberVisible];
+   [self setSheetCornerRadius:newScreenProps.sheetCornerRadius];
+   [self setSheetExpandsWhenScrolledToEdge:newScreenProps.sheetExpandsWhenScrolledToEdge];
+diff --git a/lib/commonjs/components/Screen.js b/lib/commonjs/components/Screen.js
+--- a/lib/commonjs/components/Screen.js
++++ b/lib/commonjs/components/Screen.js
+@@ -51,6 +51,7 @@
+   const {
+     // formSheet presentation related props
+     sheetAllowedDetents = [1.0],
++    sheetDetentReferenceHeight = 0,
+     sheetLargestUndimmedDetentIndex = _sheet.SHEET_DIMMED_ALWAYS,
+     sheetGrabberVisible = false,
+     sheetCornerRadius = -1.0,
+@@ -154,6 +155,7 @@
+       activityState: activityState,
+       screenId: screenId,
+       sheetAllowedDetents: resolvedSheetAllowedDetents,
++      sheetDetentReferenceHeight: Number.isFinite(sheetDetentReferenceHeight) && sheetDetentReferenceHeight > 0 ? sheetDetentReferenceHeight : 0,
+       sheetLargestUndimmedDetent: resolvedSheetLargestUndimmedDetent,
+       sheetElevation: sheetElevation,
+       sheetShouldOverflowTopInset: sheetShouldOverflowTopInset,
+diff --git a/lib/module/components/Screen.js b/lib/module/components/Screen.js
+--- a/lib/module/components/Screen.js
++++ b/lib/module/components/Screen.js
+@@ -47,6 +47,7 @@
+   const {
+     // formSheet presentation related props
+     sheetAllowedDetents = [1.0],
++    sheetDetentReferenceHeight = 0,
+     sheetLargestUndimmedDetentIndex = SHEET_DIMMED_ALWAYS,
+     sheetGrabberVisible = false,
+     sheetCornerRadius = -1.0,
+@@ -150,6 +151,7 @@
+       activityState: activityState,
+       screenId: screenId,
+       sheetAllowedDetents: resolvedSheetAllowedDetents,
++      sheetDetentReferenceHeight: Number.isFinite(sheetDetentReferenceHeight) && sheetDetentReferenceHeight > 0 ? sheetDetentReferenceHeight : 0,
+       sheetLargestUndimmedDetent: resolvedSheetLargestUndimmedDetent,
+       sheetElevation: sheetElevation,
+       sheetShouldOverflowTopInset: sheetShouldOverflowTopInset,
+diff --git a/lib/typescript/fabric/ModalScreenNativeComponent.d.ts b/lib/typescript/fabric/ModalScreenNativeComponent.d.ts
+--- a/lib/typescript/fabric/ModalScreenNativeComponent.d.ts
++++ b/lib/typescript/fabric/ModalScreenNativeComponent.d.ts
+@@ -41,6 +41,7 @@
+     onSheetDetentChanged?: CT.DirectEventHandler<SheetDetentChangedEvent> | undefined;
+     screenId?: CT.WithDefault<string, ''>;
+     sheetAllowedDetents?: number[] | undefined;
++    sheetDetentReferenceHeight?: CT.WithDefault<CT.Double, 0>;
+     sheetLargestUndimmedDetent?: CT.WithDefault<CT.Int32, -1>;
+     sheetGrabberVisible?: CT.WithDefault<boolean, false>;
+     sheetCornerRadius?: CT.WithDefault<CT.Float, -1.0>;
+diff --git a/lib/typescript/fabric/ScreenNativeComponent.d.ts b/lib/typescript/fabric/ScreenNativeComponent.d.ts
+--- a/lib/typescript/fabric/ScreenNativeComponent.d.ts
++++ b/lib/typescript/fabric/ScreenNativeComponent.d.ts
+@@ -41,6 +41,7 @@
+     onSheetDetentChanged?: CT.DirectEventHandler<SheetDetentChangedEvent> | undefined;
+     screenId?: CT.WithDefault<string, ''>;
+     sheetAllowedDetents?: number[] | undefined;
++    sheetDetentReferenceHeight?: CT.WithDefault<CT.Double, 0>;
+     sheetLargestUndimmedDetent?: CT.WithDefault<CT.Int32, -1>;
+     sheetGrabberVisible?: CT.WithDefault<boolean, false>;
+     sheetCornerRadius?: CT.WithDefault<CT.Float, -1.0>;
+diff --git a/lib/typescript/types.d.ts b/lib/typescript/types.d.ts
+--- a/lib/typescript/types.d.ts
++++ b/lib/typescript/types.d.ts
+@@ -353,6 +353,16 @@
+      * Defaults to `[1.0]`.
+      */
+     sheetAllowedDetents?: number[] | 'fitToContents' | 'medium' | 'large' | 'all' | undefined;
++    /**
++     * iOS reference height in points for fractional form-sheet detents.
++     * Positive finite values replace the maximum-detent reference; values are
++     * clamped to the available maximum. A detent of 1 always uses the maximum.
++     * Unset, zero, negative or non-finite values preserve the default behavior.
++     * Has no effect on fitToContents or Android.
++     *
++     * @platform ios
++     */
++    sheetDetentReferenceHeight?: number | undefined;
+     /**
+      * Integer value describing elevation of the sheet, impacting shadow on the top edge of the sheet.
+      *
+diff --git a/src/components/Screen.tsx b/src/components/Screen.tsx
+--- a/src/components/Screen.tsx
++++ b/src/components/Screen.tsx
+@@ -97,6 +97,7 @@
+     const {
+       // formSheet presentation related props
+       sheetAllowedDetents = [1.0],
++      sheetDetentReferenceHeight = 0,
+       sheetLargestUndimmedDetentIndex = SHEET_DIMMED_ALWAYS,
+       sheetGrabberVisible = false,
+       sheetCornerRadius = -1.0,
+@@ -234,6 +235,11 @@
+             activityState={activityState}
+             screenId={screenId}
+             sheetAllowedDetents={resolvedSheetAllowedDetents}
++            sheetDetentReferenceHeight={
++              Number.isFinite(sheetDetentReferenceHeight) && sheetDetentReferenceHeight > 0
++                ? sheetDetentReferenceHeight
++                : 0
++            }
+             sheetLargestUndimmedDetent={resolvedSheetLargestUndimmedDetent}
+             sheetElevation={sheetElevation}
+             sheetShouldOverflowTopInset={sheetShouldOverflowTopInset}
+diff --git a/src/fabric/ModalScreenNativeComponent.ts b/src/fabric/ModalScreenNativeComponent.ts
+--- a/src/fabric/ModalScreenNativeComponent.ts
++++ b/src/fabric/ModalScreenNativeComponent.ts
+@@ -90,6 +90,7 @@
+     | undefined;
+   screenId?: CT.WithDefault<string, ''>;
+   sheetAllowedDetents?: number[] | undefined;
++  sheetDetentReferenceHeight?: CT.WithDefault<CT.Double, 0>;
+   sheetLargestUndimmedDetent?: CT.WithDefault<CT.Int32, -1>;
+   sheetGrabberVisible?: CT.WithDefault<boolean, false>;
+   sheetCornerRadius?: CT.WithDefault<CT.Float, -1.0>;
+diff --git a/src/fabric/ScreenNativeComponent.ts b/src/fabric/ScreenNativeComponent.ts
+--- a/src/fabric/ScreenNativeComponent.ts
++++ b/src/fabric/ScreenNativeComponent.ts
+@@ -90,6 +90,7 @@
+     | undefined;
+   screenId?: CT.WithDefault<string, ''>;
+   sheetAllowedDetents?: number[] | undefined;
++  sheetDetentReferenceHeight?: CT.WithDefault<CT.Double, 0>;
+   sheetLargestUndimmedDetent?: CT.WithDefault<CT.Int32, -1>;
+   sheetGrabberVisible?: CT.WithDefault<boolean, false>;
+   sheetCornerRadius?: CT.WithDefault<CT.Float, -1.0>;
+diff --git a/src/types.tsx b/src/types.tsx
+--- a/src/types.tsx
++++ b/src/types.tsx
+@@ -444,6 +444,16 @@
+     | 'large'
+     | 'all'
+     | undefined;
++  /**
++   * iOS reference height in points for fractional form-sheet detents.
++   * Positive finite values replace the maximum-detent reference; values are
++   * clamped to the available maximum. A detent of 1 always uses the maximum.
++   * Unset, zero, negative or non-finite values preserve the default behavior.
++   * Has no effect on fitToContents or Android.
++   *
++   * @platform ios
++   */
++  sheetDetentReferenceHeight?: number | undefined;
+   /**
+    * Integer value describing elevation of the sheet, impacting shadow on the top edge of the sheet.
+    *
+diff --git a/ios/RNSSheetDetentHeight.h b/ios/RNSSheetDetentHeight.h
+new file mode 100644
+--- /dev/null
++++ b/ios/RNSSheetDetentHeight.h
+@@ -0,0 +1,21 @@
++#pragma once
++
++#ifdef __cplusplus
++#include <algorithm>
++#include <cmath>
++
++namespace rnscreens {
++
++// Keep the maximum detent and its index identifier unchanged when a reference
++// height is supplied. The resolver is also safe for callers bypassing JS.
++inline double resolveSheetDetentHeight(double maximumHeight, double fraction, double referenceHeight)
++{
++  if (fraction == 1.0) {
++    return maximumHeight;
++  }
++  const double baseHeight = std::isfinite(referenceHeight) && referenceHeight > 0 ? referenceHeight : maximumHeight;
++  return std::min(maximumHeight, baseHeight * fraction);
++}
++
++} // namespace rnscreens
++#endif // __cplusplus

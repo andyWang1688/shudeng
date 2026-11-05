@@ -1,5 +1,5 @@
-import { ReaderShell } from '../../src/ui/ReaderShell';
+import { Redirect } from 'expo-router';
 
 export default function ReaderFallbackRoute() {
-  return <ReaderShell bookId="epub-demo" initialLocation={undefined} openOverride={undefined} />;
+  return <Redirect href="/" />;
 }

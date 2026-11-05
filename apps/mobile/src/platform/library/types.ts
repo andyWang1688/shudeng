@@ -1,3 +1,4 @@
+import type { ReadiumLocator } from '@shudeng/core/domain';
 /** 书库数据层公开类型：旧 Swift 数据迁移、书架、进度、标注、导入与对话摘要。 */
 
 export type BookFormat = 'EPUB' | 'PDF';
@@ -13,6 +14,8 @@ export type ShelfBookRecord = {
   readonly progressLabel: string;
   readonly progressChapter: string | null;
   readonly progressUpdatedAt: number | null;
+  readonly removed?: boolean;
+  readonly coverUri?: string;
 };
 
 export type StoredPdfRect = {
@@ -23,7 +26,7 @@ export type StoredPdfRect = {
 };
 
 export type StoredReaderLocator =
-  | { readonly type: 'epub'; readonly cfi: string; readonly href?: string; readonly chapter?: string }
+  | { readonly type: 'epub'; readonly cfi: string; readonly selection?: ReadiumLocator; readonly href?: string; readonly chapter?: string; readonly totalProgression?: number; readonly position?: number }
   | {
       readonly type: 'pdf';
       readonly page: number;
@@ -52,6 +55,10 @@ export type ShelfAnnotation = {
   readonly chapter: string | null;
   readonly page: number | null;
   readonly createdAt: number;
+  readonly progression?: number;
+  /** Chapter-local Readium fallback, kept separate from whole-book progression. */
+  readonly localProgression?: number;
+  readonly position?: number;
   readonly locator: StoredReaderLocator | null;
 };
 
@@ -68,7 +75,7 @@ export type SaveReaderAnnotationInput = {
 
 export type ImportBookResult =
   | { readonly status: 'cancelled' }
-  | { readonly status: 'imported'; readonly book: ShelfBookRecord };
+  | { readonly status: 'imported'; readonly book: ShelfBookRecord; readonly isDuplicate: boolean };
 
 export type ConversationSummary = {
   readonly conversationId: string;
@@ -77,4 +84,9 @@ export type ConversationSummary = {
   readonly answer: string;
   readonly turns: number;
   readonly updatedAt: number;
+  /** Original first-turn snapshot, when retained in legacy data or turn details. */
+  readonly bookTitle?: string;
+  readonly title?: string;
+  readonly submittedCount?: number;
+  readonly assistantIds?: readonly string[];
 };

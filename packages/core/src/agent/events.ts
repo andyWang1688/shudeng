@@ -41,6 +41,41 @@ export interface AgentRunResult {
   /** 被剔除的引用 id 列表，便于评测统计“伪造引用”。 */
   droppedCitationIds: string[];
   model: string;
+  contextUsage?: AgentContextUsage;
+  contextSummary?: string;
+  contextEstimate?: AgentContextEstimate;
+  sentMaterials?: readonly AgentSentMaterial[];
+}
+
+/** Provider-reported tokens for the most recent model request; never an estimated percentage. */
+export interface AgentContextUsage {
+  inputTokens: number;
+  outputTokens: number;
+  contextWindowTokens?: number;
+}
+
+/** Local estimate of the actual prepared messages; separate from provider usage. */
+export interface AgentContextEstimate {
+  estimatedTokens: number;
+  characterCount: number;
+  systemTokens: number;
+  historyTokens: number;
+  toolTokens: number;
+  summaryTokens: number;
+  contextWindowTokens?: number;
+  thresholdTokens?: number;
+  action: 'none' | 'compacted' | 'pruned' | 'trimmed';
+  summarizedMessages: number;
+  trimmedMessages?: number;
+  truncatedToolResults?: number;
+}
+
+/** Text present in a dispatched model request, never the unabridged source registry. */
+export interface AgentSentMaterial {
+  id: string;
+  kind: 'selection' | 'book-tool' | 'external-tool';
+  name: string;
+  content: string;
 }
 
 export type AgentEvent =
@@ -57,6 +92,9 @@ export type AgentEvent =
       durationMs: number;
     }
   | { type: 'citation'; citation: VerifiedCitation }
+  | { type: 'contextUsage'; usage: AgentContextUsage }
+  | { type: 'requestContext'; estimate: AgentContextEstimate; materials: readonly AgentSentMaterial[] }
+  | { type: 'contextCompacted'; summary: string }
   | { type: 'completed'; result: AgentRunResult }
   | { type: 'failed'; code: AgentFailureCode; message: string }
   | { type: 'cancelled' };

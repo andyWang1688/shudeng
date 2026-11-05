@@ -1,0 +1,278 @@
+diff --git a/src/SymbolModule.types.ts b/src/SymbolModule.types.ts
+index acb6e0a..34021e9 100644
+--- a/src/SymbolModule.types.ts
++++ b/src/SymbolModule.types.ts
+@@ -39,6 +39,23 @@ export type SymbolViewProps = {
+    * @default 24
+    */
+   size?: number;
++  /**
++   * The SF Symbol point size, independent of the view dimensions set by size.
++   * Only finite positive values are used. Null or omission restores the platform default.
++   * @platform ios
++   * @platform tvos
++   * @platform macos
++   */
++  pointSize?: number | null;
++  /**
++   * Native content layout. Intrinsic preserves UIImage alignment geometry;
++   * systemButton uses UIKit's system-button symbol configuration and layout.
++   * The button is decorative: the containing React Native view owns interaction.
++   * Other platforms ignore this property. Null or omission restores bounds.
++   * @default 'bounds'
++   * @platform ios
++   */
++  contentLayout?: 'bounds' | 'intrinsic' | 'systemButton' | null;
+   /**
+    * The tint color to apply to the symbol.
+    */
+@@ -64,6 +81,8 @@ export interface NativeSymbolViewProps extends ViewProps {
+   name?: string;
+   type: SymbolType;
+   scale?: SymbolScale;
++  pointSize?: number | null;
++  contentLayout?: 'bounds' | 'intrinsic' | 'systemButton' | null;
+   weight?: SymbolWeight;
+   animated: boolean;
+   colors: (ProcessedColorValue | null | undefined)[];
+diff --git a/build/SymbolModule.types.d.ts b/build/SymbolModule.types.d.ts
+index 8bb645d..bf066ae 100644
+--- a/build/SymbolModule.types.d.ts
++++ b/build/SymbolModule.types.d.ts
+@@ -44,6 +44,23 @@ export type SymbolViewProps = {
+      * @default 24
+      */
+     size?: number;
++    /**
++     * The SF Symbol point size, independent of the view dimensions set by size.
++     * Only finite positive values are used. Null or omission restores the platform default.
++     * @platform ios
++     * @platform tvos
++     * @platform macos
++     */
++    pointSize?: number | null;
++    /**
++     * Native content layout. Intrinsic preserves UIImage alignment geometry;
++     * systemButton uses UIKit's system-button symbol configuration and layout.
++     * The button is decorative: the containing React Native view owns interaction.
++     * Other platforms ignore this property. Null or omission restores bounds.
++     * @default 'bounds'
++     * @platform ios
++     */
++    contentLayout?: 'bounds' | 'intrinsic' | 'systemButton' | null;
+     /**
+      * The tint color to apply to the symbol.
+      */
+@@ -68,6 +85,8 @@ export interface NativeSymbolViewProps extends ViewProps {
+     name?: string;
+     type: SymbolType;
+     scale?: SymbolScale;
++    pointSize?: number | null;
++    contentLayout?: 'bounds' | 'intrinsic' | 'systemButton' | null;
+     weight?: SymbolWeight;
+     animated: boolean;
+     colors: (ProcessedColorValue | null | undefined)[];
+diff --git a/src/SymbolView.tsx b/src/SymbolView.tsx
+index 0b8535e..bd75349 100644
+--- a/src/SymbolView.tsx
++++ b/src/SymbolView.tsx
+@@ -18,6 +18,8 @@ export function SymbolView({
+   weight,
+   colors,
+   size: sizeProp,
++  pointSize,
++  contentLayout,
+   tintColor,
+   resizeMode,
+   animationSpec,
+diff --git a/build/SymbolView.js b/build/SymbolView.js
+index b0d4a93..02bcd8f 100644
+--- a/build/SymbolView.js
++++ b/build/SymbolView.js
+@@ -6,7 +6,7 @@ import { androidSymbolToString } from './android';
+ import { getFont } from './utils';
+ // trying to mirror iOS implementation
+ const DEFAULT_SYMBOL_COLOR = Platform.OS === 'android' ? PlatformColor('@android:color/system_primary_dark') : '#7d9bd4';
+-export function SymbolView({ name: nameProp, fallback, type, scale, weight, colors, size: sizeProp, tintColor, resizeMode, animationSpec, style: styleProp, ...viewProps }) {
++export function SymbolView({ name: nameProp, fallback, type, scale, weight, colors, size: sizeProp, pointSize, contentLayout, tintColor, resizeMode, animationSpec, style: styleProp, ...viewProps }) {
+     const font = useMemo(()=>getFont(weight), [
+         weight
+     ]);
+diff --git a/ios/SymbolModule.swift b/ios/SymbolModule.swift
+index 056f9ae..8b8bba9 100644
+--- a/ios/SymbolModule.swift
++++ b/ios/SymbolModule.swift
+@@ -17,6 +17,18 @@ public class SymbolModule: Module {
+         view.scale = scale?.imageSymbolScale() ?? SymbolView.defaultScale
+       }
+ 
++      Prop("pointSize") { (view, pointSize: Double?) in
++        if let pointSize, pointSize.isFinite, pointSize > 0 {
++          view.pointSize = CGFloat(pointSize)
++        } else {
++          view.pointSize = nil
++        }
++      }
++
++      Prop("contentLayout") { (view, layout: SymbolContentLayout?) in
++        view.contentLayout = layout ?? .bounds
++      }
++
+       Prop("tintColor") { (view, color: UIColor?) in
+         view.tint = color
+       }
+diff --git a/ios/SymbolView.swift b/ios/SymbolView.swift
+index d3209d1..96695fe 100644
+--- a/ios/SymbolView.swift
++++ b/ios/SymbolView.swift
+@@ -1,7 +1,18 @@
+ import ExpoModulesCore
+ 
++enum SymbolContentLayout: String, Enumerable {
++  case bounds
++  case intrinsic
++  case systemButton
++}
++
+ class SymbolView: ExpoView {
+   let imageView = UIImageView()
++#if os(iOS)
++  private var systemButton: UIButton?
++  private var intrinsicConstraints = [NSLayoutConstraint]()
++  private var mountedContentLayout: SymbolContentLayout = .bounds
++#endif
+ 
+   // MARK: Defaults
+ #if os(macOS)
+@@ -23,6 +34,8 @@ class SymbolView: ExpoView {
+   var scale: UIImage.SymbolScale = .default
+   var imageContentMode: UIView.ContentMode = .scaleToFill
+ #endif
++  var pointSize: CGFloat?
++  var contentLayout: SymbolContentLayout = .bounds
+   var symbolType: SymbolType = .monochrome
+   var tint: UIColor?
+   var animationSpec: AnimationSpec?
+@@ -35,10 +48,28 @@ class SymbolView: ExpoView {
+   }
+ 
+   override func layoutSubviews() {
++#if os(iOS)
++    if contentLayout == .intrinsic {
++      super.layoutSubviews()
++      return
++    }
++    if contentLayout == .systemButton {
++      super.layoutSubviews()
++      systemButton?.frame = bounds
++      return
++    }
++#endif
+     imageView.frame = bounds
+   }
+ 
+   func reloadSymbol() {
++#if os(iOS)
++    updateContentLayout()
++    if contentLayout != .bounds {
++      reloadSymbolWithContentLayout()
++      return
++    }
++#endif
+ #if os(macOS)
+     reloadSymbolMacOS()
+ #else
+@@ -46,6 +77,71 @@ class SymbolView: ExpoView {
+ #endif
+   }
+ 
++#if os(iOS)
++  private func updateContentLayout() {
++    guard mountedContentLayout != contentLayout else { return }
++    if #available(iOS 17.0, *) {
++      imageView.removeAllSymbolEffects()
++      systemButton?.imageView?.removeAllSymbolEffects()
++    }
++    NSLayoutConstraint.deactivate(intrinsicConstraints)
++    imageView.translatesAutoresizingMaskIntoConstraints = contentLayout != .intrinsic
++    imageView.isHidden = contentLayout == .systemButton
++    systemButton?.isHidden = contentLayout != .systemButton
++
++    if contentLayout == .intrinsic {
++      if intrinsicConstraints.isEmpty {
++        intrinsicConstraints = [
++          imageView.centerXAnchor.constraint(equalTo: centerXAnchor),
++          imageView.centerYAnchor.constraint(equalTo: centerYAnchor)
++        ]
++      }
++      NSLayoutConstraint.activate(intrinsicConstraints)
++    } else if contentLayout == .systemButton, systemButton == nil {
++      let button = UIButton(type: .system)
++      // Preserve UIKit's enabled appearance and inherited symbol configuration.
++      // Interaction and accessibility belong to the containing RN component.
++      button.isUserInteractionEnabled = false
++      button.isAccessibilityElement = false
++      button.accessibilityElementsHidden = true
++      addSubview(button)
++      systemButton = button
++    }
++    mountedContentLayout = contentLayout
++    setNeedsLayout()
++  }
++
++  private func reloadSymbolWithContentLayout() {
++    guard let source = UIImage(systemName: name) else { return }
++    let configured = source.withConfiguration(getSymbolConfig())
++    let renderingView: UIImageView?
++    if contentLayout == .systemButton {
++      // Do not replace the button's preferred configuration: its inherited
++      // body/large scale and internal alignment are part of UIKit's layout.
++      systemButton?.setImage(configured, for: .normal)
++      systemButton?.tintColor = tint
++      renderingView = systemButton?.imageView
++    } else {
++      imageView.preferredSymbolConfiguration = nil
++      imageView.contentMode = imageContentMode
++      imageView.image = configured
++      if let tint, symbolType != .hierarchical {
++        imageView.image = configured.withTintColor(tint, renderingMode: .alwaysOriginal)
++      }
++      renderingView = imageView
++    }
++
++    if #available(iOS 17.0, *) {
++      imageView.removeAllSymbolEffects()
++      systemButton?.imageView?.removeAllSymbolEffects()
++      if animated, let renderingView {
++        addSymbolEffects(to: renderingView)
++      }
++    }
++    setNeedsLayout()
++  }
++#endif
++
+ #if !os(macOS)
+   private func reloadSymbolIOS() {
+     guard let image = UIImage(systemName: name) else {
+@@ -96,7 +192,8 @@ class SymbolView: ExpoView {
+ #endif
+ 
+   @available(iOS 17.0, tvOS 17.0, macOS 14.0, *)
+-  private func addSymbolEffects() {
++  private func addSymbolEffects(to target: UIImageView? = nil) {
++    let imageView = target ?? self.imageView
+     if let animationSpec {
+       let repeating = animationSpec.repeating ?? false
+       var options: SymbolEffectOptions = repeating ? .repeating : .nonRepeating
+@@ -122,9 +219,9 @@ class SymbolView: ExpoView {
+ 
+   private func getSymbolConfig() -> UIImage.SymbolConfiguration {
+     #if os(tvOS)
+-    var config = UIImage.SymbolConfiguration(pointSize: 18.0, weight: weight, scale: scale)
++    var config = UIImage.SymbolConfiguration(pointSize: pointSize ?? 18.0, weight: weight, scale: scale)
+     #else
+-    var config = UIImage.SymbolConfiguration(pointSize: UIFont.systemFontSize, weight: weight, scale: scale)
++    var config = UIImage.SymbolConfiguration(pointSize: pointSize ?? UIFont.systemFontSize, weight: weight, scale: scale)
+     #endif
+ 
+     switch symbolType {

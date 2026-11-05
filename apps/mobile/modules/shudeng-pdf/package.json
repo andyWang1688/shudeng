@@ -1,0 +1,6 @@
+{
+  "name": "shudeng-pdf",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PDFKit rendering and local document capabilities for Shudeng"
+}

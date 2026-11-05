@@ -11,10 +11,43 @@ export interface RegisteredEvidence extends BookExcerpt {
   id: string;
 }
 
+/** Structured portions of one exact rendered tool payload, not the full source registry. */
+export interface RenderedEvidenceMaterial {
+  readonly id: string;
+  readonly name: string;
+  readonly content: string;
+}
+
 /** 本轮运行内登记的可核查依据；工具回调写入，完成时核对。 */
 export class EvidenceRegistry {
   private readonly byId = new Map<string, RegisteredEvidence>();
   private readonly order: string[] = [];
+  private readonly rendered = new Map<string, readonly RenderedEvidenceMaterial[]>();
+
+  recordRendered(content: string, materials: readonly RenderedEvidenceMaterial[]): string {
+    this.rendered.set(content, materials.map(material => Object.freeze({ ...material })));
+    return content;
+  }
+
+  renderedMaterials(content: string): readonly RenderedEvidenceMaterial[] | undefined {
+    return this.rendered.get(content);
+  }
+
+  /** A budget trim may cut inside a quote; preserve only its transmitted prefix. */
+  recordTruncated(original: string, prefix: string, rendered: string): void {
+    const materials = this.rendered.get(original);
+    if (!materials) return;
+    let offset = 0;
+    const kept: RenderedEvidenceMaterial[] = [];
+    for (const material of materials) {
+      const start = original.indexOf(material.content, offset);
+      if (start < 0) continue;
+      offset = start + material.content.length;
+      const content = prefix.slice(start, Math.min(offset, prefix.length));
+      if (content) kept.push({ ...material, content });
+    }
+    this.recordRendered(rendered, kept);
+  }
 
   register(excerpt: BookExcerpt): RegisteredEvidence {
     for (const id of this.order) {

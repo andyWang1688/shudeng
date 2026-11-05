@@ -1,5 +1,5 @@
 /**
- * 旧 Swift `book-index.sqlite` 适配：迁移后的真实书索引（只读副本）→ 本地 FTS/vector BookSource。
+ * 旧 Swift `book-index.sqlite` 适配：迁移后的真实书索引工作副本 → 本地 FTS/vector BookSource。
  *
  * 旧库在旧 App 的 Documents/book-index.sqlite；迁移导出应放到 App Documents/legacy/book-index.sqlite。
  * 本模块首次使用时复制到 expo-sqlite 默认目录（不修改旧文件），并复用旧 App 已算好的
@@ -8,9 +8,12 @@
  */
 import { Directory, File, Paths } from 'expo-file-system';
 import * as SQLite from 'expo-sqlite';
-import { LegacyIndexBookSource, LegacyIndexSearch, type BookIdentity } from '@shudeng/core';
-import { createExpoSQLiteDriver, type ExpoSQLiteDatabaseLike } from '@shudeng/core/db';
+import { createLocalId, LegacyIndexBookSource, LegacyIndexSearch, type BookIdentity } from '@shudeng/core';
+import { createExpoSQLiteDriver, type ExpoSQLiteDatabaseLike, type SQLiteDriver } from '@shudeng/core/db';
 import { embeddingStatus, getEmbeddingProvider } from '../embedding';
+import { getDataLayer } from '../db';
+import { legacyBookDataDeletedKey, legacyBookIndexRetiredKey } from '../library/bookFileOperations';
+import { hasNativeSemanticAssets } from '../settings/nativeSemanticModel';
 
 const LEGACY_INDEX_FILE = 'book-index.sqlite';
 const TARGET_DB = 'legacy-book-index.sqlite';
@@ -28,7 +31,8 @@ export interface LegacyIndexRuntime {
   readonly detail: string;
 }
 
-let runtimePromise: Promise<LegacyIndexRuntime> | null = null;
+let driverPromise: Promise<SQLiteDriver> | null = null;
+let semanticMigrationIssue: string | null = null;
 
 function sqliteDirectory(): Directory {
   return new Directory(Paths.document, 'SQLite');
@@ -37,12 +41,31 @@ function sqliteDirectory(): Directory {
 /** 旧 App 的 ONNX 模型目录（迁移导出时建议一并带上）：Documents/legacy/SemanticModel。 */
 async function ensureSemanticModel(): Promise<void> {
   const target = new Directory(Paths.document, 'SemanticModel');
-  if (target.exists) return;
+  const legacyDirectory = new Directory(Paths.document, 'legacy');
+  const marker = new File(legacyDirectory, '.semantic-model-migrated');
+  if (marker.exists) return;
+  const mark = (): void => {
+    if (!legacyDirectory.exists) legacyDirectory.create({ intermediates: true });
+    marker.write('1');
+  };
+  // A deliberate deletion in Settings must stay deleted across future launches.
+  if (target.exists) { mark(); return; }
   const source = new Directory(Paths.document, 'legacy', 'SemanticModel');
   if (!source.exists) return;
-  target.create({ intermediates: true });
-  for (const entry of source.list()) {
-    if (entry instanceof File) await entry.copy(new File(target, entry.name));
+  if (!['model.onnx', 'tokenizer.json', 'tokenizer_config.json'].every((name) => new File(source, name).exists)
+      && !(await hasNativeSemanticAssets(source))) return;
+  const staging = new Directory(Paths.document, '.' + createLocalId('legacy-semantic'));
+  let promoted = false;
+  try {
+    staging.create({ intermediates: true });
+    for (const entry of source.list()) {
+      if (entry instanceof File) await entry.copy(new File(staging, entry.name));
+    }
+    await staging.move(target);
+    promoted = true;
+    mark();
+  } finally {
+    if (!promoted && staging.exists) staging.delete();
   }
 }
 
@@ -71,21 +94,74 @@ async function ensureCopiedDatabase(): Promise<void> {
   }
 }
 
-async function openRuntime(): Promise<LegacyIndexRuntime> {
+async function openDriver(): Promise<SQLiteDriver> {
   await ensureCopiedDatabase();
-  await ensureSemanticModel();
+  await ensureSemanticModel().catch((error: unknown) => { semanticMigrationIssue = error instanceof Error ? error.message : String(error); });
   const database = await SQLite.openDatabaseAsync(TARGET_DB);
-  const driver = createExpoSQLiteDriver(database as unknown as ExpoSQLiteDatabaseLike);
+  return createExpoSQLiteDriver(database as unknown as ExpoSQLiteDatabaseLike);
+}
+
+async function getWorkingDriver(): Promise<SQLiteDriver> {
+  if (!driverPromise) {
+    driverPromise = openDriver().catch((error: unknown) => {
+      driverPromise = null;
+      throw error;
+    });
+  }
+  return driverPromise;
+}
+
+const LEGACY_BOOK_TABLES = ['fragment_terms', 'embeddings', 'fragments', 'chapters', 'contents', 'preparations', 'embedding_progress'] as const;
+
+/** Retirement survives reimport and recopying the immutable backup into a new working database. */
+async function purgeRetiredRows(working: SQLiteDriver): Promise<void> {
+  const { driver } = await getDataLayer();
+  const prefixes = [legacyBookIndexRetiredKey(''), legacyBookDataDeletedKey('')];
+  const retired = await driver.all<{ key: string }>('SELECT key FROM app_preferences WHERE key LIKE ? OR key LIKE ?', prefixes.map(prefix => prefix + '%'));
+  if (!retired.length) return;
+  const ids = new Set(retired.map(row => {
+    const prefix = prefixes.find(value => row.key.startsWith(value))!;
+    return row.key.slice(prefix.length);
+  }));
+  const available = new Set((await working.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'" )).map(row => row.name));
+  await working.transaction(async tx => {
+    for (const id of ids) for (const table of LEGACY_BOOK_TABLES) {
+      if (available.has(table)) await tx.run('DELETE FROM ' + table + ' WHERE book_id = ?', [id]);
+    }
+  });
+}
+
+/** Removal cleanup must not create a working database merely to delete from it. */
+export async function purgeRetiredLegacyBookIndexes(): Promise<void> {
+  if (!new File(sqliteDirectory(), TARGET_DB).exists) return;
+  await purgeRetiredRows(await getWorkingDriver());
+}
+
+async function canUseLegacyIndex(bookId: string): Promise<boolean> {
+  const { driver } = await getDataLayer();
+  const rows = await driver.all<{ id: string }>(
+    `SELECT id FROM books WHERE id = ? AND removed_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM book_file_operations WHERE id = books.id)
+       AND NOT EXISTS (SELECT 1 FROM app_preferences WHERE key IN (?, ?))`,
+    [bookId, legacyBookIndexRetiredKey(bookId), legacyBookDataDeletedKey(bookId)],
+  );
+  return rows.length > 0;
+}
+
+async function currentRuntime(driver: SQLiteDriver): Promise<LegacyIndexRuntime> {
   let semantic = false;
-  let detail = '全文检索（语义模型未安装，仅 FTS）';
+  let detail = semanticMigrationIssue ? '书内文字可用；语义资料迁移失败：' + semanticMigrationIssue : '全文检索（语义模型未安装，仅 FTS）';
   try {
     const status = await embeddingStatus();
     if (status.available) {
       const provider = getEmbeddingProvider();
-      const search = new LegacyIndexSearch(driver, provider);
+      const search = new LegacyIndexSearch(driver, provider, { onVectorError(error) {
+        semantic = false;
+        detail = '书内文字可用；语义查找暂不可用：' + (error instanceof Error ? error.message : String(error));
+      } });
       semantic = true;
       detail = '全文 + 语义检索（ONNX 384 维）';
-      return { search, semantic, detail };
+      return { search, get semantic() { return semantic; }, get detail() { return detail; } };
     }
     detail = `全文检索（${status.reason}）`;
   } catch (error) {
@@ -94,14 +170,10 @@ async function openRuntime(): Promise<LegacyIndexRuntime> {
   return { search: new LegacyIndexSearch(driver, null), semantic, detail };
 }
 
-export function getLegacyIndexRuntime(): Promise<LegacyIndexRuntime> {
-  if (!runtimePromise) {
-    runtimePromise = openRuntime().catch((error: unknown) => {
-      runtimePromise = null;
-      throw error;
-    });
-  }
-  return runtimePromise;
+export async function getLegacyIndexRuntime(): Promise<LegacyIndexRuntime> {
+  const driver = await getWorkingDriver();
+  await purgeRetiredRows(driver);
+  return currentRuntime(driver);
 }
 
 export async function getLegacyIndexStatus(bookId: string): Promise<{
@@ -110,8 +182,9 @@ export async function getLegacyIndexStatus(bookId: string): Promise<{
   detail: string;
 }> {
   try {
+    if (!(await canUseLegacyIndex(bookId))) return { available: false, semantic: false, detail: '旧索引已失效，请重新准备书内文字' };
     const runtime = await getLegacyIndexRuntime();
-    const available = await runtime.search.hasBook(bookId);
+    const available = await runtime.search.hasBook(bookId) && await canUseLegacyIndex(bookId);
     return {
       available,
       semantic: runtime.semantic,
@@ -127,8 +200,9 @@ export async function getLegacyIndexStatus(bookId: string): Promise<{
 }
 
 export async function createLegacyBookSource(book: BookIdentity): Promise<LegacyIndexBookSource> {
+  if (!(await canUseLegacyIndex(book.id))) throw new LegacyIndexMissingError('旧索引已失效，请重新准备书内文字');
   const runtime = await getLegacyIndexRuntime();
-  if (!(await runtime.search.hasBook(book.id))) {
+  if (!(await runtime.search.hasBook(book.id)) || !(await canUseLegacyIndex(book.id))) {
     throw new LegacyIndexMissingError('这本书没有可用的旧索引，暂时不能书内问答');
   }
   return new LegacyIndexBookSource(runtime.search, book);

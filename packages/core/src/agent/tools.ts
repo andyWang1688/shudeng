@@ -6,7 +6,7 @@
 import { tool } from 'langchain';
 import { z } from 'zod';
 import type { BookExcerpt, BookPassage, BookSource } from './book-source.js';
-import type { EvidenceRegistry } from './evidence.js';
+import type { EvidenceRegistry, RenderedEvidenceMaterial } from './evidence.js';
 
 const PREVIEW_LIMIT = 900;
 
@@ -21,12 +21,14 @@ function renderHits(hits: BookExcerpt[], registry: EvidenceRegistry): string {
     return '没有找到相关原文。可以换关键词、查看目录，或明确告诉读者没有找到。';
   }
   const lines = ['引用时必须使用方括号里的 id；quote 必须是该条原文中的连续文字：'];
+  const materials: RenderedEvidenceMaterial[] = [];
   for (const hit of hits) {
     const evidence = registry.register(hit);
     const location = hit.page ? `${hit.chapter} · 第 ${hit.page} 页` : hit.chapter;
+    materials.push({ id: evidence.id, name: location, content: preview(evidence.quote) });
     lines.push(`[${evidence.id}] ${location}\n${preview(evidence.quote)}`);
   }
-  return lines.join('\n\n');
+  return registry.recordRendered(lines.join('\n\n'), materials);
 }
 
 function renderPassage(passage: BookPassage, target: string, registry: EvidenceRegistry): string {
@@ -37,11 +39,13 @@ function renderPassage(passage: BookPassage, target: string, registry: EvidenceR
     ? `${target} 原文（后文较长，只返回前面几段）。引用时使用方括号里的 id：`
     : `${target} 原文。引用时使用方括号里的 id：`;
   const lines = [heading];
+  const materials: RenderedEvidenceMaterial[] = [];
   for (const excerpt of passage.excerpts) {
     const evidence = registry.register(excerpt);
+    materials.push({ id: evidence.id, name: target, content: preview(evidence.quote, 1200) });
     lines.push(`[${evidence.id}] ${preview(evidence.quote, 1200)}`);
   }
-  return lines.join('\n\n');
+  return registry.recordRendered(lines.join('\n\n'), materials);
 }
 
 function failure(message: string): string {

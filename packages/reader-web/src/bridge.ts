@@ -20,6 +20,9 @@ class ReaderBridge {
   constructor() {
     window.__readerMessages = this.messages
     window.addEventListener('message', (event) => {
+      // Web's parent iframe host is trusted; publication child frames are not.
+      // Native commands call __readerHost directly and never need child messages.
+      if (event.source !== window && !(window.parent !== window && event.source === window.parent)) return
       if (!isReaderMessage(event.data)) return
       this.dispatch(event.data)
     })
@@ -35,8 +38,8 @@ class ReaderBridge {
 
   send(message: ReaderToHost): void {
     this.messages.push(message)
+    if (this.messages.length > 500) this.messages.splice(0, this.messages.length - 500)
     const json = JSON.stringify(message)
-    console.debug('[reader→host]', json)
     if (window.ReactNativeWebView) {
       window.ReactNativeWebView.postMessage(json)
       return

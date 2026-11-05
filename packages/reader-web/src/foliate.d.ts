@@ -19,5 +19,17 @@ declare module 'foliate-js/view.js' {
 declare module 'foliate-js/overlayer.js' {
   export class Overlayer {
     static highlight(rects: DOMRect[], options?: { color?: string; padding?: number }): SVGElement
+    static squiggly(rects: DOMRect[], options?: { color?: string; padding?: number; width?: number }): SVGElement
+  }
+}
+
+declare module 'foliate-js/epub.js' {
+  export class EPUB {
+    constructor(loader: {
+      loadText(path: string): Promise<string | null>
+      loadBlob(path: string, mimeType?: string): Promise<Blob | null>
+      getSize(path: string): number
+    })
+    init(): Promise<unknown>
   }
 }

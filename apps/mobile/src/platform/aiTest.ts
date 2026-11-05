@@ -1,6 +1,7 @@
 /** AI 服务连通性测试：用 Agent 对一句固定问题跑一轮，不写聊天记录。 */
 import { InMemoryBookSource, createChatModel, runBookAgent } from '@shudeng/core/agent';
 import type { AIConfig } from './aiConfig';
+import { fetch as expoFetch } from 'expo/fetch';
 
 export interface AITestOptions {
   /** 硬超时；默认 22s，允许测试注入更短值。 */
@@ -36,7 +37,7 @@ export async function testAIConnection(
       }
       resolve({ ok: false, message });
     };
-    timer = setTimeout(() => finish('连接超时，请检查网络或 Base URL 后重试。'), timeoutMs);
+    timer = setTimeout(() => finish(`连接检查在 ${timeoutMs / 1000} 秒内未完成，请稍后重试。`), timeoutMs);
     abortHandler = () => finish('已取消连接测试');
     signal?.addEventListener('abort', abortHandler, { once: true });
     if (signal?.aborted) finish('已取消连接测试');
@@ -48,24 +49,54 @@ export async function testAIConnection(
       model: config.model,
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
+      fetch: expoFetch,
       thinking: config.provider === 'deepseek',
       reasoningEffort: 'high',
       maxTokens: 2048,
     });
-    const book = { id: 'connection-test', title: '连接测试', format: 'epub' as const, sourceHash: 'test' };
+    const book = {
+      id: 'connection-test',
+      title: '连接测试',
+      format: 'epub' as const,
+      sourceHash: 'test',
+    };
     const source = new InMemoryBookSource({
       book,
       chapters: [{ title: '连接测试', paragraphs: ['这是连接测试材料。'] }],
     });
-    session = runBookAgent({ model, source, book, question: '请用一句话确认你能正常回答。' });
+    session = runBookAgent({
+      model,
+      source,
+      book,
+      question: '请用一句话确认你能正常回答。',
+    });
 
-    const result = await Promise.race([session.result, fallback]);
-    if (result === null) return { ok: false, message: '连接测试被取消或超时，请重试。' };
+    const running = session;
+    // Agent execution starts when its event iterator is consumed. A result-only wait never sends.
+    const completed = (async () => {
+      for await (const event of running.events) {
+        if (event.type === 'failed') return {
+          ok: false as const,
+          message: event.code === 'network'
+            ? '连接失败，请检查网络或 Base URL 后重试。'
+            : event.message,
+        };
+      }
+      return running.result;
+    })();
+    const result = await Promise.race([completed, fallback]);
+    if (result === null) return { ok: false, message: '连接测试未完成，请重试。' };
     if ('ok' in result) return result;
     if (!result.answer.trim()) return { ok: false, message: '模型未返回回答' };
-    return { ok: true, message: `连接成功：${result.answer.replace(/\s+/g, ' ').slice(0, 120)}` };
+    return {
+      ok: true,
+      message: `连接成功：${result.answer.replace(/\s+/g, ' ').slice(0, 120)}`,
+    };
   } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
   } finally {
     if (timer !== null) clearTimeout(timer);
     if (abortHandler) signal?.removeEventListener('abort', abortHandler);

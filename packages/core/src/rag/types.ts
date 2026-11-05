@@ -26,6 +26,8 @@ export interface RagChapter {
   ordinal: number;
   title: string;
   page?: number;
+  /** EPUB archive path, resolved relative to the OPF. Never a host filesystem path. */
+  href?: string;
   /** 与 paragraphs 二选一：直接给整章文本。 */
   text?: string;
   paragraphs?: ReadonlyArray<string>;
@@ -42,6 +44,9 @@ export interface ChunkLocator {
   readonly chapter: string;
   readonly chapterOrdinal: number;
   readonly page?: number;
+  readonly href?: string;
+  readonly locations?: { readonly progression: number };
+  readonly text?: { readonly highlight: string };
   /** 相对章节原文的 UTF-16 字符偏移（slice 可还原）。 */
   readonly charStart: number;
   readonly charEnd: number;

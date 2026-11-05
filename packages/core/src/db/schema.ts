@@ -7,7 +7,7 @@
  * - 引擎定位（Readium locator / PDF page+rect / CFI）以 JSON 字符串存 anchors.locator_json。
  * - 引用只存“已核对”的原文 quote 与定位，便于回跳原文。
  */
-import { blob, index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { blob, index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 export const books = sqliteTable('books', {
   id: text('id').primaryKey(),
@@ -17,6 +17,7 @@ export const books = sqliteTable('books', {
   sourceHash: text('source_hash').notNull(),
   importedAt: integer('imported_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
+  removedAt: integer('removed_at'),
 });
 
 export const anchors = sqliteTable(
@@ -79,6 +80,65 @@ export const messages = sqliteTable(
   },
   (table) => [index('messages_conversation').on(table.conversationId, table.createdAt)],
 );
+
+/** Conversations retain their book identity even after the original file is removed. */
+export const conversations = sqliteTable(
+  'conversations',
+  {
+    id: text('id').primaryKey(),
+    bookId: text('book_id').notNull(),
+    title: text('title'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [index('conversations_book').on(table.bookId, table.updatedAt)],
+);
+
+export const conversationTurnDetails = sqliteTable('conversation_turn_details', {
+  messageId: text('message_id')
+    .primaryKey()
+    .references(() => messages.id, { onDelete: 'cascade' }),
+  detailsJson: text('details_json').notNull(),
+});
+
+export const readerPreferences = sqliteTable('reader_preferences', {
+  bookId: text('book_id')
+    .primaryKey()
+    .references(() => books.id, { onDelete: 'cascade' }),
+  format: text('format', { enum: ['epub', 'pdf'] }).notNull(),
+  theme: text('theme', { enum: ['light', 'dark'] })
+    .notNull()
+    .default('light'),
+  fontScale: real('font_scale').notNull().default(1),
+  flow: text('flow', { enum: ['paginated', 'scrolled', 'curl'] })
+    .notNull()
+    .default('paginated'),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+export const bookIndexState = sqliteTable('book_index_state', {
+  bookId: text('book_id').primaryKey(),
+  status: text('status').notNull(),
+  detail: text('detail').notNull(),
+  sourceHash: text('source_hash').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+export const readingProgress = sqliteTable('reading_progress', {
+  bookId: text('book_id')
+    .primaryKey()
+    .references(() => books.id, { onDelete: 'cascade' }),
+  locatorJson: text('locator_json').notNull(),
+  percent: real('percent').notNull(),
+  page: integer('page'),
+  chapter: text('chapter'),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+export const appPreferences = sqliteTable('app_preferences', {
+  key: text('key').primaryKey(),
+  valueJson: text('value_json').notNull(),
+});
 
 export const citations = sqliteTable(
   'citations',
@@ -171,7 +231,11 @@ export const ragChunks = sqliteTable(
     text: text('text').notNull(),
     locatorJson: text('locator_json').notNull(),
   },
-  (table) => [index('rag_chunks_book').on(table.bookId, table.chapterOrdinal)],
+  (table) => [
+    index('rag_chunks_book').on(table.bookId, table.chapterOrdinal),
+    index('rag_chunks_book_id').on(table.bookId, table.id),
+    index('rag_chunks_reading_order').on(table.bookId, table.chapterOrdinal, table.startOffset, table.endOffset, table.id),
+  ],
 );
 
 /** 切块向量（Float32 小端 BLOB；dim 用于维度校验）。 */
@@ -203,11 +267,25 @@ export type NewCitationRow = typeof citations.$inferInsert;
 export type CheckpointRow = typeof checkpoints.$inferSelect;
 export type NewCheckpointRow = typeof checkpoints.$inferInsert;
 
+export const bookFileOperations = sqliteTable('book_file_operations', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(),
+  payloadJson: text('payload_json').notNull(),
+  createdAt: integer('created_at').notNull(),
+});
+
 export const schema = {
+  bookFileOperations,
   books,
   anchors,
   annotations,
   messages,
+  conversations,
+  conversationTurnDetails,
+  readerPreferences,
+  bookIndexState,
+  readingProgress,
+  appPreferences,
   citations,
   checkpoints,
   schemaMigrations,

@@ -70,6 +70,10 @@ export interface OffsetLocator {
 export interface CfiLocator {
   readonly cfi: string;
   readonly href?: string;
+  readonly selection?: ReadiumLocator;
+  readonly chapter?: string;
+  readonly totalProgression?: number;
+  readonly position?: number;
 }
 
 /** PDF 页内归一化矩形（相对 cropBox，0..1，原点左下，PDF 坐标）。 */

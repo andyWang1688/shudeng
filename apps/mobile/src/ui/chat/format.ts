@@ -1,4 +1,5 @@
 import type { VerifiedCitation } from '@shudeng/core';
+import type { AIConfig } from '../../platform/aiConfig';
 
 /** Swift BookType.serif 使用 PostScript 名 SongtiSC-*；family 名在 RN 会回退系统字体。 */
 export const SERIF = 'SongtiSC-Regular';
@@ -11,7 +12,10 @@ export function toolLabel(name: string): string {
   return name;
 }
 
-export function serviceName(provider: 'deepseek' | 'openai' | 'anthropic' | undefined): string {
+export function serviceName(config: Pick<AIConfig, 'name' | 'provider'> | null | undefined): string {
+  const name = config?.name?.trim();
+  if (name) return name;
+  const provider = config?.provider;
   if (provider === 'deepseek') return 'DeepSeek';
   if (provider === 'openai') return 'OpenAI';
   if (provider === 'anthropic') return 'Anthropic';
@@ -41,26 +45,49 @@ export function citationTitle(
   return `${head}\n查看原文，核对这段解释`;
 }
 
-/** 旧索引 locator 是 Readium JSON；转成 reader 可用 locator，无法定位时就只打开书。 */
+/** Preserve CFI, Readium and Anchor locators; resolving them belongs to the reader. */
 export function locatorForCitation(citation: VerifiedCitation): string | undefined {
-  if (citation.page) return JSON.stringify({ type: 'pdf', page: citation.page });
+  if (citation.page !== undefined && citation.page > 0)
+    return JSON.stringify({ type: 'pdf', page: citation.page, text: citation.quote });
+  const locator = citation.locator.trim();
+  if (!locator) return undefined;
+  if (!locator.startsWith('{')) return locator;
   try {
-    const parsed: unknown = JSON.parse(citation.locator);
+    const parsed: unknown = JSON.parse(locator);
     if (typeof parsed !== 'object' || parsed === null) return undefined;
     const record = parsed as Record<string, unknown>;
-    const locations =
-      typeof record.locations === 'object' && record.locations !== null
-        ? (record.locations as Record<string, unknown>)
-        : undefined;
-    const cfi = typeof locations?.cfi === 'string' ? locations.cfi : undefined;
-    if (!cfi) return undefined;
-    return JSON.stringify({
-      type: 'epub',
-      cfi,
-      ...(typeof record.href === 'string' ? { href: record.href } : {}),
-      ...(typeof record.title === 'string' ? { chapter: record.title } : {}),
-    });
+    return JSON.stringify({ ...record, quote: citation.quote });
   } catch {
     return undefined;
   }
+}
+
+/** Extract a partial JSON answer string without exposing the response envelope. */
+export function streamingAnswer(raw: string): string {
+  const start = /"answer"\s*:\s*"/.exec(raw);
+  if (!start) return /^\s*(?:```(?:json)?\s*)?\{/.test(raw) ? '' : raw;
+  const value = raw.slice(start.index + start[0].length);
+  let answer = '';
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index];
+    if (char === '"') break;
+    if (char !== '\\') {
+      answer += char;
+      continue;
+    }
+    const escaped = value[++index];
+    if (escaped === undefined) break;
+    if (escaped === 'u') {
+      const code = value.slice(index + 1, index + 5);
+      if (code.length < 4) break;
+      if (/^[0-9a-f]{4}$/i.test(code)) {
+        answer += String.fromCharCode(parseInt(code, 16));
+        index += 4;
+      }
+    } else {
+      answer +=
+        ({ n: '\n', r: '\r', t: '\t', b: '\b', f: '\f' } as Record<string, string>)[escaped] ?? escaped;
+    }
+  }
+  return answer;
 }

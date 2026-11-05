@@ -12,6 +12,11 @@ export * from './chunker.js';
 export * from './embedding.js';
 export * from './search-index.js';
 export * from './book-source.js';
+export * from './epub-content.js';
+export * from './epub-publication.js';
+export * from './checkpoint-index.js';
+export * from './index-revision.js';
+export * from './epub-resources.js';
 
 import { assertNotAborted, type IndexRagBookOptions, type TextChunk } from './types.js';
 

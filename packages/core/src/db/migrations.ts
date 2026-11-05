@@ -148,6 +148,50 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       `CREATE INDEX IF NOT EXISTS rag_chunk_vectors_model ON rag_chunk_vectors (model, dim)`,
     ],
   },
+  {
+    id: '0003_conversations_reader_preferences',
+    statements: [
+      `ALTER TABLE books ADD COLUMN removed_at INTEGER`,
+      `CREATE TABLE IF NOT EXISTS app_preferences (key TEXT PRIMARY KEY NOT NULL, value_json TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS reading_progress (
+        book_id TEXT PRIMARY KEY NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        locator_json TEXT NOT NULL, percent REAL NOT NULL, page INTEGER, chapter TEXT,
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS conversations (
+        id TEXT PRIMARY KEY NOT NULL, book_id TEXT NOT NULL, title TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS conversations_book ON conversations (book_id, updated_at)`,
+      `CREATE TABLE IF NOT EXISTS conversation_turn_details (
+        message_id TEXT PRIMARY KEY NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        details_json TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS reader_preferences (
+        book_id TEXT PRIMARY KEY NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        format TEXT NOT NULL, theme TEXT NOT NULL DEFAULT 'light',
+        font_scale REAL NOT NULL DEFAULT 1, flow TEXT NOT NULL DEFAULT 'paginated',
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS book_index_state (
+        book_id TEXT PRIMARY KEY NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL,
+        source_hash TEXT NOT NULL, updated_at INTEGER NOT NULL
+      )`,
+    ],
+  },
+  {
+    id: '0004_book_file_operations',
+    statements: [
+      'CREATE TABLE IF NOT EXISTS book_file_operations (id TEXT PRIMARY KEY NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL)',
+    ],
+  },
+  {
+    id: '0005_rag_keyset_indexes',
+    statements: [
+      'CREATE INDEX IF NOT EXISTS rag_chunks_book_id ON rag_chunks (book_id, id)',
+      'CREATE INDEX IF NOT EXISTS rag_chunks_reading_order ON rag_chunks (book_id, chapter_ordinal, start_offset, end_offset, id)',
+    ],
+  },
 ];
 
 export interface MigrateResult {
@@ -168,10 +212,7 @@ export async function migrate(driver: SQLiteDriver): Promise<MigrateResult> {
     }
     await driver.transaction(async (tx) => {
       for (const statement of migration.statements) await tx.exec(statement);
-      await tx.run('INSERT INTO _migrations (id, applied_at) VALUES (?, ?)', [
-        migration.id,
-        Date.now(),
-      ]);
+      await tx.run('INSERT INTO _migrations (id, applied_at) VALUES (?, ?)', [migration.id, Date.now()]);
     });
     result.applied.push(migration.id);
   }

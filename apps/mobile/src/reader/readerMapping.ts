@@ -23,8 +23,11 @@ export function storedLocatorFromReaderLocator(locator: ReaderLocator | undefine
   return {
     type: 'epub',
     cfi: locator.cfi,
+    ...(locator.selection ? { selection: locator.selection } : {}),
     ...(locator.href ? { href: locator.href } : {}),
     ...(locator.chapter ? { chapter: locator.chapter } : {}),
+    ...(typeof (locator.totalProgression ?? locator.fraction) === 'number' ? { totalProgression: locator.totalProgression ?? locator.fraction } : {}),
+    ...(typeof locator.position === 'number' ? { position: locator.position } : {}),
   };
 }
 
@@ -39,8 +42,11 @@ export function readerLocatorFromStoredLocator(stored: StoredReaderLocator): Rea
   return {
     type: 'epub',
     cfi: stored.cfi,
+    ...(stored.selection ? { selection: stored.selection } : {}),
     ...(stored.href ? { href: stored.href } : {}),
     ...(stored.chapter ? { chapter: stored.chapter } : {}),
+    ...(typeof stored.totalProgression === 'number' ? { totalProgression: stored.totalProgression } : {}),
+    ...(typeof stored.position === 'number' ? { position: stored.position } : {}),
   };
 }
 

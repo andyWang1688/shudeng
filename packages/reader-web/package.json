@@ -8,15 +8,18 @@
     "build": "vite build",
     "preview": "vite preview --port 4173 --strictPort",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test scripts/epub-location.test.mjs scripts/epub-viewport.test.mjs scripts/foliate-resource-loader.test.mts",
     "verify": "node scripts/verify.mjs",
     "build:inline": "node scripts/build-inline.mjs"
   },
   "dependencies": {
+    "@shudeng/core": "workspace:*",
     "foliate-js": "1.0.1",
     "pdfjs-dist": "6.5.438"
   },
   "devDependencies": {
     "typescript": "^6.0.3",
-    "vite": "^8.3.5"
+    "vite": "^8.3.5",
+    "tsx": "4.23.15"
   }
 }

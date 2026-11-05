@@ -1,0 +1,6 @@
+{
+  "name": "shudeng-epub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WebKit EPUB presentation and UIKit page curl for Shudeng"
+}

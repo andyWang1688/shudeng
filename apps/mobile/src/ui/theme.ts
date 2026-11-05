@@ -6,21 +6,21 @@ import { useColorScheme, type ViewStyle } from 'react-native';
 import { useAppearanceMode } from './appearance';
 
 export const lightColors = {
-  paper: '#FCFBF8',
-  paperDeep: '#F2F0E9',
+  paper: '#FAF7F1',
+  paperDeep: '#F2EDE2',
   surface: '#FFFFFF',
-  ink: '#282B26',
-  ink2: '#64675F',
-  ink3: '#696C63',
-  line: '#E6E3DA',
+  ink: '#211E18',
+  ink2: '#57534A',
+  ink3: '#6E6A60',
+  line: '#E7E0D2',
   lamp: '#B4712A',
   lampInk: '#8A5413',
   lampWash: '#F6E7CC',
   selection: '#F2DBA6',
-  error: '#A13C30',
-  errorWash: '#FAEBE7',
-  danger: '#A13C30',
-  dangerWash: '#FAEBE7',
+  error: '#A63A2B',
+  errorWash: '#F8E7E1',
+  danger: '#A63A2B',
+  dangerWash: '#F8E7E1',
   green: '#4F5A4A',
   olive: '#E8E5D8',
 } as const;
@@ -57,7 +57,7 @@ export function usePalette(): Palette {
   return dark ? darkColors : lightColors;
 }
 
-/** 页面左右边距 24pt（baseline 实测 x=24），底栏总高 81pt（56 + 25 底部留白）。 */
+/** 页面左右边距 24pt；底栏 56pt 加设备实际底部安全区。 */
 export const spacing = {
   xxs: 4,
   xs: 8,
@@ -99,35 +99,56 @@ export const font = {
   serif: 'Songti SC',
 } as const;
 
-
 export type BookCoverTone = {
   readonly background: string;
   readonly ink: string;
   readonly rule: string;
 };
 
-/** 真实 Swift v0.4.8 书封：瓦尔登湖深墨绿、红楼梦纸黄、论语/段永平暖纸色。 */
-export function bookCoverTone(title: string, format?: string): BookCoverTone {
-  const name = title.trim();
-  if (/瓦尔登湖/.test(name)) return { background: '#3F4C40', ink: '#F2EDE2', rule: 'rgba(242,237,226,0.45)' };
-  if (/红楼梦|石头记/.test(name)) return { background: '#EFE4CC', ink: '#2C2A24', rule: 'rgba(44,42,36,0.38)' };
-  if (/论语/.test(name)) return { background: '#D9D2C2', ink: '#2C2A24', rule: 'rgba(44,42,36,0.34)' };
-  if (/段永平|大道|投资/.test(name) || format === 'pdf') return { background: '#E7DECB', ink: '#2C2A24', rule: 'rgba(44,42,36,0.34)' };
-  const warm = ['#E8E1D2', '#DDD5C4', '#D6CDBA', '#E3D8C3'];
-  let hash = 0;
-  for (let index = 0; index < name.length; index += 1) hash = (hash * 31 + name.charCodeAt(index)) >>> 0;
-  return { background: warm[hash % warm.length] ?? '#E8E1D2', ink: '#2C2A24', rule: 'rgba(44,42,36,0.34)' };
+/** Matches Swift's title.utf8 byte sum, including non-BMP titles, without a Node/TextEncoder dependency. */
+function titlePaletteIndex(title: string): number {
+  let sum = 0;
+  for (const character of title) {
+    let point = character.codePointAt(0)!;
+    if (point >= 0xd800 && point <= 0xdfff) point = 0xfffd;
+    const bytes =
+      point < 0x80
+        ? [point]
+        : point < 0x800
+          ? [0xc0 | (point >> 6), 0x80 | (point & 0x3f)]
+          : point < 0x10000
+            ? [0xe0 | (point >> 12), 0x80 | ((point >> 6) & 0x3f), 0x80 | (point & 0x3f)]
+            : [
+                0xf0 | (point >> 18),
+                0x80 | ((point >> 12) & 0x3f),
+                0x80 | ((point >> 6) & 0x3f),
+                0x80 | (point & 0x3f),
+              ];
+    for (const byte of bytes) sum = (sum + byte) % 4;
+  }
+  return sum;
 }
 
-/** 真实原版列表左侧小书脊：EPUB 统一深墨绿，PDF/其他用书封暖色。 */
-export function bookSwatchTone(title: string, format?: string): BookCoverTone {
-  if (!format || format === 'epub') return { background: '#3F4C40', ink: '#EFE4CC', rule: 'rgba(239,228,204,0.4)' };
-  return bookCoverTone(title, format);
+/** Generic fallback used only when the publication has no embedded cover. */
+export function bookCoverTone(title: string, _format?: string): BookCoverTone {
+  const groups = [
+    ['#F0E5CE', '#3B332A'],
+    ['#38483F', '#F1EAD9'],
+    ['#8F5336', '#F7EBDF'],
+    ['#3A4653', '#EFF0E8'],
+  ] as const;
+  const [background, ink] = groups[titlePaletteIndex(title)]!;
+  return { background, ink, rule: `${ink}66` };
+}
+
+export function bookSwatchTone(title: string, _format?: string): BookCoverTone {
+  const background = ['#38483F', '#8F5336', '#3A4653', '#6D5A3A'][titlePaletteIndex(title)]!;
+  return { background, ink: lightColors.paper, rule: `${lightColors.paper}66` };
 }
 
 /** 书架/笔记/对话统一搜索条：白色圆角立体条、细描边 + 轻微阴影。 */
 export function searchFieldTextColor(palette: Palette): string {
-  return palette.paper === darkColors.paper ? palette.ink : '#282B26';
+  return palette.ink;
 }
 
 export function searchFieldPlaceholderColor(palette: Palette): string {

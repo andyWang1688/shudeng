@@ -28,7 +28,9 @@ export function ChatErrorBanner({
 }) {
   return (
     <View style={[styles.banner, { backgroundColor: palette.errorWash }]}>
-      <Text style={[styles.title, { color: palette.error }]}>{indexMissing ? '这本书暂不能问答' : '暂时无法问答'}</Text>
+      <Text style={[styles.title, { color: palette.error }]}>
+        {indexMissing ? '这本书暂不能问答' : '暂时无法问答'}
+      </Text>
       <Text style={[styles.body, { color: palette.error }]}>{friendlyError(loadError ?? indexDetail)}</Text>
     </View>
   );

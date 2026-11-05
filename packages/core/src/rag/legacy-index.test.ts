@@ -123,4 +123,15 @@ describe('LegacyIndexSearch / LegacyIndexBookSource（旧 Swift book-index.sqlit
     expect(await search.hasBook(BOOK_ID)).toBe(true);
     expect(await search.hasBook('missing-book')).toBe(false);
   });
+
+  it('falls back to the existing real text index only when an optional-model error policy is explicit', async () => {
+    const failing = { dimension: 384, modelId: 'broken-runtime', async embed(): Promise<Float32Array[]> { throw new Error('model unavailable'); } };
+    const failures: unknown[] = [];
+    const search = new LegacyIndexSearch(driver, failing, { onVectorError(error) { failures.push(error); } });
+    const hits = await search.searchBook(BOOK_ID, '灯把书页');
+    expect(hits[0]?.quote).toContain('灯把书页照亮');
+    expect(hits[0]?.sources).toEqual(['fts']);
+    expect(failures).toHaveLength(1);
+    await expect(new LegacyIndexSearch(driver, failing).searchBook(BOOK_ID, '灯')).rejects.toThrow('model unavailable');
+  });
 });

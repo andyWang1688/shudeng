@@ -12,6 +12,7 @@ import type { SQLiteDriver, SQLiteValue } from '../db/driver.js';
 import { cosineSimilarity } from './embedding.js';
 import { parseChunkLocator } from './chunker.js';
 import { ftsIndexText, ftsMatchQuery } from './text.js';
+import { advanceRagIndexRevision, getRagIndexRevision, SearchIndexChangedError } from './index-revision.js';
 import {
   assertNotAborted,
   type EmbeddingProvider,
@@ -33,6 +34,10 @@ export interface SqliteSearchIndexOptions {
   rrfK?: number;
   /** 每个检索路径进入融合的候选数（默认 max(20, topK*4)）。 */
   candidateLimit?: number;
+  /** Optional model failure policy. Without an explicit handler, vector errors still propagate. */
+  onVectorError?: (error: unknown) => void | Promise<void>;
+  /** Platform source/generation/lifecycle guard, checked at every paged read boundary. */
+  validateRead?: (driver: SQLiteDriver) => Promise<void>;
 }
 
 function text(value: SQLiteValue | undefined): string {
@@ -59,15 +64,19 @@ export function bytesToFloat32(bytes: Uint8Array): Float32Array {
 
 export class SqliteSearchIndex implements SearchIndex {
   private readonly driver: SQLiteDriver;
-  private readonly embedding: EmbeddingProvider;
+  private readonly embedding: EmbeddingProvider | null;
   private readonly rrfK: number;
   private readonly configuredCandidateLimit: number | undefined;
+  private readonly onVectorError: SqliteSearchIndexOptions['onVectorError'];
+  private readonly validateRead: SqliteSearchIndexOptions['validateRead'];
 
-  constructor(driver: SQLiteDriver, embedding: EmbeddingProvider, options: SqliteSearchIndexOptions = {}) {
+  constructor(driver: SQLiteDriver, embedding: EmbeddingProvider | null, options: SqliteSearchIndexOptions = {}) {
     this.driver = driver;
     this.embedding = embedding;
     this.rrfK = Math.max(1, options.rrfK ?? 60);
     this.configuredCandidateLimit = options.candidateLimit;
+    this.onVectorError = options.onVectorError;
+    this.validateRead = options.validateRead;
   }
 
   // ---------- 写入 ----------
@@ -79,15 +88,16 @@ export class SqliteSearchIndex implements SearchIndex {
     options: IndexBookOptions = {},
   ): Promise<void> {
     assertNotAborted(options.signal);
-    if (chunks.length !== embeddings.length) {
+    if (embeddings.length > 0 && chunks.length !== embeddings.length) {
       throw new Error(`chunk 数（${chunks.length}）与向量数（${embeddings.length}）不一致`);
     }
+    if (!this.embedding && embeddings.length > 0) throw new Error('没有语义模型时不能写入向量');
     for (const textChunk of chunks) {
       if (textChunk.bookId !== book.book.id) throw new Error(`chunk ${textChunk.id} 不属于书 ${book.book.id}`);
     }
     for (const vector of embeddings) {
-      if (vector.length !== this.embedding.dimension) {
-        throw new Error(`向量维度 ${vector.length} 与模型维度 ${this.embedding.dimension} 不一致`);
+      if (vector.length !== this.embedding?.dimension) {
+        throw new Error(`向量维度 ${vector.length} 与模型维度 ${this.embedding?.dimension} 不一致`);
       }
     }
 
@@ -102,7 +112,7 @@ export class SqliteSearchIndex implements SearchIndex {
       for (let index = 0; index < chunks.length; index += 1) {
         assertNotAborted(options.signal);
         const chunk = chunks[index]!;
-        const vector = embeddings[index]!;
+        const vector = embeddings[index];
         await tx.run(
           `INSERT INTO rag_chunks
             (id, book_id, chapter_ordinal, chapter_title, page, start_offset, end_offset, text, locator_json)
@@ -124,29 +134,42 @@ export class SqliteSearchIndex implements SearchIndex {
           chunk.bookId,
           ftsIndexText(chunk.text),
         ]);
-        await tx.run(
+        if (vector && this.embedding) await tx.run(
           'INSERT INTO rag_chunk_vectors (chunk_id, model, dim, vector) VALUES (?, ?, ?, ?)',
           [chunk.id, this.embedding.modelId, this.embedding.dimension, float32ToBytes(vector)],
         );
       }
+      await advanceRagIndexRevision(tx, book.book.id);
     });
   }
 
   // ---------- 检索 ----------
 
+  private async checkRead(bookId: string, revision: string, signal?: CancellationSignal): Promise<void> {
+    assertNotAborted(signal);
+    await this.validateRead?.(this.driver);
+    if (await getRagIndexRevision(this.driver, bookId) !== revision) throw new SearchIndexChangedError();
+    assertNotAborted(signal);
+  }
+
   async search(query: string, options: SearchOptions): Promise<SearchHit[]> {
     assertNotAborted(options.signal);
     const bookId = options.bookId;
     if (!query.trim()) return [];
+    const revision = await getRagIndexRevision(this.driver, bookId);
+    await this.checkRead(bookId, revision, options.signal);
     const mode = options.mode ?? 'hybrid';
     const topK = Math.max(1, Math.floor(options.topK ?? 5));
     const candidateLimit =
       this.configuredCandidateLimit ?? Math.max(20, Math.min(200, topK * 4));
 
     const ftsIds = mode === 'vector' ? [] : await this.searchFts(bookId, query, candidateLimit, options.signal);
+    await this.checkRead(bookId, revision, options.signal);
     assertNotAborted(options.signal);
-    const vectorIds =
-      mode === 'fts' ? [] : await this.searchVectorByQuery(bookId, query, candidateLimit, options.signal);
+    let vectorIds: string[] = [];
+    if (mode !== 'fts') {
+      vectorIds = await this.searchVectorByQuery(bookId, query, candidateLimit, revision, mode === 'hybrid', options.signal);
+    }
     assertNotAborted(options.signal);
 
     const fused = fuseRankings(
@@ -157,8 +180,10 @@ export class SqliteSearchIndex implements SearchIndex {
       this.rrfK,
       topK,
     );
+    await this.checkRead(bookId, revision, options.signal);
     if (fused.length === 0) return [];
     const chunks = await this.loadChunks(fused.map((entry) => entry.chunkId));
+    await this.checkRead(bookId, revision, options.signal);
     const hits: SearchHit[] = [];
     for (const entry of fused) {
       const chunk = chunks.get(entry.chunkId);
@@ -190,44 +215,62 @@ export class SqliteSearchIndex implements SearchIndex {
     bookId: string,
     query: string,
     limit: number,
+    revision: string,
+    allowModelFallback: boolean,
     signal?: CancellationSignal,
   ): Promise<string[]> {
-    const [queryVector] = await this.embedding.embed([query], { ...(signal ? { signal } : {}) });
-    assertNotAborted(signal);
-    if (!queryVector || queryVector.length !== this.embedding.dimension) {
-      throw new Error('查询向量维度与 EmbeddingProvider 不一致');
+    if (!this.embedding) return [];
+    let queryVector: Float32Array | undefined;
+    try {
+      [queryVector] = await this.embedding.embed([query], { ...(signal ? { signal } : {}) });
+      assertNotAborted(signal);
+      if (!queryVector || queryVector.length !== this.embedding.dimension) throw new Error('查询向量维度与 EmbeddingProvider 不一致');
+    } catch (error) {
+      assertNotAborted(signal);
+      await this.checkRead(bookId, revision, signal);
+      if (!allowModelFallback || !this.onVectorError || error instanceof SearchIndexChangedError) throw error;
+      await this.onVectorError(error);
+      return [];
     }
-    return this.searchVector(bookId, queryVector, limit, signal);
+    // Only the optional model invocation can downgrade. DB/revision/guard failures propagate.
+    await this.checkRead(bookId, revision, signal);
+    return this.searchVector(bookId, queryVector, limit, revision, signal);
   }
 
   private async searchVector(
     bookId: string,
     queryVector: Float32Array,
     limit: number,
+    revision: string,
     signal?: CancellationSignal,
   ): Promise<string[]> {
-    const rows = await this.driver.all<Row>(
-      `SELECT v.chunk_id AS chunk_id, v.model AS model, v.dim AS dim, v.vector AS vector
-       FROM rag_chunk_vectors v JOIN rag_chunks c ON c.id = v.chunk_id
-       WHERE c.book_id = ?`,
-      [bookId],
-    );
+    if (limit <= 0) return [];
     const scored: Array<{ id: string; score: number }> = [];
-    for (let index = 0; index < rows.length; index += 1) {
-      if (index % 32 === 0) assertNotAborted(signal);
-      const row = rows[index]!;
-      if (text(row.model) !== this.embedding.modelId) continue;
-      const dim = nullableInt(row.dim);
-      if (dim !== queryVector.length) continue;
-      const raw = row.vector;
-      if (!(raw instanceof Uint8Array)) continue;
-      const vector = bytesToFloat32(raw);
-      if (vector.length !== queryVector.length) continue;
-      scored.push({ id: text(row.chunk_id), score: cosineSimilarity(queryVector, vector) });
+    const compare = (left: { id: string; score: number }, right: { id: string; score: number }): number => right.score - left.score || left.id.localeCompare(right.id);
+    let cursor: string | null = null;
+    while (true) {
+      await this.checkRead(bookId, revision, signal);
+      const rows = await this.driver.all<Row>(
+        'SELECT c.id AS chunk_id, v.model, v.dim, v.vector FROM rag_chunks c JOIN rag_chunk_vectors v ON v.chunk_id = c.id WHERE c.book_id = ?' + (cursor === null ? '' : ' AND c.id > ?') + ' ORDER BY c.id LIMIT 64',
+        cursor === null ? [bookId] : [bookId, cursor],
+      );
+      await this.checkRead(bookId, revision, signal);
+      if (!rows.length) break;
+      for (const row of rows) {
+        assertNotAborted(signal);
+        if (text(row.model) !== this.embedding?.modelId || nullableInt(row.dim) !== queryVector.length || !(row.vector instanceof Uint8Array)) continue;
+        const vector = bytesToFloat32(row.vector);
+        if (vector.length !== queryVector.length) continue;
+        const candidate = { id: text(row.chunk_id), score: cosineSimilarity(queryVector, vector) };
+        if (scored.length === limit && compare(candidate, scored[scored.length - 1]!) >= 0) continue;
+        let low = 0, high = scored.length;
+        while (low < high) { const middle = Math.floor((low + high) / 2); if (compare(scored[middle]!, candidate) <= 0) low = middle + 1; else high = middle; }
+        scored.splice(low, 0, candidate);
+        if (scored.length > limit) scored.pop();
+      }
+      cursor = text(rows[rows.length - 1]!.chunk_id);
     }
-    assertNotAborted(signal);
-    scored.sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
-    return scored.slice(0, limit).map((entry) => entry.id);
+    return scored.map(entry => entry.id);
   }
 
   private async loadChunks(ids: ReadonlyArray<string>): Promise<Map<string, TextChunk>> {
@@ -248,14 +291,44 @@ export class SqliteSearchIndex implements SearchIndex {
   // ---------- 读取/清理 ----------
 
   async listChunks(bookId: string): Promise<TextChunk[]> {
+    const revision = await getRagIndexRevision(this.driver, bookId);
+    await this.checkRead(bookId, revision);
     const rows = await this.driver.all<Row>(
       'SELECT * FROM rag_chunks WHERE book_id = ? ORDER BY chapter_ordinal, start_offset',
       [bookId],
     );
+    await this.checkRead(bookId, revision);
     return rows.map(rowToChunk).filter((chunk): chunk is TextChunk => chunk !== null);
   }
 
+  /** Ordered keyset pages; no snapshot-sized JS array or OFFSET scan. Aborts if the official index changes. */
+  async *iterateChunks(bookId: string, options: { readonly batchSize?: number; readonly signal?: CancellationSignal } = {}): AsyncGenerator<TextChunk> {
+    const batchSize = Math.max(1, Math.min(256, Math.floor(options.batchSize ?? 64)));
+    const revision = await getRagIndexRevision(this.driver, bookId);
+    let cursor: readonly [number, number, number, string] | undefined;
+    while (true) {
+      await this.checkRead(bookId, revision, options.signal);
+      const rows = await this.driver.all<Row>(
+        'SELECT * FROM rag_chunks WHERE book_id = ?' + (cursor ? ' AND (chapter_ordinal, start_offset, end_offset, id) > (?, ?, ?, ?)' : '') + ' ORDER BY chapter_ordinal, start_offset, end_offset, id LIMIT ?',
+        cursor ? [bookId, ...cursor, batchSize] : [bookId, batchSize],
+      );
+      await this.checkRead(bookId, revision, options.signal);
+      if (!rows.length) break;
+      for (const row of rows) {
+        assertNotAborted(options.signal);
+        const chunk = rowToChunk(row);
+        if (!chunk) throw new Error('书内文字的位置不一致，请重新准备后再搜索');
+        yield chunk;
+      }
+      const last = rows[rows.length - 1]!;
+      cursor = [Number(last.chapter_ordinal), Number(last.start_offset), Number(last.end_offset), text(last.id)];
+    }
+    await this.checkRead(bookId, revision, options.signal);
+  }
+
   async chunksForChapter(bookId: string, reference: string | number): Promise<TextChunk[]> {
+    const revision = await getRagIndexRevision(this.driver, bookId);
+    await this.checkRead(bookId, revision);
     const numeric = typeof reference === 'number' ? reference : /^\d+$/.test(reference.trim()) ? Number(reference) : null;
     const rows =
       numeric !== null
@@ -267,15 +340,19 @@ export class SqliteSearchIndex implements SearchIndex {
             'SELECT * FROM rag_chunks WHERE book_id = ? AND (chapter_title = ? OR chapter_title LIKE ?) ORDER BY start_offset',
             [bookId, String(reference), `%${String(reference)}%`],
           );
+    await this.checkRead(bookId, revision);
     return rows.map(rowToChunk).filter((chunk): chunk is TextChunk => chunk !== null);
   }
 
   async chunksForPage(bookId: string, page: number): Promise<TextChunk[]> {
+    const revision = await getRagIndexRevision(this.driver, bookId);
+    await this.checkRead(bookId, revision);
     if (!Number.isInteger(page) || page < 1) return [];
     const rows = await this.driver.all<Row>(
       'SELECT * FROM rag_chunks WHERE book_id = ? AND page = ? ORDER BY chapter_ordinal, start_offset',
       [bookId, page],
     );
+    await this.checkRead(bookId, revision);
     return rows.map(rowToChunk).filter((chunk): chunk is TextChunk => chunk !== null);
   }
 
@@ -287,6 +364,7 @@ export class SqliteSearchIndex implements SearchIndex {
         [bookId],
       );
       await tx.run('DELETE FROM rag_chunks WHERE book_id = ?', [bookId]);
+      await advanceRagIndexRevision(tx, bookId);
     });
   }
 

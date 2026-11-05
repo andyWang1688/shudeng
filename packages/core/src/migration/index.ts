@@ -2,3 +2,4 @@
 export * from './types.js';
 export * from './legacy-locator.js';
 export * from './swift-library.js';
+export * from './legacy-native-agent.js';

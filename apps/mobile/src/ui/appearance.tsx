@@ -2,8 +2,8 @@
  * 外观偏好：system / light / dark，持久化到 SecureStore，异步加载后即时生效。
  * 放在 UI 层但不依赖 theme（theme.usePalette 反向读取本模块），避免循环依赖。
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useColorScheme } from 'react-native';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Appearance, useColorScheme } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 export type AppearanceMode = 'system' | 'light' | 'dark';
@@ -31,12 +31,14 @@ export function AppearanceProvider({ children }: { readonly children: ReactNode 
   const systemScheme = useColorScheme();
   const [mode, setModeState] = useState<AppearanceMode>('system');
   const [hydrated, setHydrated] = useState(false);
+  const userSelectionRevision = useRef(0);
 
   useEffect(() => {
     let mounted = true;
     void SecureStore.getItemAsync(STORAGE_KEY)
       .then((raw) => {
-        if (!mounted || !isAppearanceMode(raw)) return;
+        // A late startup snapshot must never override an explicit user choice.
+        if (!mounted || userSelectionRevision.current !== 0 || !isAppearanceMode(raw)) return;
         setModeState(raw);
       })
       .catch(() => {
@@ -50,7 +52,14 @@ export function AppearanceProvider({ children }: { readonly children: ReactNode 
     };
   }, []);
 
+  // Update the native window too, so system pickers inherit the app preference.
+  // Depend on the preference, not useColorScheme's resulting change notification.
+  useEffect(() => {
+    Appearance.setColorScheme(mode === 'system' ? 'auto' : mode);
+  }, [mode]);
+
   const setMode = useCallback((next: AppearanceMode) => {
+    userSelectionRevision.current += 1;
     setModeState(next);
     void SecureStore.setItemAsync(STORAGE_KEY, next, {
       keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
@@ -80,4 +89,11 @@ export function useAppearance(): AppearanceContextValue {
 /** 用户偏好（system/light/dark）；theme.usePalette 用它决定实际色板。 */
 export function useAppearanceMode(): AppearanceMode {
   return useAppearance().mode;
+}
+
+/** A book's reading theme is local to its reader; changing it never changes the app preference. */
+export function AppearanceOverride({ mode, children }: { readonly mode: ResolvedAppearanceMode; readonly children: ReactNode }) {
+  const inherited = useAppearance();
+  const value = useMemo(() => ({ ...inherited, mode, resolvedMode: mode }), [inherited, mode]);
+  return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>;
 }

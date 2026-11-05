@@ -3,14 +3,20 @@
     "name": "书灯",
     "slug": "shudeng-mobile",
     "scheme": "shudeng",
-    "version": "0.0.1",
-    "orientation": "portrait",
+    "version": "0.4.8",
+    "orientation": "default",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
+      "buildNumber": "12",
       "bundleIdentifier": "dev.shudeng.mobile",
       "infoPlist": {
+        "UISupportedInterfaceOrientations": [
+          "UIInterfaceOrientationPortrait",
+          "UIInterfaceOrientationLandscapeLeft",
+          "UIInterfaceOrientationLandscapeRight"
+        ],
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         }
@@ -27,7 +33,9 @@
       "expo-router",
       "expo-sqlite",
       "onnxruntime-react-native",
-      "expo-secure-store"
+      "expo-secure-store",
+      "./plugins/withEpubResources.cjs",
+      "./plugins/withReactNativeSource.cjs"
     ]
   }
 }

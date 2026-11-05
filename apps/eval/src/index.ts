@@ -2,12 +2,7 @@
  * Node 评测入口：fixture 书 → question → search_book 工具 → 引用核对 → answer。
  * 用脚本化 ChatModel 跑确定性闭环（无 key、无网络）；真实 provider 用法见 README/报告。
  */
-import {
-  InMemoryBookSource,
-  runBookAgent,
-  type AgentEvent,
-  type AgentRunResult,
-} from '@shudeng/core/agent';
+import { InMemoryBookSource, runBookAgent, type AgentEvent, type AgentRunResult } from '@shudeng/core/agent';
 import { createScriptedModel, type ScriptedTurn } from '@shudeng/core/agent/testing';
 import { evalCases, fixtureBook, type EvalCase } from './fixtures.js';
 
@@ -51,6 +46,12 @@ function formatEvent(event: AgentEvent): string {
       return `failed ${event.code} ${event.message}`;
     case 'cancelled':
       return 'cancelled';
+    case 'contextUsage':
+      return `contextUsage input=${event.usage.inputTokens} output=${event.usage.outputTokens}`;
+    case 'requestContext':
+      return `requestContext estimated=${event.estimate.estimatedTokens} materials=${event.materials.length}`;
+    case 'contextCompacted':
+      return 'contextCompacted';
   }
 }
 

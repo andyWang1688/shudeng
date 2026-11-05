@@ -5,78 +5,62 @@ import type { Palette } from '../theme';
 import { SERIF_BOLD } from './format';
 import { tapFeedback } from './haptics';
 
-/** 76% 底部 sheet：遮罩、把手、品牌头、关闭、键盘避让；AI 内容由 book-chat 编排。 */
+/** RN sheet content; the native stack owns detents, dimming and interactive dismissal. */
 export function ChatSheet({
   palette,
-  height,
   bottomInset,
   onClose,
   children,
 }: {
   readonly palette: Palette;
-  readonly height: number;
   readonly bottomInset: number;
   readonly onClose: () => void;
   readonly children: ReactNode;
 }) {
   const styles = useMemo(() => createStyles(palette), [palette]);
   return (
-    <View style={styles.overlay}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="收起问答"
-        style={styles.backdrop}
-        onPress={onClose}
-      />
-      <View style={[styles.sheet, { height, paddingBottom: Math.max(bottomInset, 8) }]}>
-        <View style={styles.handle} />
-        <View style={styles.header}>
-          <View style={styles.brand}>
-            <View style={styles.brandMark}>
-              <SymbolView name="lightbulb" size={15} weight="medium" tintColor={palette.lamp} />
-            </View>
-            <Text style={styles.brandTitle}>问问书灯</Text>
+    <View testID="question-sheet" style={[styles.sheet, { paddingBottom: Platform.OS === 'ios' ? bottomInset : Math.max(bottomInset, 8) }]}>
+      <View testID="question-sheet-handle" accessible accessibilityLabel="问答面板把手" style={styles.handle} />
+      <View testID="question-sheet-header" style={styles.header}>
+        <View style={styles.brand}>
+          <View style={styles.brandMark}>
+            <SymbolView name="lightbulb" size={30} pointSize={15} weight="medium" scale="unspecified" contentLayout="intrinsic" resizeMode="scaleAspectFit" tintColor={palette.lamp}
+              accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" />
           </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="收起问答，继续阅读"
-            onPress={() => {
-              tapFeedback();
-              onClose();
-            }}
-            style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}
-          >
-            <SymbolView name="xmark" size={15} weight="medium" tintColor={palette.ink2} />
-          </Pressable>
+          <Text dynamicTypeRamp={Platform.OS === 'ios' ? 'headline' : undefined} style={styles.brandTitle}>问问书灯</Text>
         </View>
-        <KeyboardAvoidingView
-          style={styles.body}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={0}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="收起问答，继续阅读"
+          onPress={() => {
+            tapFeedback();
+            onClose();
+          }}
+          style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}
         >
-          {children}
-        </KeyboardAvoidingView>
+          <SymbolView name="xmark" size={44} pointSize={15} weight="medium" scale="unspecified" contentLayout="systemButton" tintColor={palette.ink2}
+            accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" />
+        </Pressable>
       </View>
+      <KeyboardAvoidingView
+        style={styles.body}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
+        {children}
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
 function createStyles(palette: Palette) {
   return StyleSheet.create({
-    overlay: { flex: 1, justifyContent: 'flex-end' },
-    backdrop: {
-      position: 'absolute',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(16, 14, 11, 0.30)',
-    },
     sheet: {
+      flex: 1,
       width: '100%',
       backgroundColor: palette.paper,
-      borderTopLeftRadius: 23,
-      borderTopRightRadius: 23,
+      borderTopLeftRadius: 22,
+      borderTopRightRadius: 22,
       overflow: 'hidden',
     },
     handle: {
@@ -92,9 +76,10 @@ function createStyles(palette: Palette) {
       flexDirection: 'row',
       alignItems: 'center',
       minHeight: 44,
-      paddingHorizontal: 23,
+      paddingLeft: 23,
+      paddingRight: 15,
       marginTop: 6,
-      marginBottom: 2,
+      marginBottom: 4,
     },
     brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
     brandMark: {
@@ -105,7 +90,7 @@ function createStyles(palette: Palette) {
       alignItems: 'center',
       justifyContent: 'center',
     },
-    brandTitle: { fontFamily: SERIF_BOLD, fontSize: 16, color: palette.ink },
+    brandTitle: { fontFamily: SERIF_BOLD, fontSize: 16, fontWeight: '600', color: palette.ink },
     closeButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
     body: { flex: 1 },
     pressed: { opacity: 0.7 },

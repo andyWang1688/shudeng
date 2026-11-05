@@ -24,11 +24,13 @@ date: 2026-11-02
 - Agent 使用 **LangChain.js + LangGraph.js**，在设备 Hermes 内运行；不引入 AI 服务器，模型请求仍由用户配置的供应商直连。
 - `packages/core` 只放纯 TypeScript 领域、Agent、RAG、DB schema；禁止 import React Native/Node 专属运行时。
 - UI 与平台能力通过注入的端口访问；`packages/core` → 无平台反向依赖。
-- 阅读器允许平台差异：EPUB 用 WebView + foliate-js，PDF 用 pdf.js 或原生模块；阅读器不是“一套 UI”必须完全一致的强制项。
+- 阅读器业务与定位沿用 TypeScript；EPUB 使用 WebView + foliate-js，PDF 使用原生 PDFKit 平台能力。2026-11-03 用户明确要求 RN 版本在 iOS 上与原生基线具有相同功能、UI、交互和效果，取代原先“阅读器允许平台差异”的验收豁免。平台模块可以承载选字、PDF 和卷页视觉，但不能把旧 App 包装成 RN 页面代替架构重构。
 - 界面只消费自定义 `AgentEvent`；LangChain 类型不出 Agent 模块。
 - 旧数据使用版本化 `Anchor` 迁移，不直接用 CFI/新坐标覆盖旧 Readium Locator/PDF 坐标。
 
 ## 当前证据
+
+本节以下为 2026-11-02 spike 的历史证据，不能替代正式迁移验收。2026-11-03 起的双模拟器基线、当前差异和验收状态统一记录于 `docs/design/2026-11-03/rn-native-parity.md`。类型检查或实现者测试通过，不代表功能、UI 和效果已经与原生一致。
 
 已完成（2026-11-02 更新）：
 

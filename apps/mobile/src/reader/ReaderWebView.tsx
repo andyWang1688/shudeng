@@ -13,28 +13,35 @@ import {
   type ReaderAnnotationSeed,
   type ReaderEvent,
   type ReaderLocator,
+  type ReaderNavigationCommand,
   type SelectionRect,
 } from './readerProtocol';
 import { ReaderSelectionBar } from './ReaderSelectionBar';
+import { NativeEpubSurface } from './NativeEpubSurface';
+import { openReaderEpubArchive, closeReaderEpubArchive } from '../platform/epubArchive';
+import type { EpubArchiveDescriptor } from '@shudeng/core';
 
 export type { ReaderEvent };
 
-type ReaderWebViewProps = {
+export type ReaderOpenOverride = {
+  readonly format: 'epub' | 'pdf';
+  readonly title: string;
+  readonly mimeType: string;
+} & ({ readonly dataBase64: string } | { readonly format: 'epub'; readonly fileUri: string });
+
+export type ReaderWebViewProps = {
   readonly bookId: string;
   readonly initialLocation: string | undefined;
-  readonly openOverride:
-    | undefined
-    | {
-    readonly format: 'epub' | 'pdf';
-    readonly title: string;
-    readonly dataBase64: string;
-      readonly mimeType: string;
-    };
+  readonly openOverride: ReaderOpenOverride | undefined;
   readonly initialAnnotations?: readonly ReaderAnnotationSeed[];
   /** 是否显示 ReaderWebView 内置选字浮层；宿主自己渲染选字栏时传 false。默认 true。 */
   readonly selectionBar?: boolean;
+  /** Reference pages do not create highlights, notes or selection questions. */
+  readonly selectionActionsEnabled?: boolean;
   /** 阅读器主题；深色模式传 dark 让 reader-web 正文/背景切换。 */
   readonly theme?: 'light' | 'dark';
+  readonly fontScale?: number;
+  readonly flow?: 'paginated' | 'scrolled' | 'curl';
   readonly onTap?: () => void;
   readonly onEvent: (event: ReaderEvent) => void;
 };
@@ -42,6 +49,11 @@ type ReaderWebViewProps = {
 export type ReaderWebViewHandle = {
   highlightSelection: (locator: ReaderLocator, quote: string) => void;
   clearSelection: () => void;
+  goTo: (locator: string) => void;
+  navigate: (command: ReaderNavigationCommand) => void;
+  search: (query: string, requestId: number) => void;
+  requestContents: () => void;
+  captureBookmarkContext: (bookmarks: readonly { readonly id: string; readonly locator: ReaderLocator }[], requestId: number) => void;
 };
 
 type SelectionState = {
@@ -56,7 +68,7 @@ type SelectionState = {
  * Expo Web 使用 ReaderWebView.web.tsx 的 iframe 实现；这里只在 iOS/Android 生效。
  */
 export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView(
-  { bookId, initialLocation, openOverride, initialAnnotations, selectionBar = true, theme = 'light', onTap, onEvent },
+  { bookId, initialLocation, openOverride, initialAnnotations, selectionBar = true, selectionActionsEnabled = true, theme = 'light', fontScale = 1, flow = 'paginated', onTap, onEvent },
   ref,
 ) {
   const palette = usePalette();
@@ -64,82 +76,79 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
   const webViewRef = useRef<ElementRef<typeof WebView>>(null);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const openSent = useRef(false);
-  const annotationsHydrated = useRef(false);
+  const [ready, setReady] = useState(false);
+  const [archive, setArchive] = useState<EpubArchiveDescriptor | null>(null);
+  const archiveOwner = useRef<{ archive: EpubArchiveDescriptor; fileUri: string; nativeOwnsClose: boolean } | null>(null);
+  const sentAnnotations = useRef(new Map<string, string>());
+  const initializedBook = useRef<string | null>(null);
+  const nativeCommandId = useRef(0);
+  const [nativeCommands, setNativeCommands] = useState<readonly { readonly id: number; readonly message: object }[]>([]);
+  const nativeSurface = (openOverride?.format ?? (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub')) === 'epub' && NativeEpubSurface !== null;
+  const engineFlow = flow === 'scrolled' ? 'scrolled' : 'paginated';
 
   const format = useMemo(() => (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub'), [bookId]);
   const fixture = readerFixtures[format];
+  const fileUri = openOverride && 'fileUri' in openOverride ? openOverride.fileUri : null;
+  const eventHandler = useRef(onEvent);
+  eventHandler.current = onEvent;
+
+  useEffect(() => {
+    if (!fileUri) return;
+    // React Activity can disconnect effects while retaining the native view.
+    // A document already handed to that view must survive the reconnect.
+    if (archiveOwner.current?.fileUri === fileUri && archiveOwner.current.nativeOwnsClose) return;
+    let active = true;
+    let owned: { archive: EpubArchiveDescriptor; fileUri: string; nativeOwnsClose: boolean } | null = null;
+    setArchive(null);
+    if (!nativeSurface) {
+      eventHandler.current({ type: 'error', message: '当前安装包缺少 EPUB 文件阅读组件，请更新后重试。' });
+      return;
+    }
+    void openReaderEpubArchive(fileUri).then(async opened => {
+      if (!active) { await closeReaderEpubArchive(opened.sessionID); return; }
+      owned = { archive: opened, fileUri, nativeOwnsClose: false };
+      archiveOwner.current = owned;
+      setArchive(opened);
+    }).catch(cause => {
+      if (active) eventHandler.current({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) });
+    });
+    return () => {
+      active = false;
+      // A loaded native view closes in WebKit -> Foliate -> native I/O order.
+      // Sessions that never reached a mounted view still need an owner here.
+      if (owned && !owned.nativeOwnsClose) void closeReaderEpubArchive(owned.archive.sessionID).catch(() => {});
+      if (archiveOwner.current === owned && !owned?.nativeOwnsClose) archiveOwner.current = null;
+    };
+  }, [fileUri, nativeSurface]);
 
   const parityScript = useMemo(() => `
     (function () {
       var hide = document.createElement('style');
       hide.textContent = '#chrome, #footer { display: none !important; } #app { padding: 0 !important; height: 100% !important; } #reader { height: 100vh !important; }';
       (document.head || document.documentElement).appendChild(hide);
-      function sendTap() {
-        try { window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'reader:tap' })); } catch (e) {}
-      }
-      function attach(doc) {
-        if (!doc || doc.__readerTapBridge) return;
-        doc.__readerTapBridge = true;
-        doc.addEventListener('click', function (event) {
-          var selection = doc.getSelection && doc.getSelection();
-          if (selection && selection.type === 'Range' && selection.toString().trim()) return;
-          if (event.target && event.target.closest && event.target.closest('a,button,input,textarea')) return;
-          var win = doc.defaultView;
-          var width = win ? win.innerWidth : doc.documentElement.clientWidth;
-          var x = typeof event.clientX === 'number' ? event.clientX : 0;
-          if (width > 0 && (x < width * 0.3 || x > width * 0.7)) return;
-          sendTap();
-        }, true);
-      }
-      attach(document);
-      function attachFrames() {
-        document.querySelectorAll('iframe').forEach(function (frame) {
-          if (frame.__readerBridge) return;
-          frame.__readerBridge = true;
-          function bind() {
-            try { attach(frame.contentDocument); } catch (e) {}
-          }
-          bind();
-          frame.addEventListener('load', bind);
-        });
-      }
-      var pending = false;
-      function scheduleAttach() {
-        if (pending) return;
-        pending = true;
-        var next = window.requestAnimationFrame || function (cb) { setTimeout(cb, 16); };
-        next(function () { pending = false; attachFrames(); });
-      }
-      attachFrames();
-      if (typeof MutationObserver === 'function') {
-        // 翻页可能新增 iframe：只在新增节点包含 iframe 时重绑，替代 400ms 轮询。
-        new MutationObserver(function (records) {
-          for (var i = 0; i < records.length; i++) {
-            var added = records[i].addedNodes;
-            for (var j = 0; j < added.length; j++) {
-              var node = added[j];
-              if (node.nodeType === 1 && (node.tagName === 'IFRAME' || (node.querySelector && node.querySelector('iframe')))) {
-                scheduleAttach();
-                return;
-              }
-            }
-          }
-        }).observe(document.documentElement, { childList: true, subtree: true });
-      }
     })();
   `, []);
 
   const send = useCallback((message: object) => {
+    if (nativeSurface) {
+      const command = { id: ++nativeCommandId.current, message };
+      setNativeCommands(commands => [...commands, command]);
+      return;
+    }
     const json = JSON.stringify(message);
     webViewRef.current?.injectJavaScript(`window.__readerHost && window.__readerHost(${json}); true;`);
-  }, []);
+  }, [nativeSurface]);
 
   const injectOpen = useCallback(() => {
     if (openSent.current) return;
+    if (fileUri && !archive) return;
     openSent.current = true;
-    const message = JSON.stringify(openOverride
-      ? { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, dataBase64: openOverride.dataBase64, mimeType: openOverride.mimeType, theme, ...(initialLocation ? { initialLocation } : {}) } }
-      : { ...openPayloadForBook(bookId, fixture, initialLocation), payload: { ...openPayloadForBook(bookId, fixture, initialLocation).payload, theme } });
+    const payload = openOverride
+      ? { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, ...('dataBase64' in openOverride ? { dataBase64: openOverride.dataBase64 } : { archive }), mimeType: openOverride.mimeType, theme, fontSize: fontScale * 18.5, flow: engineFlow, ...(initialLocation ? { initialLocation } : {}) } }
+      : { ...openPayloadForBook(bookId, fixture, initialLocation), payload: { ...openPayloadForBook(bookId, fixture, initialLocation).payload, theme, fontSize: fontScale * 18.5, flow: engineFlow } };
+    const opening = { ...payload, payload: { ...payload.payload, selectionActionsEnabled } };
+    if (nativeSurface) { send(opening); return; }
+    const message = JSON.stringify(opening);
     // HTML 的 module 脚本可能晚于 onLoadEnd 执行，注入前轮询等待 __readerHost 就绪。
     webViewRef.current?.injectJavaScript(`
       (function () {
@@ -152,28 +161,20 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
         deliver();
       })(); true;
     `);
-  }, [bookId, fixture, initialLocation, openOverride, theme]);
+  }, [archive, bookId, engineFlow, fileUri, fixture, fontScale, initialLocation, nativeSurface, openOverride, selectionActionsEnabled, send, theme]);
 
   useImperativeHandle(ref, () => ({
-    highlightSelection: (locator: ReaderLocator, quote: string) => {
-      send({
-        type: 'reader:annotation:add',
-        payload: {
-          id: `reader-${Date.now()}`,
-          format,
-          locator,
-          text: quote,
-          color: 'yellow',
-        },
-      });
-      send({ type: 'reader:selection:clear' });
-      setSelection(null);
-    },
+    highlightSelection: (locator: ReaderLocator, quote: string) => { if (selectionActionsEnabled) onEvent({ type: 'annotationAdded', locator, quote }); },
     clearSelection: () => {
       send({ type: 'reader:selection:clear' });
       setSelection(null);
     },
-  }), [format, send]);
+    goTo: (locator: string) => send({ type: 'reader:goTo', payload: { locator } }),
+    navigate: command => send({ type: 'reader:navigate', payload: command }),
+    search: (query: string, requestId: number) => send({ type: 'reader:search', payload: { query, requestId } }),
+    requestContents: () => send({ type: 'reader:contents' }),
+    captureBookmarkContext: (bookmarks, requestId) => send({ type: 'reader:bookmark-context', payload: { bookmarks, requestId } }),
+  }), [onEvent, selectionActionsEnabled, send]);
 
   const handleMessage = useCallback((incoming: IncomingMessage) => {
     if (incoming.type === 'reader:ready') {
@@ -188,40 +189,48 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
           return true;
         })(); true;
       `);
-      if (!annotationsHydrated.current && initialAnnotations?.length) {
-        annotationsHydrated.current = true;
-        for (const annotation of initialAnnotations) {
-          send({ type: 'reader:annotation:add', payload: annotation });
-        }
-      }
+      setReady(true);
     }
     if (incoming.type === 'reader:selection') {
+      if (!selectionActionsEnabled) { setSelection(null); return; }
       setSelection({
         quote: incoming.payload.text,
         locator: incoming.payload.locator,
         rects: incoming.payload.rects,
       });
     }
+    if (incoming.type === 'reader:selectionCleared') setSelection(null);
     const event = mapIncomingToReaderEvent(incoming);
     if (event) onEvent(event);
-  }, [initialAnnotations, onEvent, send]);
+  }, [onEvent, selectionActionsEnabled, send]);
+
+  useEffect(() => {
+    if (!selectionActionsEnabled) setSelection(null);
+    if (ready) send({ type: 'reader:selection:actions', payload: { enabled: selectionActionsEnabled } });
+  }, [ready, selectionActionsEnabled, send]);
+
+  useEffect(() => {
+    if (!ready) return;
+    const next = new Map((initialAnnotations ?? []).map(annotation => [annotation.id, JSON.stringify(annotation)]));
+    for (const id of sentAnnotations.current.keys()) {
+      if (!next.has(id)) send({ type: 'reader:annotation:remove', payload: { id } });
+    }
+    for (const annotation of initialAnnotations ?? []) {
+      if (sentAnnotations.current.get(annotation.id) !== next.get(annotation.id)) send({ type: 'reader:annotation:add', payload: annotation });
+    }
+    sentAnnotations.current = next;
+  }, [initialAnnotations, ready, send]);
+
+  useEffect(() => {
+    if (!ready) return;
+    send({ type: 'reader:theme', payload: { theme } });
+    send({ type: 'reader:fontSize', payload: { fontSize: fontScale * 18.5 } });
+    send({ type: 'reader:flow', payload: { flow: engineFlow } });
+  }, [engineFlow, fontScale, ready, send, theme]);
 
   const highlightSelection = useCallback(() => {
-    if (!selection) return;
-    send({
-      type: 'reader:annotation:add',
-      payload: {
-        id: `reader-${Date.now()}`,
-        format,
-        locator: selection.locator,
-        text: selection.quote,
-        color: 'yellow',
-      },
-    });
-    send({ type: 'reader:selection:clear' });
-    setSelection(null);
-    onEvent({ type: 'annotationAdded', locator: selection.locator, quote: selection.quote });
-  }, [format, onEvent, selection, send]);
+    if (selectionActionsEnabled && selection) onEvent({ type: 'annotationAdded', locator: selection.locator, quote: selection.quote });
+  }, [onEvent, selection, selectionActionsEnabled]);
 
   const cancelSelection = useCallback(() => {
     send({ type: 'reader:selection:clear' });
@@ -229,14 +238,39 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
   }, [send]);
 
   useEffect(() => {
+    if (initializedBook.current === bookId) return;
+    initializedBook.current = bookId;
     setSelection(null);
     openSent.current = false;
-    annotationsHydrated.current = false;
+    setReady(false);
+    sentAnnotations.current.clear();
   }, [bookId]);
 
   return (
     <View style={styles.container}>
-      <WebView
+      {nativeSurface && NativeEpubSurface && (!fileUri || archive) ? <NativeEpubSurface
+        archiveSessionID={archive?.sessionID ?? ''}
+        html={readerWebHtml} command={JSON.stringify(nativeCommands)} curl={flow === 'curl'} dark={theme === 'dark'} style={styles.webView}
+        onEpubEvent={({ nativeEvent }) => {
+          const value: unknown = JSON.parse(nativeEvent.message);
+          if (typeof value !== 'object' || value === null) return;
+          const native = value as { type?: string; payload?: { id?: number } };
+          if (native.type === 'native:loaded') {
+            const owner = archiveOwner.current;
+            if (owner && owner.archive.sessionID === archive?.sessionID) owner.nativeOwnsClose = true;
+            injectOpen();
+            return;
+          }
+          if (native.type === 'native:ack' && typeof native.payload?.id === 'number') {
+            const id = native.payload.id;
+            setNativeCommands(commands => commands.filter(command => command.id > id));
+            return;
+          }
+          if (native.type === 'reader:tap') { onTap?.(); return; }
+          const parsed = parseIncomingMessage(value);
+          if (parsed) handleMessage(parsed);
+        }}
+      /> : !fileUri ? <WebView
         ref={webViewRef}
         style={styles.webView}
         originWhitelist={['*']}
@@ -258,8 +292,8 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
         onError={(event) => {
           onEvent({ type: 'error', message: event.nativeEvent.description });
         }}
-      />
-      {selection && selectionBar ? (
+      /> : null}
+      {selection && selectionBar && selectionActionsEnabled ? (
         <ReaderSelectionBar
           rects={selection.rects}
           onHighlight={highlightSelection}

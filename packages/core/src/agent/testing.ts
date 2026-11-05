@@ -16,6 +16,7 @@ export interface ScriptedToolCall {
 }
 
 export interface ScriptedChunk {
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
   /** 回答正文增量。 */
   text?: string;
   /** provider 原生思考增量（模拟 DeepSeek reasoning_content）。 */
@@ -78,9 +79,7 @@ export class ScriptedChatModel extends BaseChatModel<BaseChatModelCallOptions> {
   }
 
   /** 逐 chunk 产出（模拟 provider 流式 chunk）；真实 provider 在 invoke 路径也会走流式回调。 */
-  private async *turnChunks(
-    options: this['ParsedCallOptions'],
-  ): AsyncGenerator<ChatGenerationChunk> {
+  private async *turnChunks(options: this['ParsedCallOptions']): AsyncGenerator<ChatGenerationChunk> {
     const turn = this.turns[this.index++] ?? { chunks: [] };
     for (const chunk of turn.chunks) {
       await delay(chunk.delayMs ?? 0, options.signal);
@@ -97,6 +96,7 @@ export class ScriptedChatModel extends BaseChatModel<BaseChatModelCallOptions> {
         additional_kwargs: chunk.reasoning ? { reasoning_content: chunk.reasoning } : {},
         tool_call_chunks: toolCallChunks,
       });
+      if (chunk.usage) Object.assign(message, { usage_metadata: chunk.usage });
       yield new ChatGenerationChunk({ text: chunk.text ?? '', message });
     }
   }

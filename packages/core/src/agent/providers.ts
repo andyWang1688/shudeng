@@ -13,12 +13,15 @@
  *   所以在 DeepSeek 适配器里通过自定义 fetch 在请求体上补回（纯函数 injectReasoningContent，单测覆盖）。
  */
 import { ChatAnthropic } from '@langchain/anthropic';
-import { ChatOpenAI } from '@langchain/openai';
+import { ChatOpenAICompletions } from '@langchain/openai';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
-import type { RunnableConfig } from '@langchain/core/runnables';
+import { resolveProviderEndpoint } from './provider-endpoint.js';
+import { createProviderFetch, type ProviderFetch } from './provider-transport.js';
+import { ProviderAsyncCaller } from './provider-retry.js';
+import { observeResponseActivity } from './response-activity.js';
 
 export type AgentProvider = 'openai' | 'anthropic' | 'deepseek';
 
@@ -28,6 +31,8 @@ export interface AgentModelConfig {
   apiKey: string;
   /** 自定义 OpenAI 兼容网关地址（DeepSeek 默认 https://api.deepseek.com）。 */
   baseUrl?: string;
+  /** Native callers inject expo/fetch; it blocks redirects in the URLSession delegate. */
+  fetch?: ProviderFetch;
   temperature?: number;
   maxTokens?: number;
   /** DeepSeek 原生思考开关（默认开启；其它 provider 忽略）。 */
@@ -44,6 +49,8 @@ export interface AgentModelHandle {
   readonly model: string;
   /** @internal */
   readonly langChainModel: unknown;
+  /** @internal Raw response bytes include SSE comments/pings hidden by SDK parsers. */
+  readonly subscribeActivity?: (listener: () => void) => () => void;
 }
 
 /** DeepSeek 思考模式的请求参数（纯函数，便于单测与文档对齐）。 */
@@ -114,6 +121,7 @@ async function echoReasoningFetch(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
   state: DeepSeekReasoningState,
+  fetch: ProviderFetch,
 ): Promise<Response> {
   let nextInit = init;
   if (init?.body && typeof init.body === 'string' && state.lastMessages.length) {
@@ -133,34 +141,15 @@ async function echoReasoningFetch(
       // 请求体不可解析时原样透传，不影响主流程。
     }
   }
-  return globalThis.fetch(input, nextInit);
+  return fetch(input, nextInit);
 }
 
-class DeepSeekChatOpenAI extends ChatOpenAI {
+class DeepSeekChatOpenAI extends ChatOpenAICompletions {
   readonly #state: DeepSeekReasoningState;
 
-  constructor(fields: ConstructorParameters<typeof ChatOpenAI>[0], state: DeepSeekReasoningState) {
+  constructor(fields: ConstructorParameters<typeof ChatOpenAICompletions>[0], state: DeepSeekReasoningState) {
     super(fields);
     this.#state = state;
-  }
-
-  /**
-   * ChatOpenAI.withConfig 会 new 一个基类实例（bindTools 内部走 withConfig），
-   * 这里重写成同类型实例并共享 reasoning 采集状态，确保自定义 fetch 能读到本轮历史。
-   */
-  override withConfig(config: RunnableConfig): this {
-    const clone = new DeepSeekChatOpenAI(
-      (this as unknown as { fields: ConstructorParameters<typeof ChatOpenAI>[0] }).fields,
-      this.#state,
-    );
-    const defaults = (clone as unknown as { defaultOptions?: Record<string, unknown> }).defaultOptions ?? {};
-    const current = (this as unknown as { defaultOptions?: Record<string, unknown> }).defaultOptions ?? {};
-    (clone as unknown as { defaultOptions: Record<string, unknown> }).defaultOptions = {
-      ...current,
-      ...defaults,
-      ...config,
-    };
-    return clone as unknown as this;
   }
 
   override async _generate(
@@ -192,17 +181,34 @@ function requireApiKey(config: AgentModelConfig): string {
 export function createChatModel(config: AgentModelConfig): AgentModelHandle {
   const apiKey = requireApiKey(config);
   const maxTokens = config.maxTokens ?? 8_192;
+  const endpoint = resolveProviderEndpoint(config.provider, config.baseUrl);
+  const nativeFetch = createProviderFetch(endpoint, config.fetch);
+  const activity = new Set<() => void>();
+  const fetch: ProviderFetch = async (input, init) => {
+    const response = await nativeFetch(input, init);
+    if (!activity.size || !response.body) return response;
+    // Freeze the request's observer set: late bytes from an earlier request must
+    // never reset a subsequent run's timer when a model handle is reused.
+    const requestActivity = [...activity];
+    const notifyActivity = () => { for (const listener of requestActivity) if (activity.has(listener)) listener(); };
+    notifyActivity();
+    return observeResponseActivity(response, notifyActivity);
+  };
+  const subscribeActivity = (listener: () => void) => { activity.add(listener); return () => { activity.delete(listener); }; };
   switch (config.provider) {
     case 'openai': {
-      const model = new ChatOpenAI({
+      // The native address contract is Chat Completions for every configured model name.
+      // The generic ChatOpenAI facade otherwise switches some model names to /responses.
+      const model = new ChatOpenAICompletions({
         apiKey,
         model: config.model,
         streaming: true,
         maxTokens,
         ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
-        ...(config.baseUrl ? { configuration: { baseURL: config.baseUrl } } : {}),
+        configuration: { baseURL: endpoint.sdkBaseURL, fetch },
       });
-      return { provider: 'openai', model: config.model, langChainModel: model satisfies BaseChatModel };
+      model.caller = new ProviderAsyncCaller({});
+      return { provider: 'openai', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity };
     }
     case 'anthropic': {
       const model = new ChatAnthropic({
@@ -211,9 +217,10 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
         streaming: true,
         maxTokens,
         ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
-        ...(config.baseUrl ? { clientOptions: { baseURL: config.baseUrl } } : {}),
+        clientOptions: { baseURL: endpoint.sdkBaseURL, fetch },
       });
-      return { provider: 'anthropic', model: config.model, langChainModel: model satisfies BaseChatModel };
+      model.caller = new ProviderAsyncCaller({});
+      return { provider: 'anthropic', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity };
     }
     case 'deepseek': {
       const thinking = config.thinking ?? true;
@@ -227,14 +234,15 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
           maxTokens: config.maxTokens ?? 16_384,
           modelKwargs: deepSeekThinkingParams(thinking, config.reasoningEffort ?? 'high'),
           configuration: {
-            baseURL: config.baseUrl ?? 'https://api.deepseek.com',
+            baseURL: endpoint.sdkBaseURL,
             fetch: (input: RequestInfo | URL, init?: RequestInit) =>
-              echoReasoningFetch(input, init, state),
+              echoReasoningFetch(input, init, state, fetch),
           },
         },
         state,
       );
-      return { provider: 'deepseek', model: config.model, langChainModel: model satisfies BaseChatModel };
+      model.caller = new ProviderAsyncCaller({});
+      return { provider: 'deepseek', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity };
     }
     default: {
       const exhaustive: never = config.provider;

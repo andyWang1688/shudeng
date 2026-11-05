@@ -2,37 +2,418 @@
  * 书内对话摘要：读取 messages/citations，清洗旧 Agent 的 JSON 包裹回答；
  * 旧迁移会话只有 UUID（无 bookId）时用 citations 的 quote/chapter/page/href 反查所属书。
  */
+import { createLocalId, type AgentContextEstimate, type AgentContextUsage, type AgentSentMaterial, type LegacyNativeAgentStep, type LegacyNativeEvidence, type LegacyNativeSnapshot, type VerifiedCitation } from '@shudeng/core';
 import type { SQLiteValue } from '@shudeng/core/db';
 import type { ShudengDataLayer } from '../db';
 import { getDataLayer } from '../db';
 import { citationHref, cleanLegacyAssistantContent, isRecord } from './pure';
 import { parseLegacyJSON } from './legacyMigration';
 import type { ConversationSummary } from './types';
+import { parseQuestionOrigin, type QuestionOriginSnapshot } from './questionOrigin';
 
 export { cleanLegacyAssistantContent } from './pure';
 
 const CONVERSATION_PREFIX = 'book:';
+const activeRuns = new Map<string, () => void>();
+const deletedConversations = new Set<string>();
+export function isBookConversationDeleted(id: string): boolean {
+  return deletedConversations.has(id);
+}
 
+export function cancelConversationRun(conversationId: string): void {
+  activeRuns.get(conversationId)?.();
+}
+
+/** Stop active work before a caller's atomic book deletion. Roll back tombstones on failure. */
+export function markConversationsDeleted(ids: readonly string[]): () => void {
+  const added = ids.filter((id) => !deletedConversations.has(id));
+  for (const id of ids) {
+    deletedConversations.add(id);
+    cancelConversationRun(id);
+  }
+  return () => {
+    for (const id of added) deletedConversations.delete(id);
+  };
+}
+
+export function registerConversationRun(conversationId: string, cancel: () => void): () => void {
+  activeRuns.set(conversationId, cancel);
+  return () => {
+    if (activeRuns.get(conversationId) === cancel) activeRuns.delete(conversationId);
+  };
+}
+
+export interface ConversationTurnDetails {
+  readonly status: 'streaming' | 'done' | 'error' | 'cancelled' | 'interrupted';
+  readonly agentQuestion?: string;
+  readonly selectionQuote?: string;
+  readonly selectionContextQuote?: string;
+  readonly selectionAttached?: boolean;
+  readonly questionOrigin?: QuestionOriginSnapshot | null;
+  readonly error?: string;
+  readonly reasoning?: string;
+  readonly reasoningDurationMs?: number;
+  readonly modelSteps?: number;
+  readonly toolSummary?: string;
+  readonly tools?: ReadonlyArray<{
+    callId: string;
+    name: string;
+    status: 'running' | 'done' | 'error';
+    detail?: string;
+    readonly title?: string;
+    readonly preview?: string;
+    readonly durationMs?: number;
+    readonly finished?: boolean;
+  }>;
+  readonly contextUsage?: AgentContextUsage;
+  readonly contextSummary?: string;
+  readonly warnings?: readonly string[];
+  readonly bookTitle?: string;
+  readonly contextEstimate?: AgentContextEstimate;
+  readonly sentMaterials?: readonly AgentSentMaterial[];
+  readonly legacyNative?: LegacyNativeSnapshot;
+}
+
+export interface StoredConversationTurn {
+  readonly id: string;
+  readonly role: 'user' | 'assistant';
+  readonly text: string;
+  readonly reasoning: string;
+  readonly citations: VerifiedCitation[];
+  readonly details: ConversationTurnDetails;
+  /** Original Native turn order survives a rename changing that turn's timestamp. */
+  readonly isFirstLegacyTurn?: boolean;
+}
+
+export function createBookConversationId(): string {
+  return createLocalId('conversation');
+}
+
+function validModelSteps(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+async function firstBookTitle(layer: ShudengDataLayer, conversationId: string): Promise<string | undefined> {
+  const [row] = await layer.driver.all<{ book_title: SQLiteValue }>(
+    "SELECT json_extract(d.details_json,'$.bookTitle') AS book_title FROM conversation_turn_details d JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=? AND m.role='assistant' AND CASE WHEN json_valid(d.details_json) THEN json_type(d.details_json,'$.bookTitle') END='text' ORDER BY m.created_at,m.id LIMIT 1",
+    [conversationId],
+  );
+  return typeof row?.book_title === 'string' ? row.book_title : undefined;
+}
+
+/** A question and its answer/citations are committed together, including interrupted runs. */
 export async function appendBookChatTurn(input: {
   readonly bookId: string;
+  readonly conversationId?: string;
+  readonly assistantId?: string;
   readonly question: string;
   readonly answer: string;
-  readonly citations?: ReadonlyArray<{ readonly id: string; readonly quote: string; readonly locator: string; readonly chapter?: string; readonly page?: number }>;
+  readonly details?: ConversationTurnDetails;
+  readonly citations?: ReadonlyArray<{
+    readonly id: string;
+    readonly quote: string;
+    readonly locator: string;
+    readonly chapter?: string;
+    readonly page?: number;
+  }>;
 }): Promise<void> {
   const layer = await getDataLayer();
-  const conversationId = `${CONVERSATION_PREFIX}${input.bookId}`;
-  await layer.store.appendMessage({ conversationId, role: 'user', content: input.question });
-  const assistant = await layer.store.appendMessage({ conversationId, role: 'assistant', content: input.answer });
-  for (const citation of input.citations ?? []) {
-    await layer.store.addCitation({
-      conversationId,
-      messageId: assistant.id,
-      evidenceId: citation.id,
-      quote: citation.quote,
-      locatorJson: citation.locator,
-      chapter: citation.chapter ?? null,
-      page: citation.page ?? null,
-    });
+  const conversationId = input.conversationId ?? createBookConversationId();
+  if (deletedConversations.has(conversationId)) throw new Error('这段对话已删除');
+  const assistantId = input.assistantId ?? createLocalId('message');
+  const now = Date.now();
+  // Freeze the first real book-name snapshot in existing turn details. Source
+  // removal and later partial/final writes must not replace that name.
+  const priorTitle = await firstBookTitle(layer, conversationId);
+  const legacyTitle = priorTitle === undefined ? legacyConversationMetadata().get(conversationId)?.bookTitle : undefined;
+  const bookTitle = priorTitle ?? legacyTitle ?? input.details?.bookTitle ?? (await layer.store.getBook(input.bookId))?.title;
+  const details = { ...(input.details ?? { status: 'done' as const }) };
+  if (!validModelSteps(details.modelSteps)) delete details.modelSteps;
+  await layer.driver.transaction(async (tx) => {
+    if (deletedConversations.has(conversationId)) throw new Error('这段对话已删除');
+    await tx.run(
+      'INSERT INTO conversations (id,book_id,title,created_at,updated_at) VALUES (?,?,NULL,?,?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at',
+      [conversationId, input.bookId, now, now],
+    );
+    await tx.run(
+      'INSERT INTO messages (id,conversation_id,role,content,created_at) VALUES (?,?,?, ?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content',
+      [assistantId + ':user', conversationId, 'user', input.question, now],
+    );
+    await tx.run(
+      'INSERT INTO messages (id,conversation_id,role,content,reasoning_content,is_error,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content,reasoning_content=excluded.reasoning_content,is_error=excluded.is_error',
+      [
+        assistantId,
+        conversationId,
+        'assistant',
+        input.answer,
+        input.details?.reasoning ?? null,
+        input.details?.status === 'error' ? 1 : 0,
+        now + 1,
+      ],
+    );
+    await tx.run(
+      'INSERT INTO conversation_turn_details (message_id,details_json) VALUES (?,?) ON CONFLICT(message_id) DO UPDATE SET details_json=excluded.details_json',
+      [assistantId, JSON.stringify({ ...details, ...(bookTitle !== undefined ? { bookTitle } : {}) })],
+    );
+    await tx.run('DELETE FROM citations WHERE message_id = ?', [assistantId]);
+    for (const citation of input.citations ?? []) {
+      await tx.run(
+        'INSERT INTO citations (id,conversation_id,message_id,evidence_id,quote,locator_json,chapter,page,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        [
+          createLocalId('citation'),
+          conversationId,
+          assistantId,
+          citation.id,
+          citation.quote,
+          citation.locator,
+          citation.chapter ?? null,
+          citation.page ?? null,
+          now,
+        ],
+      );
+    }
+  });
+}
+
+function parseContextEstimate(value: unknown): AgentContextEstimate | undefined {
+  if (!isRecord(value)) return;
+  const count = (item: unknown): item is number => typeof item === 'number' && Number.isSafeInteger(item) && item >= 0;
+  const keys = ['estimatedTokens', 'characterCount', 'systemTokens', 'historyTokens', 'toolTokens', 'summaryTokens', 'summarizedMessages'] as const;
+  if (!keys.every(key => count(value[key])) || !['none', 'compacted', 'pruned', 'trimmed'].includes(value.action as string)) return;
+  for (const key of ['contextWindowTokens', 'thresholdTokens']) {
+    if (value[key] !== undefined && (!count(value[key]) || value[key] === 0)) return;
+  }
+  for (const key of ['trimmedMessages', 'truncatedToolResults']) {
+    if (value[key] !== undefined && !count(value[key])) return;
+  }
+  return {
+    estimatedTokens: value.estimatedTokens as number, characterCount: value.characterCount as number,
+    systemTokens: value.systemTokens as number, historyTokens: value.historyTokens as number,
+    toolTokens: value.toolTokens as number, summaryTokens: value.summaryTokens as number,
+    summarizedMessages: value.summarizedMessages as number, action: value.action as AgentContextEstimate['action'],
+    ...(typeof value.contextWindowTokens === 'number' ? { contextWindowTokens: value.contextWindowTokens } : {}),
+    ...(typeof value.thresholdTokens === 'number' ? { thresholdTokens: value.thresholdTokens } : {}),
+    ...(typeof value.trimmedMessages === 'number' ? { trimmedMessages: value.trimmedMessages } : {}),
+    ...(typeof value.truncatedToolResults === 'number' ? { truncatedToolResults: value.truncatedToolResults } : {}),
+  };
+}
+
+function parseSentMaterials(value: unknown): readonly AgentSentMaterial[] | undefined {
+  if (!Array.isArray(value)) return;
+  return value.flatMap(item => {
+    if (!isRecord(item) || typeof item.id !== 'string' || !item.id.trim() || typeof item.name !== 'string' || !item.name.trim() || typeof item.content !== 'string') return [];
+    if (item.kind !== 'selection' && item.kind !== 'book-tool' && item.kind !== 'external-tool') return [];
+    return [{ id: item.id, name: item.name, content: item.content, kind: item.kind }];
+  });
+}
+
+function validDurationMs(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+}
+
+function nativeTextFields<K extends string>(value: Record<string, unknown>, keys: readonly K[]): Partial<Record<K, string>> {
+  return Object.fromEntries(keys.flatMap(key => typeof value[key] === 'string' ? [[key, value[key]]] : [])) as Partial<Record<K, string>>;
+}
+
+function parseNativeEvidence(value: unknown): LegacyNativeEvidence | undefined {
+  if (!isRecord(value) || typeof value.locatorJSON !== 'string') return;
+  return { locatorJSON: value.locatorJSON, ...nativeTextFields(value, ['id', 'quote', 'context', 'chapter']) };
+}
+
+/** Validate the versioned display snapshot without converting it into provider usage or sent materials. */
+function parseLegacyNative(value: unknown): LegacyNativeSnapshot | undefined {
+  if (!isRecord(value) || value.version !== 1 ||
+      typeof value.questionId !== 'string' || !value.questionId.trim() ||
+      typeof value.conversationId !== 'string' || !value.conversationId.trim() ||
+      typeof value.bookId !== 'string' || !value.bookId.trim() || typeof value.sourceState !== 'string') return;
+  const agent = isRecord(value.agent) ? value.agent : undefined;
+  const seconds = (item: unknown): item is number => typeof item === 'number' &&
+    Number.isFinite(item) && item >= 0 && Number.isSafeInteger(Math.round(item * 1000));
+  const steps: LegacyNativeAgentStep[] | undefined = Array.isArray(agent?.steps) ? agent.steps.flatMap(item => {
+    if (!isRecord(item) || typeof item.id !== 'string' || typeof item.tool !== 'string' ||
+        typeof item.title !== 'string' || typeof item.detail !== 'string' || typeof item.preview !== 'string' ||
+        typeof item.isError !== 'boolean' || typeof item.finished !== 'boolean' || !seconds(item.duration)) return [];
+    return [{ id: item.id, tool: item.tool, title: item.title, detail: item.detail, preview: item.preview,
+      isError: item.isError, finished: item.finished, duration: item.duration }];
+  }) : undefined;
+  const context = isRecord(agent?.context) ? Object.fromEntries(Object.entries(agent.context).filter(([key, item]) =>
+    ['estimatedTokens', 'characterCount', 'limitTokens', 'contextWindow', 'thresholdTokens', 'percent', 'thresholdPercent',
+      'systemTokens', 'historyTokens', 'toolTokens', 'summaryTokens', 'summarizedMessages', 'trimmedMessages', 'truncatedToolResults'].includes(key)
+      ? typeof item === 'number' && Number.isFinite(item) : key === 'action' && typeof item === 'string')) as Record<string, number | string> : undefined;
+  const selection = parseNativeEvidence(value.selection);
+  const evidenceLists = Object.fromEntries((['selectionParts', 'evidence', 'neighbors', 'citations'] as const).flatMap(key =>
+    Array.isArray(value[key]) ? [[key, value[key].flatMap(item => { const parsed = parseNativeEvidence(item); return parsed ? [parsed] : []; })]] : []));
+  const sourceLists = Object.fromEntries((['retrievalQueries', 'searchedChapters', 'omittedChapters'] as const).flatMap(key =>
+    Array.isArray(value[key]) ? [[key, value[key].filter((item): item is string => typeof item === 'string')]] : []));
+  const trace = isRecord(value.retrievalTrace) ? value.retrievalTrace : undefined;
+  const retrievalTrace = trace ? Object.fromEntries((['keyword', 'semantic', 'anchors', 'expanded'] as const).flatMap(key => {
+    const items = trace[key];
+    return Array.isArray(items) && items.every(validModelSteps) ? [[key, [...items]]] : [];
+  })) : undefined;
+  const history = Array.isArray(value.history) ? value.history.flatMap(item => {
+    if (!isRecord(item) || typeof item.id !== 'string' || typeof item.question !== 'string' || typeof item.answer !== 'string') return [];
+    return [{ id: item.id, question: item.question, answer: item.answer, ...nativeTextFields(item, ['state']) }];
+  }) : undefined;
+  return {
+    version: 1, questionId: value.questionId, conversationId: value.conversationId, bookId: value.bookId, sourceState: value.sourceState,
+    ...nativeTextFields(value, ['notice', 'failure', 'retrievalNotice']),
+    ...nativeTextFields(value, ['conversationTitle', 'bookIdentity', 'originJSON', 'serviceName', 'model', 'format']),
+    ...(typeof value.freeQuestion === 'boolean' ? { freeQuestion: value.freeQuestion } : {}),
+    ...(typeof value.updated === 'number' && Number.isFinite(value.updated) ? { updated: value.updated } : {}),
+    ...sourceLists, ...(retrievalTrace ? { retrievalTrace } : {}), ...(history ? { history } : {}),
+    ...(validModelSteps(value.turnIndex) ? { turnIndex: value.turnIndex } : {}),
+    ...(typeof value.reasoningExpanded === 'boolean' ? { reasoningExpanded: value.reasoningExpanded } : {}),
+    ...(selection ? { selection } : {}), ...evidenceLists,
+    ...(agent ? { agent: {
+      ...nativeTextFields(agent, ['summary', 'reasoning']), ...(steps ? { steps } : {}),
+      ...(typeof agent.reasoningDuration === 'number' && Number.isFinite(agent.reasoningDuration) ? { reasoningDuration: agent.reasoningDuration } : {}),
+      ...(typeof agent.reasoningExpanded === 'boolean' ? { reasoningExpanded: agent.reasoningExpanded } : {}),
+      ...(context ? { context } : {}), ...(validModelSteps(agent.stepsUsed) ? { stepsUsed: agent.stepsUsed } : {}),
+      ...(Array.isArray(agent.warnings) ? { warnings: agent.warnings.filter((item): item is string => typeof item === 'string') } : {}),
+    } } : {}),
+  };
+}
+
+function parseTurnDetails(raw: string | undefined): ConversationTurnDetails {
+  if (!raw) return { status: 'done' };
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value)) return { status: 'done' };
+    const status =
+      value.status === 'error' || value.status === 'cancelled' || value.status === 'interrupted'
+        ? value.status
+        : value.status === 'streaming'
+          ? 'interrupted'
+          : 'done';
+    // Streaming persisted before a crash is an interrupted run, never a spinning completed answer.
+    const legacyNative = parseLegacyNative(value.legacyNative);
+    const tools: NonNullable<ConversationTurnDetails['tools']> = Array.isArray(value.tools)
+      ? value.tools.flatMap((tool) => {
+          if (!isRecord(tool) || typeof tool.callId !== 'string' || typeof tool.name !== 'string') return [];
+          const state = tool.status === 'error' ? 'error' : tool.status === 'running' ? 'running' : 'done';
+          return [
+            {
+              callId: tool.callId,
+              name: tool.name,
+              status: state,
+              ...(typeof tool.detail === 'string' ? { detail: tool.detail } : {}),
+              ...(typeof tool.title === 'string' ? { title: tool.title } : {}),
+              ...(typeof tool.preview === 'string' ? { preview: tool.preview } : {}),
+              ...(validDurationMs(tool.durationMs) ? { durationMs: tool.durationMs } : {}),
+              ...(typeof tool.finished === 'boolean' ? { finished: tool.finished } : {}),
+            },
+          ];
+        })
+      : (legacyNative?.agent?.steps ?? []).map(step => ({
+          callId: step.id, name: step.tool, title: step.title, detail: step.detail, preview: step.preview,
+          status: step.isError ? 'error' as const : step.finished ? 'done' as const : 'running' as const,
+          durationMs: Math.round(step.duration * 1000), finished: step.finished,
+        }));
+    const usage =
+      isRecord(value.contextUsage) &&
+      typeof value.contextUsage.inputTokens === 'number' &&
+      typeof value.contextUsage.outputTokens === 'number'
+        ? {
+            inputTokens: value.contextUsage.inputTokens,
+            outputTokens: value.contextUsage.outputTokens,
+            ...(typeof value.contextUsage.contextWindowTokens === 'number'
+              ? { contextWindowTokens: value.contextUsage.contextWindowTokens }
+              : {}),
+          }
+        : undefined;
+    const estimate = parseContextEstimate(value.contextEstimate);
+    const materials = parseSentMaterials(value.sentMaterials);
+    return {
+      status,
+      tools,
+      ...(typeof value.toolSummary === 'string' ? { toolSummary: value.toolSummary }
+        : !Array.isArray(value.tools) && legacyNative?.agent?.summary !== undefined ? { toolSummary: legacyNative.agent.summary } : {}),
+      ...(legacyNative ? { legacyNative } : {}),
+      ...(typeof value.reasoning === 'string' ? { reasoning: value.reasoning } : {}),
+      ...(typeof value.bookTitle === 'string' ? { bookTitle: value.bookTitle } : {}),
+      ...(estimate ? { contextEstimate: estimate } : {}),
+      ...(materials ? { sentMaterials: materials } : {}),
+      ...(Array.isArray(value.warnings)
+        ? { warnings: value.warnings.filter((warning): warning is string => typeof warning === 'string') }
+        : {}),
+      ...(typeof value.contextSummary === 'string' ? { contextSummary: value.contextSummary } : {}),
+      ...(typeof value.agentQuestion === 'string' ? { agentQuestion: value.agentQuestion } : {}),
+      ...(typeof value.selectionQuote === 'string' ? { selectionQuote: value.selectionQuote } : {}),
+      ...(typeof value.selectionContextQuote === 'string' ? { selectionContextQuote: value.selectionContextQuote } : {}),
+      ...(typeof value.selectionAttached === 'boolean' ? { selectionAttached: value.selectionAttached } : {}),
+      ...(value.questionOrigin !== undefined ? { questionOrigin: parseQuestionOrigin(value.questionOrigin) ?? null } : {}),
+      ...(typeof value.error === 'string' ? { error: value.error } : {}),
+      ...(validDurationMs(value.reasoningDurationMs)
+        ? { reasoningDurationMs: value.reasoningDurationMs }
+        : {}),
+      ...(validModelSteps(value.modelSteps) ? { modelSteps: value.modelSteps } : {}),
+      ...(usage ? { contextUsage: usage } : {}),
+    };
+  } catch {
+    return { status: 'done' };
+  }
+}
+
+export async function loadBookConversation(conversationId: string): Promise<StoredConversationTurn[]> {
+  const layer = await getDataLayer();
+  const [messages, citations, details] = await Promise.all([
+    layer.store.listMessages(conversationId),
+    layer.store.listCitations(conversationId),
+    layer.driver.all<{ message_id: string; details_json: string }>(
+      'SELECT d.message_id,d.details_json FROM conversation_turn_details d JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=?',
+      [conversationId],
+    ),
+  ]);
+  const detailById = new Map(details.map((row) => [row.message_id, row.details_json]));
+  const firstLegacyUser = legacyConversationMetadata().get(conversationId)?.firstQuestionId;
+  const firstLegacyAssistant = firstLegacyUser ? firstLegacyUser.slice(0, -4) + 'assistant' : undefined;
+  return messages.flatMap((message) => {
+    if (message.role !== 'user' && message.role !== 'assistant') return [];
+    const turnDetails = parseTurnDetails(detailById.get(message.id));
+    return [
+      {
+        id: message.id,
+        role: message.role,
+        text: message.role === 'assistant' ? cleanLegacyAssistantContent(message.content) : message.content,
+        reasoning: message.reasoningContent ?? turnDetails.reasoning ?? '',
+        details: turnDetails,
+        ...(message.id === firstLegacyAssistant ? { isFirstLegacyTurn: true } : {}),
+        citations: citations
+          .filter((citation) => citation.messageId === message.id)
+          .map((citation) => ({
+            id: citation.evidenceId,
+            quote: citation.quote,
+            locator: citation.locatorJson,
+            ...(citation.chapter ? { chapter: citation.chapter } : {}),
+            ...(citation.page !== null ? { page: citation.page } : {}),
+          })),
+      },
+    ];
+  });
+}
+
+export async function renameBookConversation(conversationId: string, title: string): Promise<void> {
+  if (activeRuns.has(conversationId)) throw new Error('正在生成，请先取消生成后再改名');
+  const trimmed = title.trim();
+  if (!trimmed) throw new Error('对话名称不能为空');
+  const layer = await getDataLayer();
+  const existing = (await loadConversationSummaries()).find((item) => item.conversationId === conversationId);
+  if (!existing) throw new Error('对话不存在或已删除');
+  await layer.driver.run(
+    'INSERT INTO conversations (id,book_id,title,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,updated_at=excluded.updated_at',
+    [conversationId, existing.bookId, trimmed, existing.updatedAt, Date.now()],
+  );
+}
+
+export async function deleteBookConversation(conversationId: string): Promise<void> {
+  const layer = await getDataLayer();
+  deletedConversations.add(conversationId);
+  activeRuns.get(conversationId)?.();
+  try {
+    await layer.store.deleteConversation(conversationId);
+  } catch (error) {
+    deletedConversations.delete(conversationId);
+    throw error;
   }
 }
 
@@ -42,7 +423,34 @@ export async function appendBookChatTurn(input: {
  */
 let legacyQuestionBookCache: Map<string, string> | null = null;
 
-/** 旧 reading-questions.json 自带 bookID；用于 citations 缺失的旧对话归书。 */
+type LegacyConversationMetadata = {
+  bookTitle?: string; title?: string; firstIndex: number; latestIndex: number;
+  firstQuestionId: string; latestTurnId: string; draftMessageIds: Set<string>;
+};
+function legacyConversationMetadata(): Map<string, LegacyConversationMetadata> {
+  const result = new Map<string, LegacyConversationMetadata>();
+  const records = parseLegacyJSON('reading-questions.json');
+  if (!Array.isArray(records)) return result;
+  for (const record of records) {
+    if (!isRecord(record) || typeof record.id !== 'string') continue;
+    const id = typeof record.conversationID === 'string' ? record.conversationID : record.id;
+    const index = typeof record.turnIndex === 'number' ? record.turnIndex : 0;
+    const previous = result.get(id);
+    const metadata = previous ?? { firstIndex: index, latestIndex: index, firstQuestionId: 'legacy-q:' + record.id + ':user', latestTurnId: record.id, draftMessageIds: new Set<string>() };
+    if (!previous || index < metadata.firstIndex) {
+      metadata.firstIndex = index;
+      metadata.firstQuestionId = 'legacy-q:' + record.id + ':user';
+      if (typeof record.bookTitle === 'string') metadata.bookTitle = record.bookTitle;
+      if (typeof record.conversationTitle === 'string') metadata.title = record.conversationTitle;
+    }
+    if (index > metadata.latestIndex) { metadata.latestIndex = index; metadata.latestTurnId = record.id; }
+    if (record.state === 'draft') metadata.draftMessageIds.add('legacy-q:' + record.id + ':user');
+    result.set(id, metadata);
+  }
+  return result;
+}
+
+/** 旧 reading-questions.json 的直接 bookID 优先于引用位置的推断。 */
 function legacyQuestionBookIds(): Map<string, string> {
   if (legacyQuestionBookCache) return legacyQuestionBookCache;
   const map = new Map<string, string>();
@@ -53,6 +461,7 @@ function legacyQuestionBookIds(): Map<string, string> {
       const id = typeof item.id === 'string' ? item.id : null;
       const bookID = typeof item.bookID === 'string' ? item.bookID : null;
       if (id && bookID) map.set(id, bookID);
+      if (typeof item.conversationID === 'string' && bookID) map.set(item.conversationID, bookID);
       const followUps = Array.isArray(item.followUps) ? item.followUps : [];
       for (const follow of followUps) {
         if (isRecord(follow) && typeof follow.id === 'string' && bookID) map.set(follow.id, bookID);
@@ -63,19 +472,34 @@ function legacyQuestionBookIds(): Map<string, string> {
   return map;
 }
 
-async function inferLegacyConversationBookId(layer: ShudengDataLayer, conversationId: string): Promise<string | null> {
+async function inferLegacyConversationBookId(
+  layer: ShudengDataLayer,
+  conversationId: string,
+): Promise<string | null> {
+  const knownBookId = legacyQuestionBookIds().get(conversationId);
+  if (knownBookId) return knownBookId;
   const citations = await layer.driver.all<Record<string, SQLiteValue>>(
     'SELECT quote, locator_json, chapter, page FROM citations WHERE conversation_id = ? LIMIT 12',
     [conversationId],
   );
-  if (citations.length === 0) return legacyQuestionBookIds().get(conversationId) ?? null;
-  const scores = new Map<string, number>();
-  const addScore = (bookId: string, score: number): void => {
-    scores.set(bookId, (scores.get(bookId) ?? 0) + score);
+  let matchingBooks: Set<string> | undefined;
+  let hasIdentityEvidence = false;
+  // Page numbers, chapter names and even quoted text can occur in several
+  // books. Each matching clue narrows the same candidate set; conflicting or
+  // still-ambiguous clues must never silently choose the first SQLite row.
+  const narrow = (bookIds: readonly string[]): void => {
+    const matches = new Set(bookIds);
+    if (matches.size === 0) return;
+    matchingBooks = matchingBooks === undefined ? matches
+      : new Set([...matchingBooks].filter(id => matches.has(id)));
   };
   for (const citation of citations) {
-    const quote = typeof citation.quote === 'string' && citation.quote.trim().length > 0 ? citation.quote.trim() : null;
-    const chapter = typeof citation.chapter === 'string' && citation.chapter.trim().length > 0 ? citation.chapter.trim() : null;
+    const quote =
+      typeof citation.quote === 'string' && citation.quote.trim().length > 0 ? citation.quote.trim() : null;
+    const chapter =
+      typeof citation.chapter === 'string' && citation.chapter.trim().length > 0
+        ? citation.chapter.trim()
+        : null;
     const page = typeof citation.page === 'number' ? citation.page : null;
     let kind: string | null = null;
     if (typeof citation.locator_json === 'string') {
@@ -86,54 +510,70 @@ async function inferLegacyConversationBookId(layer: ShudengDataLayer, conversati
         // 旧 locator 不是 JSON 时忽略。
       }
     }
-    const candidates = await layer.driver.all<{ book_id: string; format: string }>(
-      `SELECT DISTINCT a.book_id AS book_id, b.format AS format
+    const href = citationHref(typeof citation.locator_json === 'string' ? citation.locator_json : null);
+    const candidates = (await layer.driver.all<{ book_id: string; format: string; quote: string; chapter: string | null; page: number | null; locator_json: string }>(
+      `SELECT DISTINCT a.book_id AS book_id, b.format AS format, a.quote, a.chapter, a.page, a.locator_json
        FROM anchors a JOIN books b ON b.id = a.book_id
        WHERE (? IS NOT NULL AND a.quote = ?)
           OR (? IS NOT NULL AND a.chapter = ?)
-          OR (? IS NOT NULL AND a.page = ?)`,
-      [quote, quote, chapter, chapter, page, page],
-    );
-    for (const candidate of candidates) {
-      if (kind === 'pdf' && candidate.format !== 'pdf') continue;
-      if (kind !== null && kind !== 'pdf' && candidate.format !== 'epub') continue;
-      addScore(candidate.book_id, 3);
+          OR (? IS NOT NULL AND a.page = ?)
+          OR (? IS NOT NULL AND a.locator_json LIKE ?)`,
+      [quote, quote, chapter, chapter, page, page, href, href ? `%${href}%` : null],
+    )).filter(candidate => kind === null || candidate.format === (kind === 'pdf' ? 'pdf' : 'epub'));
+    if (quote) {
+      const matches = candidates.filter(candidate => candidate.quote === quote).map(candidate => candidate.book_id);
+      if (matches.length > 0) hasIdentityEvidence = true;
+      narrow(matches);
     }
-    const href = citationHref(typeof citation.locator_json === 'string' ? citation.locator_json : null);
+    if (chapter) narrow(candidates.filter(candidate => candidate.chapter === chapter).map(candidate => candidate.book_id));
+    if (page !== null) narrow(candidates.filter(candidate => candidate.page === page).map(candidate => candidate.book_id));
     if (href) {
-      const byHref = await layer.driver.all<{ book_id: string; format: string }>(
-        `SELECT DISTINCT a.book_id AS book_id, b.format AS format
-         FROM anchors a JOIN books b ON b.id = a.book_id
-         WHERE a.locator_json LIKE ?`,
-        [`%${href}%`],
-      );
-      for (const candidate of byHref) {
-        if (kind === 'pdf' && candidate.format !== 'pdf') continue;
-        if (kind !== null && kind !== 'pdf' && candidate.format !== 'epub') continue;
-        addScore(candidate.book_id, 2);
-      }
+      const matches = candidates.filter(candidate => citationHref(candidate.locator_json) === href).map(candidate => candidate.book_id);
+      if (matches.length > 0) hasIdentityEvidence = true;
+      narrow(matches);
     }
   }
-  const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
-  return ranked[0]?.[0] ?? null;
+  return hasIdentityEvidence && matchingBooks?.size === 1 ? [...matchingBooks][0]! : null;
 }
 
-export async function loadConversationSummaries(): Promise<readonly ConversationSummary[]> {
+export async function loadConversationSummaries(): Promise<
+  readonly (ConversationSummary & { title?: string; searchText?: string })[]
+> {
   const layer = await getDataLayer();
   const rows = await layer.driver.all<Record<string, SQLiteValue>>(
-    `SELECT conversation_id, COUNT(*) AS turns, MAX(created_at) AS updated_at
-     FROM messages WHERE role IN ('user','assistant')
-     GROUP BY conversation_id ORDER BY updated_at DESC`,
+    `SELECT m.conversation_id, COUNT(*) AS turns, MAX(MAX(COALESCE(c.updated_at,0),m.created_at)) AS updated_at
+     FROM messages m LEFT JOIN conversations c ON c.id=m.conversation_id
+     WHERE m.role IN ('user','assistant') GROUP BY m.conversation_id ORDER BY updated_at DESC`,
   );
-  const summaries: ConversationSummary[] = [];
+  const metadata = await layer.driver.all<{ id: string; book_id: string; title: string | null }>(
+    'SELECT id,book_id,title FROM conversations',
+  );
+  const byId = new Map(metadata.map((row) => [row.id, row]));
+  const legacy = legacyConversationMetadata();
+  const summaries: Array<ConversationSummary & { title?: string; searchText?: string }> = [];
   for (const row of rows) {
     if (typeof row.conversation_id !== 'string') continue;
     const conversationId = row.conversation_id;
     const messages = await layer.store.listMessages(conversationId);
-    const question = [...messages].reverse().find((message) => message.role === 'user')?.content ?? '';
-    const rawAnswer = [...messages].reverse().find((message) => message.role === 'assistant')?.content ?? '';
+    const original = legacy.get(conversationId);
+    const firstQuestion = original && messages.find(message => message.id === original.firstQuestionId);
+    const question = firstQuestion?.content ?? messages.find((message) => message.role === 'user')?.content ?? '';
+    const assistants = messages.filter(message => message.role === 'assistant');
+    // Native turnIndex determines the latest answer. Renaming an earlier Swift
+    // turn updates its timestamp; that must not turn its old answer into latest.
+    const modernAnswer = [...assistants].reverse().find(message => !message.id.startsWith('legacy-q:'));
+    const hasLatestLegacyTurn = original && messages.some(message => message.id === 'legacy-q:' + original.latestTurnId + ':user' || message.id === 'legacy-q:' + original.latestTurnId + ':assistant');
+    const rawAnswer = modernAnswer?.content ?? (hasLatestLegacyTurn
+      ? assistants.find(message => message.id === 'legacy-q:' + original!.latestTurnId + ':assistant')?.content ?? ''
+      : assistants[assistants.length - 1]?.content ?? '');
     const answer = cleanLegacyAssistantContent(rawAnswer);
-    let bookId = conversationId.startsWith(CONVERSATION_PREFIX) ? conversationId.slice(CONVERSATION_PREFIX.length) : '';
+    const bookTitle = (await firstBookTitle(layer, conversationId)) ?? legacy.get(conversationId)?.bookTitle;
+    const title = byId.get(conversationId)?.title ?? legacy.get(conversationId)?.title;
+    let bookId =
+      byId.get(conversationId)?.book_id ??
+      (conversationId.startsWith(CONVERSATION_PREFIX)
+        ? conversationId.slice(CONVERSATION_PREFIX.length)
+        : '');
     if (!bookId) {
       bookId = (await inferLegacyConversationBookId(layer, conversationId)) ?? '';
     }
@@ -141,8 +581,13 @@ export async function loadConversationSummaries(): Promise<readonly Conversation
       conversationId,
       bookId,
       question,
+      ...(title !== undefined && title !== null ? { title } : {}),
+      ...(bookTitle !== undefined ? { bookTitle } : {}),
       answer,
+      searchText: messages.map((message) => cleanLegacyAssistantContent(message.content)).join(' '),
       turns: typeof row.turns === 'number' ? row.turns : messages.length,
+      submittedCount: messages.filter(message => message.role === 'user' && !legacy.get(conversationId)?.draftMessageIds.has(message.id)).length,
+      assistantIds: messages.filter(message => message.role === 'assistant').map(message => message.id),
       updatedAt: typeof row.updated_at === 'number' ? row.updated_at : 0,
     });
   }

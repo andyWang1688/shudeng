@@ -12,6 +12,7 @@
 import { ANCHOR_VERSION, type AnchorKind, type AnchorV3 } from '../domain/anchor.js';
 import type { NewAnchorRow, NewAnnotationRow, NewBookRow, NewCitationRow, NewMessageRow } from '../db/schema.js';
 import { appleDateToUnixMs, convertLegacyLocator } from './legacy-locator.js';
+import { projectLegacyNativeTurn } from './legacy-native-agent.js';
 import type {
   LegacyBookmark,
   LegacyBook,
@@ -646,7 +647,10 @@ function mapQuestion(
     });
   }
   let assistantMessageId: string | null = null;
-  if (answer.length > 0) {
+  const projectedNativeTurn = projectLegacyNativeTurn(record);
+  // A submitted Native run may have stopped before the first answer token. Keep
+  // an assistant row on a fresh import so its historical state remains visible.
+  if (answer.length > 0 || projectedNativeTurn !== undefined) {
     const agent = asRecord(record.agent);
     const reasoning = typeof agent?.reasoning === 'string' && agent.reasoning.length > 0 ? agent.reasoning : null;
     ctx.tables.messages.push({

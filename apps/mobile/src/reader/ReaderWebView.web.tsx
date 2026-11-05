@@ -1,157 +1,81 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { usePalette, type Palette } from '../ui/theme';
 import { readerFixtures } from './readerFixtures';
 import { readerWebHtml } from './readerWebHtml';
-import {
-  mapIncomingToReaderEvent,
-  openPayloadForBook,
-  parseIncomingMessage,
-  type IncomingMessage,
-  type ReaderAnnotationSeed,
-  type ReaderEvent,
-  type SelectionRect,
-} from './readerProtocol';
-import { ReaderSelectionBar } from './ReaderSelectionBar';
+import { mapIncomingToReaderEvent, openPayloadForBook, parseIncomingMessage, type ReaderAnnotationSeed } from './readerProtocol';
+import type { ReaderWebViewHandle, ReaderWebViewProps } from './ReaderWebView';
+export type { ReaderEvent } from './readerProtocol';
 
-export type { ReaderEvent };
-
-type ReaderWebViewProps = {
-  readonly bookId: string;
-  readonly initialAnnotations?: readonly ReaderAnnotationSeed[];
-  /** 是否显示 ReaderWebView 内置选字浮层；宿主自己渲染选字栏时传 false。默认 true。 */
-  readonly selectionBar?: boolean;
-  readonly onEvent: (event: ReaderEvent) => void;
-};
-
-type SelectionState = {
-  readonly quote: string;
-  readonly locator: NonNullable<Extract<ReaderEvent, { type: 'selection' }>['locator']>;
-  readonly rects: readonly SelectionRect[] | undefined;
-};
-
-/**
- * Expo Web 实现：用同源 iframe 承载同一个自包含 reader-web HTML。
- * react-native-webview 不支持 Web，iframe 能真实运行阅读器并验证协议/选字坐标。
- */
-export function ReaderWebView({ bookId, initialAnnotations, selectionBar = true, onEvent }: ReaderWebViewProps) {
+/** Web uses the same protocol and persistent annotation identities as the native WebView. */
+export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView({ bookId, initialLocation, openOverride, initialAnnotations, selectionActionsEnabled = true, theme = 'light', fontScale = 1, flow = 'paginated', onEvent, onTap }, ref) {
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const [selection, setSelection] = useState<SelectionState | null>(null);
-  const format = useMemo(() => (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub'), [bookId]);
-  const fixture = readerFixtures[format];
-  const openSent = useRef(false);
-  const annotationsHydrated = useRef(false);
-
-  const send = useCallback((message: unknown) => {
-    iframeRef.current?.contentWindow?.postMessage(message, '*');
-  }, []);
-
-  const injectOpen = useCallback(() => {
-    if (openSent.current) return;
-    openSent.current = true;
-    const message = openPayloadForBook(bookId, fixture);
+  const [ready, setReady] = useState(false);
+  const sent = useRef(new Map<string, string>());
+  const send = useCallback((message: object) => iframeRef.current?.contentWindow?.postMessage(message, '*'), []);
+  useImperativeHandle(ref, () => ({
+    clearSelection: () => send({ type: 'reader:selection:clear' }),
+    highlightSelection: (locator, quote) => { if (selectionActionsEnabled) onEvent({ type: 'annotationAdded', locator, quote }); },
+    goTo: locator => send({ type: 'reader:goTo', payload: { locator } }),
+    navigate: command => send({ type: 'reader:navigate', payload: command }),
+    search: (query, requestId) => send({ type: 'reader:search', payload: { query, requestId } }),
+    requestContents: () => send({ type: 'reader:contents' }),
+    captureBookmarkContext: (bookmarks, requestId) => send({ type: 'reader:bookmark-context', payload: { bookmarks, requestId } }),
+  }), [onEvent, selectionActionsEnabled, send]);
+  const open = useCallback(() => {
+    if (openOverride && 'fileUri' in openOverride) {
+      onEvent({ type: 'error', message: '本地 EPUB 文件需要在 App 内打开。' });
+      return;
+    }
     let attempts = 0;
     const deliver = () => {
       const target = iframeRef.current?.contentWindow;
       if (!target) return;
-      const host = (target as unknown as { __readerHost?: unknown }).__readerHost;
-      if (typeof host === 'function') {
-        target.postMessage(message, '*');
+      if (typeof (target as unknown as { __readerHost?: unknown }).__readerHost !== 'function') {
+        if (attempts++ < 120) window.setTimeout(deliver, 50);
         return;
       }
-      if (attempts++ < 120) window.setTimeout(deliver, 50);
+      const base = openOverride ? { type: 'reader:open', payload: { ...openOverride, url: 'inline://epub' } } : openPayloadForBook(bookId, readerFixtures.epub, initialLocation);
+      send({ ...base, payload: { ...base.payload, theme, fontSize: fontScale * 18.5, flow, selectionActionsEnabled, ...(initialLocation ? { initialLocation } : {}) } });
+      const doc = target.document;
+      const style = doc.createElement('style');
+      style.textContent = '#chrome,#footer{display:none!important} #app{padding:0!important}';
+      doc.head.append(style);
     };
-    deliver();
-  }, [bookId, fixture]);
-
-  const handleMessage = useCallback((incoming: IncomingMessage) => {
-    if (incoming.type === 'reader:ready') {
-      if (!annotationsHydrated.current && initialAnnotations?.length) {
-        annotationsHydrated.current = true;
-        for (const annotation of initialAnnotations) {
-          send({ type: 'reader:annotation:add', payload: annotation });
-        }
-      }
-    }
-    if (incoming.type === 'reader:selection') {
-      setSelection({
-        quote: incoming.payload.text,
-        locator: incoming.payload.locator,
-        rects: incoming.payload.rects,
-      });
-    }
-    const event = mapIncomingToReaderEvent(incoming);
-    if (event) onEvent(event);
-  }, [initialAnnotations, onEvent, send]);
-
+    setReady(false); sent.current.clear(); deliver();
+  }, [bookId, flow, fontScale, initialLocation, onEvent, openOverride, selectionActionsEnabled, send, theme]);
   useEffect(() => {
     const listener = (event: MessageEvent) => {
-      const parsed = parseIncomingMessage(event.data);
-      if (parsed) handleMessage(parsed);
+      if (event.source !== iframeRef.current?.contentWindow) return;
+      const incoming = parseIncomingMessage(event.data);
+      if (!incoming) return;
+      if (incoming.type === 'reader:ready') setReady(true);
+      if (incoming.type === 'reader:selection' && !selectionActionsEnabled) return;
+      if ((incoming as { type: string }).type === 'reader:tap') { onTap?.(); return; }
+      const mapped = mapIncomingToReaderEvent(incoming);
+      if (mapped) onEvent(mapped);
     };
     window.addEventListener('message', listener);
     return () => window.removeEventListener('message', listener);
-  }, [handleMessage]);
-
+  }, [onEvent, onTap, selectionActionsEnabled, send]);
   useEffect(() => {
-    setSelection(null);
-    openSent.current = false;
-    annotationsHydrated.current = false;
-  }, [bookId]);
-
-  const highlightSelection = useCallback(() => {
-    if (!selection) return;
-    send({
-      type: 'reader:annotation:add',
-      payload: {
-        id: `reader-${Date.now()}`,
-        format,
-        locator: selection.locator,
-        text: selection.quote,
-        color: 'yellow',
-      },
-    });
-    send({ type: 'reader:selection:clear' });
-    setSelection(null);
-    onEvent({ type: 'annotationAdded', locator: selection.locator, quote: selection.quote });
-  }, [format, onEvent, selection, send]);
-
-  const cancelSelection = useCallback(() => {
-    send({ type: 'reader:selection:clear' });
-    setSelection(null);
-  }, [send]);
-
-  return (
-    <View style={styles.container}>
-      <iframe
-        ref={iframeRef}
-        title="书灯阅读器"
-        srcDoc={readerWebHtml}
-        onLoad={injectOpen}
-        style={{ ...iframeStyle, backgroundColor: palette.paper }}
-      />
-      {selection && selectionBar ? (
-        <ReaderSelectionBar
-          rects={selection.rects}
-          onHighlight={highlightSelection}
-          onCancel={cancelSelection}
-        />
-      ) : null}
-    </View>
-  );
-}
-
-const iframeStyle = {
-  borderWidth: 0,
-  width: '100%',
-  height: '100%',
-} satisfies CSSProperties;
-
-function makeStyles(palette: Palette) {
-  return StyleSheet.create({
-  container: { flex: 1, backgroundColor: palette.paper },
-  });
-}
+    if (ready) send({ type: 'reader:selection:actions', payload: { enabled: selectionActionsEnabled } });
+  }, [ready, selectionActionsEnabled, send]);
+  useEffect(() => {
+    if (!ready) return;
+    const next = new Map((initialAnnotations ?? []).map((value: ReaderAnnotationSeed) => [value.id, JSON.stringify(value)]));
+    for (const id of sent.current.keys()) if (!next.has(id)) send({ type: 'reader:annotation:remove', payload: { id } });
+    for (const annotation of initialAnnotations ?? []) if (sent.current.get(annotation.id) !== next.get(annotation.id)) send({ type: 'reader:annotation:add', payload: annotation });
+    sent.current = next;
+  }, [initialAnnotations, ready, send]);
+  useEffect(() => {
+    if (!ready) return;
+    send({ type: 'reader:theme', payload: { theme } }); send({ type: 'reader:fontSize', payload: { fontSize: fontScale * 18.5 } }); send({ type: 'reader:flow', payload: { flow } });
+  }, [flow, fontScale, ready, send, theme]);
+  return <View style={styles.container}><iframe ref={iframeRef} title="书灯阅读器" srcDoc={readerWebHtml} onLoad={open} style={{ ...iframeStyle, backgroundColor: palette.paper }} /></View>;
+});
+const iframeStyle = { borderWidth: 0, width: '100%', height: '100%' } satisfies CSSProperties;
+function makeStyles(palette: Palette) { return StyleSheet.create({ container: { flex: 1, backgroundColor: palette.paper } }); }

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SymbolView } from 'expo-symbols';
-import { radius, spacing, usePalette, type Palette } from '../ui/theme';
+import { spacing, usePalette, type Palette } from '../ui/theme';
+import { useReduceMotion } from '../ui/chat/useReduceMotion';
+import { NativeEpubChrome, type EpubChromeAction } from './NativeEpubChrome';
 
 export type ReaderChromeProps = {
   readonly title: string;
@@ -15,37 +17,69 @@ export type ReaderChromeProps = {
   readonly onAnnotations?: () => void;
   /** Swift 阅读器右上「更多」：书签等次要操作放入该菜单。 */
   readonly onMore?: () => void;
+  readonly onSettings?: () => void;
+  readonly onSearch?: () => void;
+  readonly onBookmark?: () => void;
+  readonly bookmarked?: boolean;
   readonly onAsk: () => void;
+  readonly controlsEnabled?: boolean;
+  readonly onToggleChrome?: () => void;
 };
 
-/**
- * 覆盖式阅读 chrome：51pt 顶部工具栏 + 底部中央问问书灯胶囊。
- * 内容层不因显隐改变大小；显隐用 200ms 透明度过渡，与 Swift 版覆盖控件一致。
- */
-export function ReaderChrome({
+/** The native presentation port shares this RN reader's state and intents. */
+export function ReaderChrome(props: ReaderChromeProps) {
+  const palette = usePalette();
+  if (!NativeEpubChrome) return <ReaderChromeFallback {...props} />;
+  const handleAction = (action: EpubChromeAction) => {
+    switch (action) {
+      case 'back': props.onBack(); break;
+      case 'contents': props.onAnnotations?.(); break;
+      case 'settings': (props.onSettings ?? props.onMore)?.(); break;
+      case 'ask': props.onAsk(); break;
+      case 'bookmark': props.onBookmark?.(); break;
+      case 'toggleChrome': props.onToggleChrome?.(); break;
+    }
+  };
+  return <NativeEpubChrome
+    title={props.title} chapter={props.chapter || props.title} progress={props.progressText}
+    referenceMode={props.referenceMode ?? false} bookmarked={props.bookmarked ?? false}
+    chromeVisible={props.visible} controlsEnabled={props.controlsEnabled ?? true} dark={palette.paper === '#1B1A17'}
+    onChromeAction={event => handleAction(event.nativeEvent.action)}
+    style={[StyleSheet.absoluteFill, { zIndex: 20 }]}
+  />;
+}
+
+/** Portable fallback. iOS uses the UIKit 64pt toolbar and 76pt footer above. */
+function ReaderChromeFallback({
   title,
   chapter,
   progressText,
   referenceMode = false,
   visible,
+  controlsEnabled = true,
   annotationCount = 0,
   onBack,
   onAnnotations,
   onMore,
+  onSettings,
+  onSearch,
+  onBookmark,
+  bookmarked = false,
   onAsk,
 }: ReaderChromeProps) {
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
   const opacity = useRef(new Animated.Value(1)).current;
+  const reduceMotion = useReduceMotion();
 
   useEffect(() => {
     Animated.timing(opacity, {
       toValue: visible ? 1 : 0,
-      duration: 200,
+      duration: reduceMotion ? 0 : 200,
       useNativeDriver: true,
     }).start();
-  }, [opacity, visible]);
+  }, [opacity, reduceMotion, visible]);
 
   return (
     <Animated.View style={[styles.root, { opacity }]} pointerEvents={visible ? 'box-none' : 'none'}>
@@ -57,7 +91,7 @@ export function ReaderChrome({
             onPress={onBack}
             style={styles.backButton}
           >
-            <SymbolView name="chevron.left" size={20} tintColor={palette.ink2} />
+            <SymbolView name="arrow.left" size={20} tintColor={palette.ink2} />
             {referenceMode ? <Text style={styles.referenceBack}>返回问答</Text> : null}
           </Pressable>
           <View style={styles.heading} pointerEvents="none">
@@ -66,19 +100,21 @@ export function ReaderChrome({
           </View>
           <View style={styles.actions}>
             {onAnnotations ? (
-              <Pressable accessibilityRole="button" accessibilityLabel="标注" onPress={onAnnotations} style={styles.iconButton}>
+              <Pressable accessibilityRole="button" accessibilityLabel="目录与书签" onPress={onAnnotations} disabled={!controlsEnabled} style={styles.iconButton}>
                 <SymbolView name="list.bullet" size={19} tintColor={palette.ink2} />
-                {annotationCount > 0 ? <Text style={styles.badge}>{annotationCount}</Text> : null}
               </Pressable>
             ) : null}
-            {onMore ? (
-              <Pressable accessibilityRole="button" accessibilityLabel="更多" onPress={onMore} style={styles.iconButton}>
+            {onSearch ? <Pressable accessibilityRole="button" accessibilityLabel="书内搜索" onPress={onSearch} style={styles.iconButton}><SymbolView name="magnifyingglass" size={19} tintColor={palette.ink2} /></Pressable> : null}
+            {onSettings || onMore ? (
+              <Pressable accessibilityRole="button" accessibilityLabel="阅读设置" onPress={onSettings ?? onMore} disabled={!controlsEnabled} style={styles.iconButton}>
                 <SymbolView name="ellipsis" size={19} tintColor={palette.ink2} />
               </Pressable>
             ) : null}
           </View>
         </View>
       </View>
+
+      {onBookmark && bookmarked ? <Pressable accessibilityRole="button" accessibilityLabel="移除当前页书签" accessibilityState={{ selected: true }} onPress={onBookmark} style={[styles.ribbon, { top: insets.top + 56 }]}><SymbolView name="bookmark.fill" size={22} tintColor={palette.lamp} /></Pressable> : null}
 
       <View style={[styles.footer, { paddingBottom: insets.bottom, height: 76 + insets.bottom }]}>
         <Text style={styles.progress}>{progressText}</Text>
@@ -111,13 +147,14 @@ function makeStyles(palette: Palette) {
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  backButton: { minWidth: 44, height: 44, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  backButton: { minWidth: 88, height: 44, flexDirection: 'row', alignItems: 'center', gap: 4 },
   referenceBack: { color: palette.ink2, fontSize: 12 },
   heading: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   title: { color: palette.ink, fontSize: 13, fontWeight: '600', lineHeight: 17 },
   chapter: { color: palette.ink3, fontSize: 10, lineHeight: 14 },
   actions: { flexDirection: 'row', alignItems: 'center' },
-  iconButton: { width: 40, height: 44, alignItems: 'center', justifyContent: 'center' },
+  iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  ribbon: { position: 'absolute', right: 21, width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
   badge: { position: 'absolute', top: 7, right: 3, minWidth: 12, textAlign: 'center', fontSize: 9, color: palette.paper, backgroundColor: palette.lamp, borderRadius: 6, overflow: 'hidden' },
   footer: {
     position: 'absolute',

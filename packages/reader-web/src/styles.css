@@ -118,6 +118,51 @@ body {
   color: var(--reader-ink);
 }
 
+/*
+ * Some WebKit column-layout failures leave a valid terminal CFI without any
+ * painted box. Keep the exact locator while showing its resolved text above
+ * the blank carrier.
+ */
+.reader-terminal-recovery {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: flex-end;
+  padding: 28px 28px 104px;
+  background: var(--reader-paper);
+  color: var(--reader-ink);
+  pointer-events: none;
+}
+
+.reader-terminal-recovery-body {
+  width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  line-height: 1.95;
+  text-align: justify;
+  text-justify: inter-ideograph;
+}
+
+.reader-terminal-recovery p {
+  margin: 0 0 0.85em;
+}
+
+.reader-terminal-recovery p:last-child {
+  margin-bottom: 0;
+}
+
+.reader-terminal-recovery mark {
+  padding: 0 0.08em;
+  border-radius: 2px;
+  background: #f2dba6;
+  color: inherit;
+}
+
+body[data-theme='dark'] .reader-terminal-recovery mark {
+  background: #5a4a2a;
+}
+
 #reader[data-format='epub'] {
   display: flex;
 }

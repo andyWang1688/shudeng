@@ -12,3 +12,6 @@ export * from './progress';
 export * from './annotations';
 export * from './import';
 export * from './conversations';
+export * from './readerPreferences';
+
+export * from './preferences';

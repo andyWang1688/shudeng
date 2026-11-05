@@ -5,10 +5,10 @@
  * （model.onnx + tokenizer.json + tokenizer_config.json），或用 EXPO_PUBLIC_SHUDENG_SEMANTIC_MODEL_DIR
  * 指向已解压目录。缺模型时返回明确 unavailable stub，不伪造向量。
  */
-import { Directory, File, Paths } from 'expo-file-system';
-import { Tokenizer } from '@huggingface/tokenizers';
-import type { InferenceSession, Tensor } from 'onnxruntime-react-native';
-import type { EmbeddingOptions } from '@shudeng/core/rag';
+import { Directory, File, Paths } from "expo-file-system";
+import { Tokenizer } from "@huggingface/tokenizers";
+import type { InferenceSession, Tensor } from "onnxruntime-react-native";
+import type { EmbeddingOptions } from "@shudeng/core/rag";
 import {
   EMBEDDING_DIMENSION,
   EMBEDDING_MAX_TOKENS,
@@ -17,19 +17,39 @@ import {
   type EmbeddingDiagnostics,
   type EmbeddingStatus,
   type ExpoEmbeddingProvider,
-} from './embeddingShared';
-import { parseReferenceBundle, compareEmbeddings, type ActualEmbedding, type ReferenceComparison } from './embeddingCompare';
-import { l2Norm, meanPoolAndNormalize, truncateTokenIds } from './embeddingMath';
+} from "./embeddingShared";
+import {
+  parseReferenceBundle,
+  compareEmbeddings,
+  type ActualEmbedding,
+  type ReferenceComparison,
+} from "./embeddingCompare";
+import {
+  l2Norm,
+  meanPoolAndNormalize,
+  truncateTokenIds,
+} from "./embeddingMath";
+import { createRuntimeQueue } from "./settings/runtimeQueue";
+import { hasNativeSemanticAssets, prepareNativeSemanticModel } from "./settings/nativeSemanticModel";
 
-const MODEL_FILE = 'model.onnx';
-const TOKENIZER_FILE = 'tokenizer.json';
-const TOKENIZER_CONFIG_FILE = 'tokenizer_config.json';
+const withRuntime = createRuntimeQueue();
 
-type LoadedTokenizer = { readonly tokenizer: Tokenizer; readonly loadMs: number };
+const MODEL_FILE = "model.onnx";
+const TOKENIZER_FILE = "tokenizer.json";
+const TOKENIZER_CONFIG_FILE = "tokenizer_config.json";
+
+type LoadedTokenizer = {
+  readonly tokenizer: Tokenizer;
+  readonly loadMs: number;
+};
 
 let tokenizerPromise: Promise<LoadedTokenizer> | null = null;
-type OrtModule = typeof import('onnxruntime-react-native');
-type LoadedSession = { readonly session: InferenceSession; readonly ort: OrtModule; readonly loadMs: number };
+type OrtModule = typeof import("onnxruntime-react-native");
+type LoadedSession = {
+  readonly session: InferenceSession;
+  readonly ort: OrtModule;
+  readonly loadMs: number;
+};
 let sessionPromise: Promise<LoadedSession> | null = null;
 let lastEmbedMs: number | null = null;
 let lastTokenCount: number | null = null;
@@ -37,13 +57,17 @@ let lastNorm: number | null = null;
 
 function modelDirectory(): Directory {
   const configured = process.env.EXPO_PUBLIC_SHUDENG_SEMANTIC_MODEL_DIR;
-  if (typeof configured === 'string' && configured.trim().length > 0) {
+  if (typeof configured === "string" && configured.trim().length > 0) {
     return new Directory(configured.trim());
   }
-  return new Directory(Paths.document, 'SemanticModel');
+  return new Directory(Paths.document, "SemanticModel");
 }
 
-function requiredFiles(directory: Directory): { model: File; tokenizer: File; tokenizerConfig: File } {
+function requiredFiles(directory: Directory): {
+  model: File;
+  tokenizer: File;
+  tokenizerConfig: File;
+} {
   return {
     model: new File(directory, MODEL_FILE),
     tokenizer: new File(directory, TOKENIZER_FILE),
@@ -51,21 +75,24 @@ function requiredFiles(directory: Directory): { model: File; tokenizer: File; to
   };
 }
 
-function missingReason(directory: Directory, files: ReturnType<typeof requiredFiles>): string {
+function missingReason(
+  directory: Directory,
+  files: ReturnType<typeof requiredFiles>,
+): string {
   const missing: string[] = [];
   if (!files.model.exists) missing.push(`${MODEL_FILE}（需预先解压 gz）`);
   if (!files.tokenizer.exists) missing.push(TOKENIZER_FILE);
   if (!files.tokenizerConfig.exists) missing.push(TOKENIZER_CONFIG_FILE);
   return missing.length > 0
-    ? `模型未放置：${directory.uri} 缺少 ${missing.join(', ')}`
-    : '';
+    ? `模型未放置：${directory.uri} 缺少 ${missing.join(", ")}`
+    : "";
 }
 
 export async function embeddingStatus(): Promise<EmbeddingStatus> {
   const directory = modelDirectory();
   const files = requiredFiles(directory);
   const reason = missingReason(directory, files);
-  if (reason) {
+  if (reason && !(await hasNativeSemanticAssets(directory))) {
     return {
       available: false,
       modelId: EMBEDDING_MODEL_ID,
@@ -84,11 +111,11 @@ export async function embeddingStatus(): Promise<EmbeddingStatus> {
 }
 
 function toNativePath(uri: string): string {
-  if (uri.startsWith('file://')) {
+  if (uri.startsWith("file://")) {
     try {
-      return decodeURIComponent(uri.slice('file://'.length));
+      return decodeURIComponent(uri.slice("file://".length));
     } catch {
-      return uri.slice('file://'.length);
+      return uri.slice("file://".length);
     }
   }
   return uri;
@@ -105,7 +132,10 @@ async function loadTokenizer(): Promise<LoadedTokenizer> {
     const tokenizerConfig = files.tokenizerConfig.exists
       ? (JSON.parse(await files.tokenizerConfig.text()) as object)
       : {};
-    return { tokenizer: new Tokenizer(tokenizerJson, tokenizerConfig), loadMs: Date.now() - startedAt };
+    return {
+      tokenizer: new Tokenizer(tokenizerJson, tokenizerConfig),
+      loadMs: Date.now() - startedAt,
+    };
   })();
   return tokenizerPromise;
 }
@@ -120,35 +150,43 @@ async function loadSession(): Promise<LoadedSession> {
     // 懒加载让未安装原生 ORT 的构建仍能启动其他功能，embedding 明确报错而不是整 app 崩溃。
     let ort: OrtModule;
     try {
-      ort = await import('onnxruntime-react-native');
+      ort = await import("onnxruntime-react-native");
     } catch (error) {
       throw new EmbeddingUnavailableError(
         `onnxruntime-react-native 原生模块不可用：${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    if (typeof ort.InferenceSession?.create !== 'function') {
+    if (typeof ort.InferenceSession?.create !== "function") {
       throw new EmbeddingUnavailableError(
-        'onnxruntime-react-native 原生模块未加载（1.24.3 iOS 源码与 RN 0.88 New Architecture 不兼容，本轮 native 构建已排除该 pod）',
+        "onnxruntime-react-native 原生模块未加载，无法运行离线语义检索。",
       );
     }
     const startedAt = Date.now();
     const modelPath = toNativePath(files.model.uri);
     const session = await ort.InferenceSession.create(modelPath, {
-      executionProviders: ['cpu'],
-      graphOptimizationLevel: 'all',
+      executionProviders: ["cpu"],
+      graphOptimizationLevel: "all",
     });
     return { session, ort, loadMs: Date.now() - startedAt };
   })();
   return sessionPromise;
 }
 
-function encode(text: string, tokenizer: Tokenizer): { ids: number[]; tokenCount: number } {
+function encode(
+  text: string,
+  tokenizer: Tokenizer,
+): { ids: number[]; tokenCount: number } {
   const encoding = tokenizer.encode(text, { add_special_tokens: true });
   if (encoding.ids.length > EMBEDDING_MAX_TOKENS) {
     // 防 tokenizer 行为变化时静默把内容 token 当 eos：截断前最后一位必须是 </s>。
-    const eosId = tokenizer.token_to_id('</s>');
-    if (eosId === undefined || encoding.ids[encoding.ids.length - 1] !== eosId) {
-      throw new Error(`截断前文本未以 eos 结尾（tokenizer 行为变化？最后 id=${String(encoding.ids[encoding.ids.length - 1])}）`);
+    const eosId = tokenizer.token_to_id("</s>");
+    if (
+      eosId === undefined ||
+      encoding.ids[encoding.ids.length - 1] !== eosId
+    ) {
+      throw new Error(
+        `截断前文本未以 eos 结尾（tokenizer 行为变化？最后 id=${String(encoding.ids[encoding.ids.length - 1])}）`,
+      );
     }
   }
   const ids = truncateTokenIds(encoding.ids);
@@ -157,57 +195,98 @@ function encode(text: string, tokenizer: Tokenizer): { ids: number[]; tokenCount
 }
 
 function int64Tensor(ort: OrtModule, values: readonly number[]): Tensor {
-  return new ort.Tensor('int64', BigInt64Array.from(values, (value) => BigInt(value)), [1, values.length]);
+  return new ort.Tensor(
+    "int64",
+    BigInt64Array.from(values, (value) => BigInt(value)),
+    [1, values.length],
+  );
 }
 
 export function createExpoEmbeddingProvider(): ExpoEmbeddingProvider {
   return {
-    runtime: 'onnxruntime-react-native',
+    runtime: "onnxruntime-react-native",
     modelId: EMBEDDING_MODEL_ID,
     dimension: EMBEDDING_DIMENSION,
-    async embed(texts: ReadonlyArray<string>, options?: EmbeddingOptions): Promise<Float32Array[]> {
-      const signal = options?.signal;
-      if (signal?.aborted) throw Object.assign(new Error('embedding 已取消'), { name: 'AbortError' });
-      const [{ tokenizer }, { session, ort }] = await Promise.all([loadTokenizer(), loadSession()]);
-      const results: Float32Array[] = [];
-      const inputNames = new Set(session.inputNames);
-      for (const text of texts) {
-        if (signal?.aborted) throw Object.assign(new Error('embedding 已取消'), { name: 'AbortError' });
-        const startedAt = Date.now();
-        const { ids } = encode(text, tokenizer);
-        const feeds: Record<string, Tensor> = {
-          input_ids: int64Tensor(ort, ids),
-          attention_mask: int64Tensor(ort, new Array<number>(ids.length).fill(1)),
-        };
-        if (inputNames.has('token_type_ids')) {
-          feeds.token_type_ids = int64Tensor(ort, new Array<number>(ids.length).fill(0));
+    async embed(
+      texts: ReadonlyArray<string>,
+      options?: EmbeddingOptions,
+    ): Promise<Float32Array[]> {
+      return withRuntime(async () => {
+        const signal = options?.signal;
+        if (signal?.aborted)
+          throw Object.assign(new Error("embedding 已取消"), {
+            name: "AbortError",
+          });
+        if (sessionPromise === null || tokenizerPromise === null)
+          await prepareNativeSemanticModel(modelDirectory(), signal);
+        const [{ tokenizer }, { session, ort }] = await Promise.all([
+          loadTokenizer(),
+          loadSession(),
+        ]);
+        const results: Float32Array[] = [];
+        const inputNames = new Set(session.inputNames);
+        for (const text of texts) {
+          if (signal?.aborted)
+            throw Object.assign(new Error("embedding 已取消"), {
+              name: "AbortError",
+            });
+          const startedAt = Date.now();
+          const { ids } = encode(text, tokenizer);
+          const feeds: Record<string, Tensor> = {
+            input_ids: int64Tensor(ort, ids),
+            attention_mask: int64Tensor(
+              ort,
+              new Array<number>(ids.length).fill(1),
+            ),
+          };
+          if (inputNames.has("token_type_ids")) {
+            feeds.token_type_ids = int64Tensor(
+              ort,
+              new Array<number>(ids.length).fill(0),
+            );
+          }
+          const outputs = await session.run(feeds);
+          const outputName = session.outputNames[0];
+          const output =
+            outputName === undefined ? undefined : outputs[outputName];
+          if (!output || !(output.data instanceof Float32Array)) {
+            throw new Error(
+              "ONNX 输出 last_hidden_state 缺失或不是 Float32Array",
+            );
+          }
+          const dims = output.dims;
+          const sequenceLength = dims.length >= 3 ? dims[1] : ids.length;
+          const hidden = dims.length >= 3 ? dims[2] : EMBEDDING_DIMENSION;
+          if (
+            sequenceLength === undefined ||
+            hidden === undefined ||
+            hidden !== EMBEDDING_DIMENSION
+          ) {
+            throw new Error(
+              `ONNX 输出维度异常：${JSON.stringify(dims)}（期望 [1,seq,${EMBEDDING_DIMENSION}]）`,
+            );
+          }
+          const pooled = meanPoolAndNormalize(
+            output.data,
+            sequenceLength,
+            hidden,
+          );
+          lastEmbedMs = Date.now() - startedAt;
+          lastNorm = l2Norm(pooled);
+          results.push(pooled);
         }
-        const outputs = await session.run(feeds);
-        const outputName = session.outputNames[0];
-        const output = outputName === undefined ? undefined : outputs[outputName];
-        if (!output || !(output.data instanceof Float32Array)) {
-          throw new Error('ONNX 输出 last_hidden_state 缺失或不是 Float32Array');
-        }
-        const dims = output.dims;
-        const sequenceLength = dims.length >= 3 ? dims[1] : ids.length;
-        const hidden = dims.length >= 3 ? dims[2] : EMBEDDING_DIMENSION;
-        if (sequenceLength === undefined || hidden === undefined || hidden !== EMBEDDING_DIMENSION) {
-          throw new Error(`ONNX 输出维度异常：${JSON.stringify(dims)}（期望 [1,seq,${EMBEDDING_DIMENSION}]）`);
-        }
-        const pooled = meanPoolAndNormalize(output.data, sequenceLength, hidden);
-        lastEmbedMs = Date.now() - startedAt;
-        lastNorm = l2Norm(pooled);
-        results.push(pooled);
-      }
-      return results;
+        return results;
+      });
     },
     async diagnostics(): Promise<EmbeddingDiagnostics> {
       return {
-        runtime: 'onnxruntime-react-native',
+        runtime: "onnxruntime-react-native",
         modelId: EMBEDDING_MODEL_ID,
         dimension: EMBEDDING_DIMENSION,
-        sessionLoadMs: sessionPromise === null ? null : (await sessionPromise).loadMs,
-        tokenizerLoadMs: tokenizerPromise === null ? null : (await tokenizerPromise).loadMs,
+        sessionLoadMs:
+          sessionPromise === null ? null : (await sessionPromise).loadMs,
+        tokenizerLoadMs:
+          tokenizerPromise === null ? null : (await tokenizerPromise).loadMs,
         lastEmbedMs,
         lastTokenCount,
         lastNorm,
@@ -235,21 +314,33 @@ export async function runEmbeddingReferenceCheck(
   const configured = process.env.EXPO_PUBLIC_SHUDENG_EMBEDDING_REFERENCE;
   const file = referencePath
     ? new File(referencePath)
-    : typeof configured === 'string' && configured.trim().length > 0
+    : typeof configured === "string" && configured.trim().length > 0
       ? new File(configured.trim())
-      : new File(Paths.document, 'embedding-reference.json');
-  if (!file.exists) throw new EmbeddingUnavailableError(`参考向量不存在：${file.uri}`);
+      : new File(Paths.document, "embedding-reference.json");
+  if (!file.exists)
+    throw new EmbeddingUnavailableError(`参考向量不存在：${file.uri}`);
   const bundle = parseReferenceBundle(JSON.parse(await file.text()) as unknown);
-  if (bundle.modelId !== EMBEDDING_MODEL_ID || bundle.dimension !== EMBEDDING_DIMENSION) {
-    throw new Error(`参考向量模型不匹配：${bundle.modelId} / ${bundle.dimension}`);
+  if (
+    bundle.modelId !== EMBEDDING_MODEL_ID ||
+    bundle.dimension !== EMBEDDING_DIMENSION
+  ) {
+    throw new Error(
+      `参考向量模型不匹配：${bundle.modelId} / ${bundle.dimension}`,
+    );
   }
+  await withRuntime(() => prepareNativeSemanticModel(modelDirectory()));
   const [{ tokenizer }] = await Promise.all([loadTokenizer(), loadSession()]);
-  const eosId = tokenizer.token_to_id('</s>');
-  if (eosId !== 2) throw new Error(`tokenizer 的 </s> 不是 2（实际 ${String(eosId)}），截断基线需复核`);
+  const eosId = tokenizer.token_to_id("</s>");
+  if (eosId !== 2)
+    throw new Error(
+      `tokenizer 的 </s> 不是 2（实际 ${String(eosId)}），截断基线需复核`,
+    );
   const provider = getEmbeddingProvider();
   const actuals: ActualEmbedding[] = [];
   for (const sentence of bundle.sentences) {
-    const encoding = tokenizer.encode(sentence.text, { add_special_tokens: true });
+    const encoding = tokenizer.encode(sentence.text, {
+      add_special_tokens: true,
+    });
     const tokenIds = truncateTokenIds(encoding.ids);
     const vectors = await provider.embed([sentence.text]);
     const vector = vectors[0];
@@ -259,4 +350,21 @@ export async function runEmbeddingReferenceCheck(
   return compareEmbeddings(actuals, bundle, options ?? {});
 }
 
-export { EmbeddingUnavailableError } from './embeddingShared';
+export { EmbeddingUnavailableError } from "./embeddingShared";
+
+/** Release cached runtime before a model replacement/removal; future calls reload verified files. */
+export async function resetEmbeddingRuntime(
+  updateFiles?: () => void,
+): Promise<void> {
+  return withRuntime(async () => {
+    const pending = sessionPromise;
+    sessionPromise = null;
+    tokenizerPromise = null;
+    provider = null;
+    if (pending) {
+      const loaded = await pending.catch(() => null);
+      if (loaded) await loaded.session.release();
+    }
+    updateFiles?.();
+  });
+}

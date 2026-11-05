@@ -27,3 +27,5 @@ export interface AgentQuestion {
 }
 
 export * from './anchor.js';
+
+export * from './epub-anchor.js';

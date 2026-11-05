@@ -13,3 +13,4 @@ export {
   type BookChatTurn,
   type StartBookChatTurnOptions,
 } from './bookChat';
+export { getLocalBookIndexStatus, rebuildBookIndex, type BookIndexStatus, type BookImportProgress } from './bookIndex';

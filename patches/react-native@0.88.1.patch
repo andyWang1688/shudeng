@@ -1,0 +1,240 @@
+diff --git a/Libraries/StyleSheet/StyleSheetTypes.js b/Libraries/StyleSheet/StyleSheetTypes.js
+index 13b5b4c..f3f1a60 100644
+--- a/Libraries/StyleSheet/StyleSheetTypes.js
++++ b/Libraries/StyleSheet/StyleSheetTypes.js
+@@ -1033,6 +1033,13 @@ type ____TextStyle_InternalBase = Readonly<{
+   textShadowColor?: ____ColorValue_Internal,
+   letterSpacing?: number,
+   lineHeight?: number,
++  /**
++   * Extra spacing in points between lines, with no extra space after the last line.
++   * Finite nonnegative values are used without Dynamic Type scaling. Null clears
++   * the local override and allows inheritance; omission preserves default layout.
++   * @platform ios
++   */
++  lineSpacing?: number | null,
+   textAlign?:
+     'auto' | 'left' | 'right' | 'center' | 'justify' | 'start' | 'end',
+   textAlignVertical?: 'auto' | 'top' | 'bottom' | 'center',
+diff --git a/types_generated/Libraries/StyleSheet/StyleSheetTypes.d.ts b/types_generated/Libraries/StyleSheet/StyleSheetTypes.d.ts
+index 26e9ab4..d742a92 100644
+--- a/types_generated/Libraries/StyleSheet/StyleSheetTypes.d.ts
++++ b/types_generated/Libraries/StyleSheet/StyleSheetTypes.d.ts
+@@ -832,6 +832,13 @@ type ____TextStyle_InternalBase = Readonly<{
+   textShadowColor?: ____ColorValue_Internal | undefined;
+   letterSpacing?: number | undefined;
+   lineHeight?: number | undefined;
++  /**
++   * Extra spacing in points between lines, with no extra space after the last line.
++   * Finite nonnegative values are used without Dynamic Type scaling. Null clears
++   * the local override and allows inheritance; omission preserves default layout.
++   * @platform ios
++   */
++  lineSpacing?: number | null | undefined;
+   textAlign?: "auto" | "left" | "right" | "center" | "justify" | "start" | "end" | undefined;
+   textAlignVertical?: "auto" | "top" | "bottom" | "center" | undefined;
+   includeFontPadding?: boolean | undefined;
+diff --git a/Libraries/Components/View/ReactNativeStyleAttributes.js b/Libraries/Components/View/ReactNativeStyleAttributes.js
+index db39c72..8ec66cd 100644
+--- a/Libraries/Components/View/ReactNativeStyleAttributes.js
++++ b/Libraries/Components/View/ReactNativeStyleAttributes.js
+@@ -274,6 +274,7 @@ const ReactNativeStyleAttributes: {[string]: AnyAttributeType, ...} = {
+   includeFontPadding: true,
+   letterSpacing: true,
+   lineHeight: true,
++  lineSpacing: true,
+   textAlign: true,
+   textAlignVertical: true,
+   textDecorationColor: colorAttribute,
+diff --git a/ReactCommon/react/renderer/attributedstring/TextAttributes.h b/ReactCommon/react/renderer/attributedstring/TextAttributes.h
+index ffbbcf8..6c0c684 100644
+--- a/ReactCommon/react/renderer/attributedstring/TextAttributes.h
++++ b/ReactCommon/react/renderer/attributedstring/TextAttributes.h
+@@ -7,6 +7,7 @@
+ 
+ #pragma once
+ 
++#include <cmath>
+ #include <functional>
+ #include <limits>
+ #include <optional>
+@@ -67,6 +68,8 @@ class TextAttributes : public DebugStringConvertible {
+ 
+   // Paragraph Styles
+   Float lineHeight{std::numeric_limits<Float>::quiet_NaN()};
++  // iOS-only fixed-point spacing between lines. NaN means no local override.
++  Float lineSpacing{std::numeric_limits<Float>::quiet_NaN()};
+   std::optional<TextAlignment> alignment{};
+   std::optional<WritingDirection> baseWritingDirection{};
+   std::optional<LineBreakStrategy> lineBreakStrategy{};
+@@ -151,6 +154,10 @@ struct hash<facebook::react::TextAttributes> {
+         textAttributes.textDecorationColor,
+         textAttributes.textShadowColor,
+         textEffectsHash);
++    // Preserve the old hash for text that does not opt into line spacing.
++    if (!std::isnan(textAttributes.lineSpacing)) {
++      facebook::react::hash_combine(seed, textAttributes.lineSpacing);
++    }
+     facebook::react::hash_combine_optionals(
+         seed,
+         textAttributes.fontWeight,
+diff --git a/ReactCommon/react/renderer/attributedstring/TextAttributes.cpp b/ReactCommon/react/renderer/attributedstring/TextAttributes.cpp
+index 5851ec2..7f6e29b 100644
+--- a/ReactCommon/react/renderer/attributedstring/TextAttributes.cpp
++++ b/ReactCommon/react/renderer/attributedstring/TextAttributes.cpp
+@@ -66,6 +66,10 @@ void TextAttributes::apply(TextAttributes textAttributes) {
+   lineHeight = !std::isnan(textAttributes.lineHeight)
+       ? textAttributes.lineHeight
+       : lineHeight;
++  lineSpacing = std::isfinite(textAttributes.lineSpacing) &&
++          textAttributes.lineSpacing >= 0
++      ? textAttributes.lineSpacing
++      : lineSpacing;
+   alignment = textAttributes.alignment.has_value() ? textAttributes.alignment
+                                                    : alignment;
+   baseWritingDirection = textAttributes.baseWritingDirection.has_value()
+@@ -180,6 +184,7 @@ bool TextAttributes::operator==(const TextAttributes& rhs) const {
+       floatEquality(fontSizeMultiplier, rhs.fontSizeMultiplier) &&
+       floatEquality(letterSpacing, rhs.letterSpacing) &&
+       floatEquality(lineHeight, rhs.lineHeight) &&
++      floatEquality(lineSpacing, rhs.lineSpacing) &&
+       floatEquality(textShadowRadius, rhs.textShadowRadius);
+ }
+ 
+@@ -243,6 +248,8 @@ SharedDebugStringConvertibleList TextAttributes::getDebugProps() const {
+       // Paragraph Styles
+       debugStringConvertibleItem(
+           "lineHeight", lineHeight, textAttributes.lineHeight),
++      debugStringConvertibleItem(
++          "lineSpacing", lineSpacing, textAttributes.lineSpacing),
+       debugStringConvertibleItem(
+           "alignment", alignment, textAttributes.alignment),
+       debugStringConvertibleItem(
+diff --git a/ReactCommon/react/renderer/components/text/BaseTextProps.cpp b/ReactCommon/react/renderer/components/text/BaseTextProps.cpp
+index 135463a..ce35679 100644
+--- a/ReactCommon/react/renderer/components/text/BaseTextProps.cpp
++++ b/ReactCommon/react/renderer/components/text/BaseTextProps.cpp
+@@ -7,6 +7,8 @@
+ 
+ #include "BaseTextProps.h"
+ 
++#include <cmath>
++
+ #include <react/renderer/attributedstring/conversions.h>
+ #include <react/renderer/core/graphicsConversions.h>
+ #include <react/renderer/core/propsConversions.h>
+@@ -111,6 +113,15 @@ static TextAttributes convertRawProp(
+       "lineHeight",
+       sourceTextAttributes.lineHeight,
+       defaultTextAttributes.lineHeight);
++  textAttributes.lineSpacing = convertRawProp(
++      context,
++      rawProps,
++      "lineSpacing",
++      sourceTextAttributes.lineSpacing,
++      defaultTextAttributes.lineSpacing);
++  if (!std::isfinite(textAttributes.lineSpacing) || textAttributes.lineSpacing < 0) {
++    textAttributes.lineSpacing = defaultTextAttributes.lineSpacing;
++  }
+   textAttributes.alignment = convertRawProp(
+       context,
+       rawProps,
+@@ -289,6 +300,20 @@ void BaseTextProps::setProp(
+         defaults, value, textAttributes, textTransform, "textTransform");
+     REBUILD_FIELD_SWITCH_CASE(
+         defaults, value, textAttributes, lineHeight, "lineHeight");
++    case CONSTEXPR_RAW_PROPS_KEY_HASH("lineSpacing"): {
++      Float spacing = defaults.lineSpacing;
++      if (value.hasValue()) {
++        try {
++          fromRawValue(context, value, spacing);
++        } catch (const std::exception &error) {
++          LOG(ERROR) << "Error while converting prop 'lineSpacing': " << error.what();
++        }
++      }
++      textAttributes.lineSpacing = std::isfinite(spacing) && spacing >= 0
++          ? spacing
++          : defaults.lineSpacing;
++      return;
++    }
+     REBUILD_FIELD_SWITCH_CASE(
+         defaults, value, textAttributes, alignment, "textAlign");
+     REBUILD_FIELD_SWITCH_CASE(
+@@ -450,6 +475,13 @@ void BaseTextProps::appendTextAttributesProps(
+     result["lineHeight"] = textAttributes.lineHeight;
+   }
+ 
++  if (!floatEquality(
++          textAttributes.lineSpacing, oldProps->textAttributes.lineSpacing)) {
++    result["lineSpacing"] = std::isnan(textAttributes.lineSpacing)
++        ? folly::dynamic(nullptr)
++        : folly::dynamic(textAttributes.lineSpacing);
++  }
++
+   if (textAttributes.alignment != oldProps->textAttributes.alignment) {
+     result["textAlign"] = textAttributes.alignment.has_value()
+         ? toString(textAttributes.alignment.value())
+diff --git a/ReactCommon/react/renderer/textlayoutmanager/platform/ios/react/renderer/textlayoutmanager/RCTAttributedTextUtils.mm b/ReactCommon/react/renderer/textlayoutmanager/platform/ios/react/renderer/textlayoutmanager/RCTAttributedTextUtils.mm
+index 927c3c2..a74d4f8 100644
+--- a/ReactCommon/react/renderer/textlayoutmanager/platform/ios/react/renderer/textlayoutmanager/RCTAttributedTextUtils.mm
++++ b/ReactCommon/react/renderer/textlayoutmanager/platform/ios/react/renderer/textlayoutmanager/RCTAttributedTextUtils.mm
+@@ -251,6 +251,13 @@ inline static CGFloat RCTEffectiveFontSizeMultiplierFromTextAttributes(const Tex
+     isParagraphStyleUsed = YES;
+   }
+ 
++  // Fixed points, matching NSParagraphStyle.lineSpacing. Do not scale this
++  // again with the font multiplier or impose a first/last-line height.
++  if (std::isfinite(textAttributes.lineSpacing) && textAttributes.lineSpacing >= 0) {
++    paragraphStyle.lineSpacing = textAttributes.lineSpacing;
++    isParagraphStyleUsed = YES;
++  }
++
+   if (isParagraphStyleUsed) {
+     attributes[NSParagraphStyleAttributeName] = paragraphStyle;
+   }
+diff --git a/ReactCommon/react/renderer/attributedstring/tests/TextAttributesHashTest.cpp b/ReactCommon/react/renderer/attributedstring/tests/TextAttributesHashTest.cpp
+index 4a6f5c8..8784508 100644
+--- a/ReactCommon/react/renderer/attributedstring/tests/TextAttributesHashTest.cpp
++++ b/ReactCommon/react/renderer/attributedstring/tests/TextAttributesHashTest.cpp
+@@ -91,4 +91,41 @@ TEST(TextAttributesHashTest, identicalValuesInDifferentSlotsHashDifferently) {
+       std::hash<TextAttributes>{}(pressable));
+ }
+ 
++TEST(TextAttributesHashTest, lineSpacingDefaultsAndInheritance) {
++  TextAttributes parent;
++  EXPECT_TRUE(std::isnan(parent.lineSpacing));
++  parent.lineSpacing = 4;
++  parent.apply(TextAttributes{});
++  EXPECT_EQ(parent.lineSpacing, 4);
++
++  TextAttributes child;
++  child.lineSpacing = 0;
++  parent.apply(child);
++  EXPECT_EQ(parent.lineSpacing, 0);
++  child.lineSpacing = 6;
++  parent.apply(child);
++  EXPECT_EQ(parent.lineSpacing, 6);
++  for (Float invalid : {Float(-1), std::numeric_limits<Float>::infinity(),
++                        -std::numeric_limits<Float>::infinity(),
++                        std::numeric_limits<Float>::quiet_NaN()}) {
++    child.lineSpacing = invalid;
++    parent.apply(child);
++    EXPECT_EQ(parent.lineSpacing, 6);
++  }
++}
++
++TEST(TextAttributesHashTest, lineSpacingAffectsEqualityAndHash) {
++  TextAttributes baseline;
++  TextAttributes same;
++  EXPECT_EQ(baseline, same);
++  EXPECT_EQ(std::hash<TextAttributes>{}(baseline), std::hash<TextAttributes>{}(same));
++  TextAttributes spaced;
++  spaced.lineSpacing = 4;
++  EXPECT_FALSE(baseline == spaced);
++  EXPECT_NE(std::hash<TextAttributes>{}(baseline), std::hash<TextAttributes>{}(spaced));
++  same.lineSpacing = 4;
++  EXPECT_EQ(same, spaced);
++  EXPECT_EQ(std::hash<TextAttributes>{}(same), std::hash<TextAttributes>{}(spaced));
++}
++
+ } // namespace facebook::react

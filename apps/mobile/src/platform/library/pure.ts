@@ -1,3 +1,4 @@
+import { decodeEpubAnchor, encodeEpubAnchor, epubDestination } from '@shudeng/core/domain';
 /** 数据层纯函数：无 IO / 无 RN 依赖，便于单测（旧 locator、进度文案、旧对话清洗）。 */
 import type {
   BookFormat,
@@ -52,6 +53,33 @@ export function legacyPdfRects(value: unknown): StoredPdfRect[] | undefined {
   return pdfRectsFrom(value, 'w', 'h');
 }
 
+/** Read-only ordering metadata; keep native local fallback separate from whole-book progress. */
+export function annotationReadingOrder(value: unknown): { readonly progression?: number; readonly localProgression?: number; readonly position?: number } {
+  const candidates: Record<string, unknown>[] = [];
+  const visit = (input: unknown, depth = 0): void => {
+    if (depth > 8) return;
+    if (typeof input === 'string') {
+      try { visit(JSON.parse(input), depth + 1); } catch { /* Plain href/CFI is not ordering metadata. */ }
+      return;
+    }
+    if (!isRecord(input)) return;
+    candidates.push(input);
+    visit(input.locations, depth + 1);
+    visit(input.locator, depth + 1);
+    visit(input.readium, depth + 1);
+    if (isRecord(input.legacy)) visit(input.legacy.raw, depth + 1);
+    visit(input.cfi, depth + 1);
+  };
+  visit(value);
+  const validProgress = (input: unknown): input is number => typeof input === 'number' && Number.isFinite(input) && input >= 0 && input <= 1;
+  const validPosition = (input: unknown): input is number => typeof input === 'number' && Number.isFinite(input) && input >= 0;
+  const progression = candidates.map(candidate => candidate.totalProgression).find(validProgress)
+    ?? candidates.filter(candidate => candidate.type === 'epub').map(candidate => candidate.fraction).find(validProgress);
+  const localProgression = candidates.map(candidate => candidate.progression).find(validProgress);
+  const position = candidates.map(candidate => candidate.position).find(validPosition);
+  return { ...(progression === undefined ? {} : { progression }), ...(localProgression === undefined ? {} : { localProgression }), ...(position === undefined ? {} : { position }) };
+}
+
 /** 新写入的 ReaderLocator JSON（reader-web 与 saveReaderAnnotation 产生的结构）。 */
 export function storedLocatorFromUnknown(value: unknown): StoredReaderLocator | null {
   if (!isRecord(value)) return null;
@@ -59,13 +87,9 @@ export function storedLocatorFromUnknown(value: unknown): StoredReaderLocator | 
     const rects = storedPdfRects(value.rects);
     return { type: 'pdf', page: value.page, ...(rects ? { rects } : {}) };
   }
-  if (value.type === 'epub' && typeof value.cfi === 'string') {
-    return {
-      type: 'epub',
-      cfi: value.cfi,
-      ...(typeof value.href === 'string' ? { href: value.href } : {}),
-      ...(typeof value.chapter === 'string' ? { chapter: value.chapter } : {}),
-    };
+  if (value.type === 'epub') {
+    const location = decodeEpubAnchor(value);
+    if (location) return { type: 'epub', ...location, cfi: epubDestination(location) };
   }
   return null;
 }
@@ -82,6 +106,10 @@ export function parseStoredLocatorJson(raw: string | null): StoredReaderLocator 
 /** 旧 Readium locator → reader-web / PDF 页可用的 ReaderLocator。 */
 export function readerLocatorFromLegacy(raw: unknown, format: BookFormat): StoredReaderLocator | null {
   if (typeof raw !== 'string' || raw.trim().length === 0) return null;
+  if (format === 'EPUB') {
+    const location = decodeEpubAnchor(raw);
+    return location ? { type: 'epub', ...location, cfi: epubDestination(location) } : null;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -103,9 +131,6 @@ export function readerLocatorFromLegacy(raw: unknown, format: BookFormat): Store
       : Number(fromHref ?? fromFragment);
     return Number.isInteger(page) && page >= 1 ? { type: 'pdf', page } : null;
   }
-  const cfi = locations && typeof locations.cfi === 'string' ? locations.cfi : undefined;
-  if (cfi) return { type: 'epub', cfi, ...(href ? { href } : {}), ...(title ? { chapter: title } : {}) };
-  if (href) return { type: 'epub', cfi: href, href, ...(title ? { chapter: title } : {}) };
   return null;
 }
 
@@ -234,17 +259,7 @@ export function anchorJsonForSelection(input: SaveReaderAnnotationInput): string
       },
     });
   }
-  if (input.locator.cfi) {
-    return JSON.stringify({
-      ...base,
-      kind: 'cfi',
-      locator: { cfi: input.locator.cfi, ...(input.locator.href ? { href: input.locator.href } : {}) },
-    });
-  }
-  return JSON.stringify({
-    ...base,
-    kind: 'readium',
-    locator: { href: input.locator.href ?? '' },
-    readium: { href: input.locator.href ?? '' },
-  });
+  const location = decodeEpubAnchor(input.locator);
+  if (!location) throw new Error('这条标注没有可用的原文位置');
+  return encodeEpubAnchor(location);
 }

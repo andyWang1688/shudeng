@@ -1,37 +1,18 @@
 /**
- * 阅读进度：平台内建 reading_progress 表（不改共享 schema）；首次读到旧书时
+ * 阅读进度：版本迁移管理 reading_progress 表；首次读到旧书时
  * 把 library.json 的 locatorJSON 回填成进度（幂等）。供书架「继续阅读」与阅读器恢复。
  */
 import type { SQLiteValue } from '@shudeng/core/db';
 import { getDataLayer, type ShudengDataLayer } from '../db';
 import { legacyProgression, formatOf, isRecord, parseStoredLocatorJson, percentOf, readerLocatorFromLegacy } from './pure';
 import { parseLegacyJSON } from './legacyMigration';
+import { legacyBookDataDeletedKey } from './bookFileOperations';
 import type { BookProgress, StoredReaderLocator } from './types';
 
-const PROGRESS_TABLE = `CREATE TABLE IF NOT EXISTS reading_progress (
-  book_id TEXT PRIMARY KEY NOT NULL REFERENCES books(id) ON DELETE CASCADE,
-  locator_json TEXT NOT NULL,
-  percent REAL NOT NULL,
-  page INTEGER,
-  chapter TEXT,
-  updated_at INTEGER NOT NULL
-)`;
-let progressTablePromise: Promise<ShudengDataLayer> | null = null;
-let backfilled = false;
+const backfills = new WeakMap<ShudengDataLayer, Promise<void>>();
 
-export async function ensureProgressTable(): Promise<ShudengDataLayer> {
-  if (!progressTablePromise) {
-    progressTablePromise = (async () => {
-      const layer = await getDataLayer();
-      await layer.driver.exec(PROGRESS_TABLE);
-      return layer;
-    })().catch((error: unknown) => {
-      progressTablePromise = null;
-      throw error;
-    });
-  }
-  return progressTablePromise;
-}
+/** Compatibility entry point; all DDL belongs to the versioned core migrations. */
+export function ensureProgressTable(): Promise<ShudengDataLayer> { return getDataLayer(); }
 
 function rowToProgress(row: Record<string, SQLiteValue>): BookProgress | null {
   const locator = parseStoredLocatorJson(typeof row.locator_json === 'string' ? row.locator_json : null);
@@ -48,26 +29,33 @@ function rowToProgress(row: Record<string, SQLiteValue>): BookProgress | null {
 
 /** 首次读到旧书时，把 library.json 的 locatorJSON 变成进度（幂等；迁移标记已存在也能补）。 */
 async function backfillLegacyProgress(layer: ShudengDataLayer): Promise<void> {
-  if (backfilled) return;
-  backfilled = true;
+  const pending = backfills.get(layer);
+  if (pending) return pending;
+  const operation = performLegacyBackfill(layer).catch(error => {
+    backfills.delete(layer);
+    throw error;
+  });
+  backfills.set(layer, operation);
+  return operation;
+}
+
+async function performLegacyBackfill(layer: ShudengDataLayer): Promise<void> {
   const library = parseLegacyJSON('library.json');
   if (!Array.isArray(library)) return;
   for (const entry of library) {
     if (!isRecord(entry)) continue;
     const bookId = typeof entry.id === 'string' ? entry.id : null;
     if (!bookId) continue;
-    const existing = await layer.driver.all<{ book_id: string }>(
-      'SELECT book_id FROM reading_progress WHERE book_id = ? LIMIT 1',
-      [bookId],
-    );
-    if (existing.length > 0) continue;
     const format = formatOf(entry.format);
     const locator = readerLocatorFromLegacy(entry.locatorJSON, format);
     if (!locator) continue;
     const percent = legacyProgression(entry.locatorJSON);
     await layer.driver.run(
-      'INSERT OR IGNORE INTO reading_progress (book_id, locator_json, percent, page, chapter, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [bookId, JSON.stringify(locator), percent, locator.type === 'pdf' ? locator.page : null, null, Date.now()],
+      `INSERT OR IGNORE INTO reading_progress (book_id, locator_json, percent, page, chapter, updated_at)
+       SELECT id, ?, ?, ?, ?, ? FROM books WHERE id = ?
+         AND NOT EXISTS (SELECT 1 FROM book_file_operations WHERE id = books.id)
+         AND NOT EXISTS (SELECT 1 FROM app_preferences WHERE key = ?)`,
+      [JSON.stringify(locator), percent, locator.type === 'pdf' ? locator.page : null, null, Date.now(), bookId, legacyBookDataDeletedKey(bookId)],
     );
   }
 }

@@ -44,7 +44,7 @@ let reader: Reader | null = null
 let currentFormat: 'epub' | 'pdf' | null = null
 let currentTitle = ''
 let currentTheme: ReaderTheme = 'light'
-let currentFontSize = 18
+let currentFontSize = 18.5
 let currentFlow: ReaderFlow = 'paginated'
 let totalPages = 0
 
@@ -88,6 +88,7 @@ function decodeBase64(input: string): Uint8Array {
 }
 
 function resetReader(): void {
+  epubReader()?.destroy()
   reader = null
   currentFormat = null
   currentTitle = ''
@@ -114,18 +115,16 @@ async function open(payload: OpenPayload): Promise<void> {
     if (payload.format === 'epub') {
       const epub = new EpubReader(readerEl, onProgress)
       reader = epub
-      const epubBytes = payload.dataBase64 ? decodeBase64(payload.dataBase64) : null
-      const epubSource = epubBytes
+      epub.setSelectionActionsEnabled(payload.selectionActionsEnabled ?? true)
+      const epubBytes = !payload.archive && payload.dataBase64 ? decodeBase64(payload.dataBase64) : null
+      const epubSource = payload.archive ?? (epubBytes
         ? new File(
             [epubBytes.buffer.slice(epubBytes.byteOffset, epubBytes.byteOffset + epubBytes.byteLength) as ArrayBuffer],
             `${currentTitle}.epub`,
             { type: payload.mimeType ?? 'application/epub+zip' },
           )
-        : payload.url
-      await epub.open(epubSource, currentTitle)
-      await epub.setTheme(currentTheme)
-      await epub.setFontSize(currentFontSize)
-      await epub.setFlow(currentFlow)
+        : payload.url)
+      await epub.open(epubSource, currentTitle, { theme: currentTheme, fontSize: currentFontSize, flow: currentFlow })
       if (payload.initialLocation) await epub.goTo(payload.initialLocation)
     } else {
       if (!PdfReaderClassRef) throw new Error('此构建不包含 PDF 阅读器')
@@ -136,12 +135,14 @@ async function open(payload: OpenPayload): Promise<void> {
       await pdf.setTheme(currentTheme)
     }
     window.__readerReady = true
+    if (payload.format === 'epub') send({ type: 'reader:ready', payload: { format: 'epub', title: currentTitle, flow: currentFlow } })
     updateMeta()
     send({
       type: 'reader:state',
       payload: { format: payload.format, ready: true, title: currentTitle },
     })
   } catch (error) {
+    resetReader()
     window.__readerReady = true
     const message = error instanceof Error ? error.message : String(error)
     metaEl.textContent = '打开失败'
@@ -178,6 +179,12 @@ async function dispatch(message: HostToReader): Promise<void> {
           await pdfReader()!.goToPage(page)
         }
         break
+      case 'reader:navigate': {
+        const epub = epubReader()
+        const receipt = epub ? await epub.navigateReference(message.payload) : { operationId: message.payload.operationId, status: 'failed' as const, message: '阅读器尚未准备好' }
+        send({ type: 'reader:navigated', payload: receipt })
+        break
+      }
       case 'reader:next':
         await reader?.next()
         break
@@ -196,6 +203,18 @@ async function dispatch(message: HostToReader): Promise<void> {
       case 'reader:selection:clear':
         reader?.clearSelection()
         break
+      case 'reader:selection:actions':
+        epubReader()?.setSelectionActionsEnabled(message.payload.enabled)
+        break
+      case 'reader:bookmark-context':
+        epubReader()?.bookmarkContext(message.payload.bookmarks, message.payload.requestId)
+        break
+      case 'reader:contents':
+        send({ type: 'reader:contents', payload: { items: epubReader()?.contents() ?? [] } })
+        break
+      case 'reader:search':
+        if (epubReader()) await epubReader()!.search(message.payload.query, message.payload.requestId)
+        break
     }
     updateMeta()
   } catch (error) {
@@ -203,8 +222,11 @@ async function dispatch(message: HostToReader): Promise<void> {
   }
 }
 
+let commands = Promise.resolve()
 bridge.onMessage((message) => {
-  void dispatch(message)
+  // Searching is cancellable and may run while the user turns a page; mutations stay ordered.
+  if (message.type === 'reader:search') void dispatch(message)
+  else commands = commands.then(() => dispatch(message))
 })
 
 themeButton.addEventListener('click', () => {
@@ -226,8 +248,45 @@ declare global {
   interface Window {
     __readerHarness?: Record<string, unknown>
     __readerReady?: boolean
+    __readerClose?: () => void
+    __readerNative?: {
+      setCurl: (enabled: boolean) => Promise<void>
+      page: () => Promise<unknown>
+      begin: () => Promise<unknown>
+      step: (direction: number) => Promise<unknown>
+      restore: (page: import('./epub-reader').NativePage) => Promise<unknown>
+      finish: (commit: boolean) => Promise<unknown>
+      abort: (page?: import('./epub-reader').NativePage) => Promise<void>
+      navigate: (command: import('./protocol').NavigationCommand) => Promise<import('./protocol').NavigationReceipt>
+    }
   }
 }
+
+function nativeCommand<T>(operation: (epub: EpubReader) => Promise<T> | T): Promise<T> {
+  const result = commands.then(() => {
+    const epub = epubReader()
+    if (!epub) throw new Error('EPUB 阅读器尚未准备好')
+    return operation(epub)
+  })
+  commands = result.then(() => {}, () => {})
+  return result
+}
+
+window.__readerNative = {
+  setCurl: enabled => nativeCommand(epub => epub.setNativeCurl(enabled)),
+  page: () => nativeCommand(epub => epub.nativePage()),
+  begin: () => nativeCommand(epub => epub.beginNativePreparation()),
+  step: direction => nativeCommand(epub => epub.nativeStep(direction)),
+  restore: page => nativeCommand(epub => epub.nativeRestore(page)),
+  finish: commit => nativeCommand(epub => epub.finishNativePreparation(commit)),
+  abort: page => nativeCommand(epub => epub.abortNativePreparation(page)),
+  navigate: command => nativeCommand(epub => epub.navigateReference(command)),
+}
+window.__readerClose = resetReader
+window.addEventListener('pagehide', resetReader)
+// WKNavigationDelegate.didFinish can run before this module has executed.
+// Opening a publication is safe only after both host command surfaces exist.
+send({ type: 'reader:hostReady' })
 
 window.__readerHarness = {
   open,

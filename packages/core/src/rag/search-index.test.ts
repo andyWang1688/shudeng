@@ -84,10 +84,10 @@ describe('SQLite RAG 索引（迁移/FTS5/向量/混合检索）', () => {
     const driver = createNodeSQLiteDriver();
     setups.push({ driver, index: new SqliteSearchIndex(driver, new KeywordEmbeddingProvider()), embedding: new KeywordEmbeddingProvider(), chunks: [] });
     const first = await migrate(driver);
-    expect(first.applied).toEqual(['0001_initial', '0002_rag']);
+    expect(first.applied).toEqual(['0001_initial', '0002_rag', '0003_conversations_reader_preferences', '0004_book_file_operations', '0005_rag_keyset_indexes']);
     const second = await migrate(driver);
     expect(second.applied).toEqual([]);
-    expect(second.skipped).toEqual(['0001_initial', '0002_rag']);
+    expect(second.skipped).toEqual(['0001_initial', '0002_rag', '0003_conversations_reader_preferences', '0004_book_file_operations', '0005_rag_keyset_indexes']);
 
     const rows = await driver.all<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name",
@@ -111,6 +111,38 @@ describe('SQLite RAG 索引（迁移/FTS5/向量/混合检索）', () => {
     const multi = await index.search('书页 照亮', { bookId: 'book-1', mode: 'fts' });
     expect(multi[0]!.chunk.text).toContain('灯把书页照亮');
     expect(multi.some((hit) => hit.chunk.text.includes('书页记录'))).toBe(false);
+  });
+
+  it('missing optional model still commits real FTS and returns verifiable original text without fake vectors', async () => {
+    const { driver } = await setupIndex();
+    const index = new SqliteSearchIndex(driver, null);
+    const epub: RagBook = {
+      book: { id: 'imported', title: '新书', format: 'epub', sourceHash: 'hash' },
+      chapters: [{ ordinal: 1, title: '书页', href: 'Text/ch1.xhtml', text: '新书原文写着：灯照亮书页。' }],
+    };
+    const chunks = new ParagraphTextChunker().chunk(epub);
+    await index.indexBook(epub, chunks, []);
+    expect(await index.stats('imported')).toMatchObject({ chunkCount: chunks.length, vectorCount: 0, models: [] });
+    const hits = await index.search('灯', { bookId: 'imported' });
+    expect(hits[0]?.chunk.text).toContain('灯照亮书页');
+    expect(hits[0]?.sources).toEqual(['fts']);
+    expect(hits[0]?.chunk.locator).toMatchObject({ href: 'Text/ch1.xhtml', text: { highlight: chunks[0]?.text } });
+    expect(await index.search('灯', { bookId: 'imported', mode: 'vector' })).toEqual([]);
+    await index.deleteBook('imported');
+    expect(await index.search('灯', { bookId: 'imported' })).toEqual([]);
+  });
+
+  it('an explicit optional-model failure policy preserves FTS, while vector-only errors and cancellation propagate', async () => {
+    const { driver } = await setupIndex();
+    const failing: EmbeddingProvider = { modelId: 'missing-runtime', dimension: 4, async embed() { throw new Error('runtime unavailable'); } };
+    const failures: unknown[] = [];
+    const index = new SqliteSearchIndex(driver, failing, { onVectorError: (error) => { failures.push(error); } });
+    expect((await index.search('灯', { bookId: 'book-1' }))[0]?.sources).toEqual(['fts']);
+    expect(failures).toHaveLength(1);
+    await expect(index.search('灯', { bookId: 'book-1', mode: 'vector' })).rejects.toThrow('runtime unavailable');
+    const signal = { aborted: false };
+    const cancelling: EmbeddingProvider = { modelId: 'cancel-test', dimension: 4, async embed() { signal.aborted = true; throw new Error('stopped'); } };
+    await expect(new SqliteSearchIndex(driver, cancelling, { onVectorError: () => {} }).search('灯', { bookId: 'book-1', signal })).rejects.toMatchObject({ name: 'AbortError' });
   });
 
   it('向量检索按 cosine 排序，并隔离 bookId', async () => {

@@ -1,0 +1,41 @@
+diff --git a/build/react-navigation/native-stack/types.d.ts b/build/react-navigation/native-stack/types.d.ts
+--- a/build/react-navigation/native-stack/types.d.ts
++++ b/build/react-navigation/native-stack/types.d.ts
+@@ -660,6 +660,17 @@
+      */
+     sheetAllowedDetents?: number[] | 'fitToContents';
+     /**
++     * iOS reference height in points for fractional form-sheet detents.
++     * Positive finite values replace the maximum-detent reference; values are
++     * clamped to the available maximum. A detent of 1 always uses the maximum.
++     * Unset, zero, negative or non-finite values preserve the default behavior.
++     * Has no effect on fitToContents or Android.
++     *
++     * @platform ios
++     */
++    sheetDetentReferenceHeight?: number | undefined;
++
++    /**
+      * Integer value describing elevation of the sheet, impacting shadow on the top edge of the sheet.
+      *
+      * Not dynamic - changing it after the component is rendered won't have an effect.
+diff --git a/build/react-navigation/native-stack/views/NativeStackView.native.js b/build/react-navigation/native-stack/views/NativeStackView.native.js
+--- a/build/react-navigation/native-stack/views/NativeStackView.native.js
++++ b/build/react-navigation/native-stack/views/NativeStackView.native.js
+@@ -104,7 +104,7 @@
+     let { animation, animationMatchesGesture, presentation = isPresentationModal ? 'modal' : 'card', fullScreenGestureEnabled } = options;
+     const { animationDuration, animationTypeForReplace = 'push', fullScreenGestureShadowEnabled = true, gestureEnabled, gestureDirection = presentation === 'card' ? 'horizontal' : 'vertical', gestureResponseDistance, header, headerBackButtonMenuEnabled, headerShown, headerBackground, headerTransparent, autoHideHomeIndicator, keyboardHandlingEnabled, navigationBarColor, navigationBarTranslucent, navigationBarHidden, orientation, sheetAllowedDetents = [
+         1.0
+-    ], sheetLargestUndimmedDetentIndex = -1, sheetGrabberVisible = false, sheetCornerRadius = -1.0, sheetElevation = 24, sheetExpandsWhenScrolledToEdge = true, sheetInitialDetentIndex = 0, sheetShouldOverflowTopInset = false, sheetResizeAnimationEnabled = true, statusBarAnimation, statusBarHidden, statusBarStyle, statusBarTranslucent, statusBarBackgroundColor, unstable_sheetFooter, scrollEdgeEffects, contentStyle, unstable_nativeProps } = options;
++    ], sheetDetentReferenceHeight = 0, sheetLargestUndimmedDetentIndex = -1, sheetGrabberVisible = false, sheetCornerRadius = -1.0, sheetElevation = 24, sheetExpandsWhenScrolledToEdge = true, sheetInitialDetentIndex = 0, sheetShouldOverflowTopInset = false, sheetResizeAnimationEnabled = true, statusBarAnimation, statusBarHidden, statusBarStyle, statusBarTranslucent, statusBarBackgroundColor, unstable_sheetFooter, scrollEdgeEffects, contentStyle, unstable_nativeProps } = options;
+     const screenNativeProps = unstable_nativeProps;
+     const routeNode = (0, _Route.useRouteNode)();
+     (0, _useDeprecated.useWarnOnce)(`Route "${route.name}" uses presentation "${options.presentation}" but is the first screen in its native stack, so it is rendered as a card. Add unstable_settings.anchor to the stack layout to place a non-modal screen before this route.`, __DEV__ && index === 0 && isPresentationModal && options.presentation != null, routeNode ? `${routeNode.contextKey}:${route.name}` : route.name);
+@@ -267,6 +267,7 @@
+             stackAnimation: animation,
+             screenOrientation: orientation,
+             sheetAllowedDetents: sheetAllowedDetents,
++            sheetDetentReferenceHeight: sheetDetentReferenceHeight,
+             sheetLargestUndimmedDetentIndex: sheetLargestUndimmedDetentIndex,
+             sheetGrabberVisible: sheetGrabberVisible,
+             sheetInitialDetentIndex: sheetInitialDetentIndex,

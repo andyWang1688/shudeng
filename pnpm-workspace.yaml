@@ -1,5 +1,15 @@
 packages:
   - packages/*
   - apps/*
+packageExtensions:
+  onnxruntime-react-native@1.24.3:
+    dependencies:
+      # app.plugin.js requires this directly, but the upstream manifest omits it.
+      '@expo/config-plugins': 58.0.11
 patchedDependencies:
+  expo-router@58.0.29: patches/expo-router@58.0.29.patch
+  react-native-screens@4.30.1: patches/react-native-screens@4.30.1.patch
+  foliate-js@1.0.1: patches/foliate-js@1.0.1.patch
   onnxruntime-react-native@1.24.3: patches/onnxruntime-react-native@1.24.3.patch
+  expo-symbols@58.0.4: patches/expo-symbols@58.0.4.patch
+  react-native@0.88.1: patches/react-native@0.88.1.patch

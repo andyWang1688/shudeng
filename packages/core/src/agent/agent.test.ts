@@ -35,13 +35,99 @@ function types(events: AgentEvent[]): string[] {
 }
 
 describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
+  it('summarizes old context with the library middleware without leaking its internal stream', async () => {
+    const model = createScriptedModel([
+      { chunks: [{ text: '这是较早对话的摘要。' }] },
+      { chunks: [{ text: '{"answer":"当前回答","citations":[]}' }] },
+    ]);
+    const history = Array.from({ length: 5 }, (_, index) => ({
+      question: '旧问题' + index + '甲'.repeat(160),
+      answer: '旧回答' + index + '乙'.repeat(160),
+    }));
+    const session = runBookAgent({
+      model,
+      source: source(),
+      book,
+      question: '新问题',
+      history,
+      contextWindowTokens: 1000,
+    });
+    const events = await collect(session);
+    expect(events.filter((event) => event.type === 'contextCompacted')).toHaveLength(1);
+    const text = events.flatMap((event) => (event.type === 'textDelta' ? [event.delta] : [])).join('');
+    expect(text).not.toContain('这是较早对话的摘要');
+    expect((await session.result)?.answer).toBe('当前回答');
+    expect((await session.result)?.contextSummary).toContain('这是较早对话的摘要');
+  });
+
+  it('executes only injected external tools and never turns their text into book citations', async () => {
+    const model = createScriptedModel([
+      { chunks: [{ toolCalls: [{ id: 'mcp1', name: 'mcp_lookup', args: { query: 'test' } }] }] },
+      { chunks: [{ text: '{"answer":"工具结果","citations":[{"id":"E1","quote":"外部内容"}]}' }] },
+    ]);
+    let called;
+    const session = runBookAgent({
+      model,
+      source: source(),
+      book,
+      question: '问题',
+      extraTools: [
+        {
+          name: 'mcp_lookup',
+          description: 'lookup',
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+          invoke: async (args, signal) => {
+            called = args;
+            expect(signal?.aborted).toBe(false);
+            return '外部内容';
+          },
+        },
+      ],
+    });
+    await collect(session);
+    expect(called).toEqual({ query: 'test' });
+    expect((await session.result)?.citations).toEqual([]);
+  });
+  it('reports provider token usage and preserves an unknown context limit', async () => {
+    const model = createScriptedModel([
+      {
+        chunks: [
+          {
+            text: '{"answer":"回答","citations":[]}',
+            usage: { input_tokens: 123, output_tokens: 14, total_tokens: 137 },
+          },
+        ],
+      },
+    ]);
+    const session = runBookAgent({
+      model,
+      source: source(),
+      book,
+      question: '问题',
+      contextWindowTokens: 8192,
+    });
+    const events = await collect(session);
+    expect(events.filter((event) => event.type === 'contextUsage')).toEqual([
+      { type: 'contextUsage', usage: { inputTokens: 123, outputTokens: 14, contextWindowTokens: 8192 } },
+    ]);
+    expect((await session.result)?.contextUsage).toEqual({
+      inputTokens: 123,
+      outputTokens: 14,
+      contextWindowTokens: 8192,
+    });
+    const unknown = runBookAgent({
+      model: createScriptedModel([{ chunks: [{ text: '{"answer":"回答","citations":[]}' }] }]),
+      source: source(),
+      book,
+      question: '问题',
+    });
+    expect((await collect(unknown)).some((event) => event.type === 'contextUsage')).toBe(false);
+  });
   it('question → 工具 → 引用核对 → answer 全链路事件', async () => {
     const model = createScriptedModel([
       { chunks: [{ toolCalls: [{ id: 'call_1', name: 'search_book', args: { query: '灯' } }] }] },
       {
-        chunks: [
-          { text: '{"answer":"灯把书页照亮。","citations":[{"id":"E1","quote":"灯把书页照亮"}]}' },
-        ],
+        chunks: [{ text: '{"answer":"灯把书页照亮。","citations":[{"id":"E1","quote":"灯把书页照亮"}]}' }],
       },
     ]);
     const session = runBookAgent({ model, source: source(), book, question: '灯是什么意思' });
@@ -103,9 +189,7 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
   it('没有原生 reasoning 时不伪造思考（prompt 不再要求 preamble）', async () => {
     const model = createScriptedModel([
       {
-        chunks: [
-          { toolCalls: [{ id: 'call_1', name: 'search_book', args: { query: '灯' } }] },
-        ],
+        chunks: [{ toolCalls: [{ id: 'call_1', name: 'search_book', args: { query: '灯' } }] }],
       },
       { chunks: [{ text: '{"answer":"灯把书页照亮。","citations":[]}' }] },
     ]);
@@ -171,11 +255,7 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
   it('取消运行：事件流以 cancelled 结束，没有 completed', async () => {
     const model = createScriptedModel([
       {
-        chunks: [
-          { reasoning: '开始思考。' },
-          { text: '思考中…', delayMs: 500 },
-          { text: '这段不应出现。' },
-        ],
+        chunks: [{ reasoning: '开始思考。' }, { text: '思考中…', delayMs: 500 }, { text: '这段不应出现。' }],
       },
     ]);
     const session = runBookAgent({ model, source: source(), book, question: '问' });

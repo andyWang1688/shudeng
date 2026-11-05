@@ -342,7 +342,7 @@ describe('migrateSwiftLibrary：旧 AI 问答/引用/历史', () => {
     const q1 = 'B305A2A1-4BF2-4C8C-990A-CB07A46F7895';
     const q1Ts = Math.round((815024254.375372 + 978307200) * 1000);
     const messages = result.tables.messages;
-    expect(messages).toHaveLength(7);
+    expect(messages).toHaveLength(8);
     const user = messages.find((message) => message.id === `legacy-q:${q1}:user`)!;
     const assistant = messages.find((message) => message.id === `legacy-q:${q1}:assistant`)!;
     expect(user).toMatchObject({ conversationId: q1, role: 'user', content: '这句话里的灯指什么？', createdAt: q1Ts });
@@ -350,7 +350,7 @@ describe('migrateSwiftLibrary：旧 AI 问答/引用/历史', () => {
 
     // 历史轮次：新 id 映射；和正式记录重复的 id 跳过
     expect(messages.some((message) => message.id.startsWith('legacy-q:U0-HISTORY'))).toBe(true);
-    expect(messages.some((message) => message.id === 'legacy-q:U2-INCOMPLETE-4BF2-4C8C-990A-CB07A46F7895:assistant')).toBe(false);
+    expect(messages.some((message) => message.id === 'legacy-q:U2-INCOMPLETE-4BF2-4C8C-990A-CB07A46F7895:assistant')).toBe(true);
     expect(result.stats.skipped.historyDuplicates).toBe(1);
     expect(result.warningCounts['history-duplicate-skipped']).toBe(1);
 
@@ -378,7 +378,7 @@ describe('migrateSwiftLibrary：旧 AI 问答/引用/历史', () => {
     expect(result.unmapped.agentTranscripts).toHaveLength(1);
     expect(result.unmapped.agentTranscripts[0]).toMatchObject({ questionId: q1 });
     expect(result.unmapped.questionExtras.some((item) => item.questionId === q1)).toBe(true);
-    expect(result.stats.migrated.messages).toBe(7);
+    expect(result.stats.migrated.messages).toBe(8);
     expect(result.stats.migrated.citations).toBe(3);
   });
 

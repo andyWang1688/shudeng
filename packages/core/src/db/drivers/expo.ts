@@ -24,8 +24,8 @@ export interface ExpoSQLiteDatabaseLike {
   ): Promise<{ changes?: number; lastInsertRowId?: number | bigint }>;
   getAllAsync<T = unknown>(source: string, ...params: SQLiteValue[]): Promise<T[]>;
   getFirstAsync<T = unknown>(source: string, ...params: SQLiteValue[]): Promise<T | null>;
-  withExclusiveTransactionAsync?<R>(task: (txn: ExpoSQLiteDatabaseLike) => Promise<R>): Promise<R>;
-  withTransactionAsync?<R>(task: () => Promise<R>): Promise<R>;
+  withExclusiveTransactionAsync?(task: (txn: ExpoSQLiteDatabaseLike) => Promise<void>): Promise<void>;
+  withTransactionAsync?(task: () => Promise<void>): Promise<void>;
 }
 
 class ExpoSQLiteDriver implements SQLiteDriver {
@@ -87,7 +87,13 @@ class ExpoSQLiteDriver implements SQLiteDriver {
     if (this.depth > 0) return fn(this);
     return this.exclusive(async () => {
       if (this.db.withExclusiveTransactionAsync) {
-        return this.db.withExclusiveTransactionAsync((txn) => fn(new ExpoSQLiteDriver(txn)));
+        // Expo resolves with void, even when its callback returns a value. Preserve
+        // the core transaction result separately and expose it only after commit.
+        let result!: R;
+        await this.db.withExclusiveTransactionAsync(async (txn) => {
+          result = await fn(new ExpoSQLiteDriver(txn));
+        });
+        return result;
       }
       if (this.db.withTransactionAsync) {
         let result!: R;

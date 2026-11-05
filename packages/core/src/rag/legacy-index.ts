@@ -25,6 +25,7 @@ export interface LegacySearchOptions {
   vectorCandidateLimit?: number;
   /** RRF 常数，默认 60。 */
   rrfK?: number;
+  onVectorError?: (error: unknown) => void | Promise<void>;
 }
 
 export interface LegacySearchHit {
@@ -120,12 +121,14 @@ export class LegacyIndexSearch {
   private readonly embedding: EmbeddingProvider | null;
   private readonly vectorCandidateLimit: number;
   private readonly rrfK: number;
+  private readonly onVectorError: LegacySearchOptions['onVectorError'];
 
   constructor(driver: SQLiteDriver, embedding: EmbeddingProvider | null, options: LegacySearchOptions = {}) {
     this.driver = driver;
     this.embedding = embedding;
     this.vectorCandidateLimit = options.vectorCandidateLimit ?? 200;
     this.rrfK = options.rrfK ?? 60;
+    this.onVectorError = options.onVectorError;
   }
 
   /** 是否有该书的索引（迁移/可用性检查）。 */
@@ -162,11 +165,17 @@ export class LegacyIndexSearch {
     }
     assertNotAborted(signal);
 
-    const [queryVector] = this.embedding
-      ? await this.embedding.embed([trimmed], signal ? { signal } : {})
-      : [];
+    let queryVector: Float32Array | undefined;
+    if (this.embedding) {
+      try { [queryVector] = await this.embedding.embed([trimmed], signal ? { signal } : {}); }
+      catch (error) {
+        assertNotAborted(signal);
+        if (!this.onVectorError) throw error;
+        await this.onVectorError(error);
+      }
+    }
     assertNotAborted(signal);
-    const vectorRows = this.embedding
+    const vectorRows = queryVector
       ? await this.driver.all<Row>(
       `SELECT e.fragment_id AS id, e.fragment_id AS fragment_id, e.piece AS piece, e.original AS original,
               e.vector AS vector, f.chapter AS chapter, f.ordinal AS ordinal, f.locator AS locator,

@@ -1,3 +1,6 @@
+import type { ReadiumLocator } from '@shudeng/core/domain'
+import type { EpubArchiveDescriptor } from '@shudeng/core'
+
 export type ReaderFormat = 'epub' | 'pdf'
 export type ReaderTheme = 'light' | 'dark'
 export type ReaderFlow = 'paginated' | 'scrolled'
@@ -6,6 +9,7 @@ export type ReaderFlow = 'paginated' | 'scrolled'
 export interface EpubLocator {
   type: 'epub'
   cfi: string
+  selection?: ReadiumLocator
   href?: string
   chapter?: string
   fraction?: number
@@ -33,12 +37,15 @@ export interface OpenPayload {
   url: string
   /** 原生 WebView 打包场景：直接传 fixture 的 base64 内容，避免 file:// 资源加载。 */
   dataBase64?: string
+  /** Opaque, native-owned resource session. Never a local path or archive bytes. */
+  archive?: EpubArchiveDescriptor
   mimeType?: string
   title?: string
   initialLocation?: string
   theme?: ReaderTheme
   fontSize?: number
   flow?: ReaderFlow
+  selectionActionsEnabled?: boolean
 }
 
 export interface SelectionPayload {
@@ -71,25 +78,43 @@ export interface AnnotationPayload {
   page?: number
 }
 
+export interface ContentsItem { label: string; href: string; depth: number }
+export interface SearchResult { label: string; excerpt: string; locator: string }
+export interface NavigationCommand { operationId: string; locator: string; citation: { quote: string; ordinal: number; id: string } | null }
+export interface NavigationReceipt { operationId: string; status: 'arrived' | 'failed'; message?: string; progress?: ProgressPayload }
+
 export type HostToReader =
   | { type: 'reader:open'; payload: OpenPayload }
   | { type: 'reader:theme'; payload: { theme: ReaderTheme } }
   | { type: 'reader:fontSize'; payload: { fontSize: number } }
   | { type: 'reader:flow'; payload: { flow: ReaderFlow } }
   | { type: 'reader:goTo'; payload: { locator: string } }
+  | { type: 'reader:navigate'; payload: NavigationCommand }
   | { type: 'reader:next' }
   | { type: 'reader:prev' }
   | { type: 'reader:zoom'; payload: { scale: number } }
   | { type: 'reader:annotation:add'; payload: AnnotationPayload }
   | { type: 'reader:annotation:remove'; payload: { id: string } }
   | { type: 'reader:selection:clear' }
+  | { type: 'reader:selection:actions'; payload: { enabled: boolean } }
+  | { type: 'reader:bookmark-context'; payload: { requestId: number; bookmarks: ReadonlyArray<{ id: string; locator: EpubLocator }> } }
+  | { type: 'reader:contents' }
+  | { type: 'reader:search'; payload: { query: string; requestId: number } }
 
 export type ReaderToHost =
+  | { type: 'reader:navigated'; payload: NavigationReceipt }
+  | { type: 'reader:bookmark-context'; payload: { requestId: number; locator: EpubLocator | null; quote: string; visibleIds: string[] } }
+  | { type: 'reader:hostReady' }
+  | { type: 'reader:tap' }
+  | { type: 'reader:turnRequested'; payload: { direction: -1 | 1 } }
   | { type: 'reader:ready'; payload: { format: ReaderFormat; title: string; totalPages?: number; flow: ReaderFlow } }
   | { type: 'reader:selection'; payload: SelectionPayload }
+  | { type: 'reader:selectionCleared' }
   | { type: 'reader:progress'; payload: ProgressPayload }
   | { type: 'reader:annotation'; payload: AnnotationPayload }
   | { type: 'reader:annotationSelected'; payload: AnnotationPayload }
+  | { type: 'reader:contents'; payload: { items: ContentsItem[] } }
+  | { type: 'reader:searchResults'; payload: { requestId: number; items: SearchResult[]; done: boolean; error?: string } }
   | { type: 'reader:error'; payload: { message: string } }
   | { type: 'reader:state'; payload: Record<string, unknown> }
 

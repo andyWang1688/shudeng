@@ -1,0 +1,272 @@
+diff --git a/paginator.js b/paginator.js
+index 95c4d0d..18d77cc 100644
+--- a/paginator.js
++++ b/paginator.js
+@@ -1,3 +1,5 @@
++import { boundedViewport, logicalRect } from './bounded-viewport.js'
++
+ const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+ 
+ const debounce = (f, wait, immediate) => {
+@@ -208,9 +210,14 @@ class View {
+     #column = true
+     #size
+     #layout = {}
+-    constructor({ container, onExpand }) {
++    #bounded = false
++    #expandedSize = 0
++    #windowStart = 0
++    #requestedStart = 0
++    constructor({ container, onExpand, onInternalScroll }) {
+         this.container = container
+         this.onExpand = onExpand
++        this.onInternalScroll = onInternalScroll
+         this.#iframe.setAttribute('part', 'filter')
+         this.#element.append(this.#iframe)
+         Object.assign(this.#element.style, {
+@@ -259,6 +266,14 @@ class View {
+                 this.#rtl = rtl
+ 
+                 this.#contentRange.selectNodeContents(doc.body)
++                // Browser focus/selection can scroll the inner document. Move the
++                // logical container by the same delta, then restore its window.
++                doc.defaultView.addEventListener('scroll', () => {
++                    if (this.#bounded) {
++                        const delta = doc.defaultView.scrollX - this.#windowStart
++                        if (delta !== 0) this.onInternalScroll?.(delta)
++                    }
++                })
+                 const layout = beforeRender?.({ vertical, rtl, background })
+                 this.#iframe.style.display = 'block'
+                 this.render(layout)
+@@ -277,6 +292,16 @@ class View {
+     render(layout) {
+         if (!layout || !this.document) return
+         this.#column = layout.flow !== 'scrolled'
++        const wasBounded = this.#bounded
++        this.#bounded = !!layout.boundedViewport && this.#column
++            && !this.#vertical && !this.#rtl
++        this.#iframe.style.position = this.#bounded ? 'absolute' : ''
++        this.#iframe.style.left = ''
++        this.#iframe.style.top = this.#bounded ? '0' : ''
++        if (wasBounded && !this.#bounded) {
++            this.#windowStart = 0
++            this.document.defaultView.scrollTo(0, 0)
++        }
+         this.#layout = layout
+         if (this.#column) this.columnize(layout)
+         else this.scrolled(layout)
+@@ -303,6 +328,12 @@ class View {
+         this.#size = vertical ? height : width
+ 
+         const doc = this.document
++        // The root still represents one spread even when the iframe carries a
++        // finite three-spread window. Set this before measuring the whole DOM.
++        if (this.#bounded) {
++            doc.documentElement.style.width = `${width}px`
++            this.#iframe.style.width = `${width * 3}px`
++        }
+         setStylesImportant(doc.documentElement, {
+             'box-sizing': 'border-box',
+             'column-width': `${Math.trunc(columnWidth)}px`,
+@@ -365,18 +396,21 @@ class View {
+             const contentSize = contentStart + contentRect[side]
+             const pageCount = Math.ceil(contentSize / this.#size)
+             const expandedSize = pageCount * this.#size
++            this.#expandedSize = expandedSize
++            const physicalSize = this.#bounded ? Math.min(expandedSize, this.#size * 3) : expandedSize
+             this.#element.style.padding = '0'
+-            this.#iframe.style[side] = `${expandedSize}px`
++            this.#iframe.style[side] = `${physicalSize}px`
+             this.#element.style[side] = `${expandedSize + this.#size * 2}px`
+             this.#iframe.style[otherSide] = '100%'
+             this.#element.style[otherSide] = '100%'
+             documentElement.style[side] = `${this.#size}px`
+             if (this.#overlayer) {
+                 this.#overlayer.element.style.margin = '0'
++                this.#overlayer.element.style.overflow = this.#bounded ? 'hidden' : ''
+                 this.#overlayer.element.style.left = this.#vertical ? '0' : `${this.#size}px`
+                 this.#overlayer.element.style.top = this.#vertical ? `${this.#size}px` : '0'
+-                this.#overlayer.element.style[side] = `${expandedSize}px`
+-                this.#overlayer.redraw()
++                this.#overlayer.element.style[side] = `${physicalSize}px`
++                if (!this.#bounded) this.#overlayer.redraw()
+             }
+         } else {
+             const side = this.#vertical ? 'width' : 'height'
+@@ -392,21 +426,59 @@ class View {
+             this.#element.style[otherSide] = '100%'
+             if (this.#overlayer) {
+                 this.#overlayer.element.style.margin = padding
++                this.#overlayer.element.style.overflow = ''
+                 this.#overlayer.element.style.left = '0'
+                 this.#overlayer.element.style.top = '0'
+                 this.#overlayer.element.style[side] = `${expandedSize}px`
+                 this.#overlayer.redraw()
+             }
+         }
++        if (this.#bounded) this.syncViewport(this.container.start, true)
+         this.onExpand()
+     }
+     set overlayer(overlayer) {
+         this.#overlayer = overlayer
+         this.#element.append(overlayer.element)
++        if (this.#bounded) this.syncViewport(this.container.start, true)
+     }
+     get overlayer() {
+         return this.#overlayer
+     }
++    get bounded() {
++        return this.#bounded
++    }
++    syncViewport(position, redraw = false) {
++        if (!this.#bounded) return
++        const { width, start } = boundedViewport(this.#size, this.#expandedSize, position)
++        const previous = this.#windowStart
++        this.#requestedStart = start
++        this.#windowStart = start
++        this.#iframe.style.width = `${width}px`
++        this.document.defaultView.scrollTo(start, 0)
++        // CSSOM can clamp the final scroll to a fractional trailing column.
++        // Position the carrier using the actual scroll, preserving screen rects.
++        this.#windowStart = this.document.defaultView.scrollX
++        const left = this.#size + this.#windowStart
++        this.#iframe.style.left = `${left}px`
++        if (this.#overlayer) {
++            // Overlayer rects and hit tests remain in iframe viewport space.
++            this.#overlayer.element.style.overflow = 'hidden'
++            this.#overlayer.element.style.left = `${left}px`
++            this.#overlayer.element.style.width = `${width}px`
++            if (previous !== this.#windowStart || redraw) this.#overlayer.redraw()
++        }
++    }
++    viewportState() {
++        if (!this.#bounded) return null
++        return {
++            mode: 'bounded-horizontal', spreadSize: this.#size,
++            contentSize: this.#expandedSize, windowStart: this.#windowStart,
++            requestedStart: this.#requestedStart,
++            iframeWidth: parseFloat(this.#iframe.style.width),
++            iframeLeft: parseFloat(this.#iframe.style.left),
++            scrollX: this.document.defaultView.scrollX,
++        }
++    }
+     destroy() {
+         if (this.document) this.#observer.unobserve(this.document.body)
+     }
+@@ -417,6 +489,7 @@ export class Paginator extends HTMLElement {
+     static observedAttributes = [
+         'flow', 'gap', 'margin',
+         'max-inline-size', 'max-block-size', 'max-column-count',
++        'bounded-horizontal-viewport',
+     ]
+     #root = this.attachShadow({ mode: 'closed' })
+     #observer = new ResizeObserver(() => this.render())
+@@ -548,7 +621,10 @@ export class Paginator extends HTMLElement {
+         this.#footer = this.#root.getElementById('footer')
+ 
+         this.#observer.observe(this.#container)
+-        this.#container.addEventListener('scroll', () => this.dispatchEvent(new Event('scroll')))
++        this.#container.addEventListener('scroll', () => {
++            this.#view?.syncViewport(this.start)
++            this.dispatchEvent(new Event('scroll'))
++        })
+         this.#container.addEventListener('scroll', debounce(() => {
+             if (this.scrolled) {
+                 if (this.#justAnchored) this.#justAnchored = false
+@@ -620,6 +696,7 @@ export class Paginator extends HTMLElement {
+     attributeChangedCallback(name, _, value) {
+         switch (name) {
+             case 'flow':
++            case 'bounded-horizontal-viewport':
+                 this.render()
+                 break
+             case 'gap':
+@@ -648,12 +725,8 @@ export class Paginator extends HTMLElement {
+                 .replace(/(?<=[{\s;])-epub-/gi, '')
+                 // replace vw and vh as they cause problems with layout
+                 .replace(/(\d*\.?\d+)vw/gi, (_, d) => parseFloat(d) * w / 100 + 'px')
+-                .replace(/(\d*\.?\d+)vh/gi, (_, d) => parseFloat(d) * h / 100 + 'px')
+-                // `page-break-*` unsupported in columns; replace with `column-break-*`
+-                .replace(/page-break-(after|before|inside)\s*:/gi, (_, x) =>
+-                    `-webkit-column-break-${x}:`)
+-                .replace(/break-(after|before|inside)\s*:\s*(avoid-)?page/gi, (_, x, y) =>
+-                    `break-${x}: ${y ?? ''}column`))
++                // Keep the publication's page/column distinction, matching Readium.
++                .replace(/(\d*\.?\d+)vh/gi, (_, d) => parseFloat(d) * h / 100 + 'px'))
+         })
+     }
+     #createView() {
+@@ -664,6 +737,7 @@ export class Paginator extends HTMLElement {
+         this.#view = new View({
+             container: this,
+             onExpand: () => this.#scrollToAnchor(this.#anchor),
++            onInternalScroll: delta => void this.#scrollTo(this.containerPosition + delta, 'scroll'),
+         })
+         this.#container.append(this.#view.element)
+         return this.#view
+@@ -767,13 +841,15 @@ export class Paginator extends HTMLElement {
+         this.#header.replaceChildren(...heads)
+         this.#footer.replaceChildren(...feet)
+ 
+-        return { height, width, margin, gap, columnWidth }
++        return { height, width, margin, gap, columnWidth,
++            boundedViewport: this.hasAttribute('bounded-horizontal-viewport') }
+     }
+     render() {
+         if (!this.#view) return
+         this.#view.render(this.#beforeRender({
+             vertical: this.#vertical,
+             rtl: this.#rtl,
++            background: this.#view.docBackground,
+         }))
+         this.#scrollToAnchor(this.#anchor)
+     }
+@@ -816,6 +892,7 @@ export class Paginator extends HTMLElement {
+     // this is the new position of the containr
+     set containerPosition(newVal) {
+         this.#container[this.scrollProp] = newVal
++        this.#view?.syncViewport(this.start)
+     }
+ 
+     scrollBy(dx, dy) {
+@@ -900,6 +977,10 @@ export class Paginator extends HTMLElement {
+     }
+     // allows one to process rects as if they were LTR and horizontal
+     #getRectMapper() {
++        if (this.#view?.bounded) {
++            const scrollX = this.#view.document.defaultView.scrollX
++            return rect => logicalRect(rect, scrollX)
++        }
+         if (this.scrolled) {
+             const size = this.viewSize
+             const margin = this.#margin
+@@ -1132,6 +1213,10 @@ export class Paginator extends HTMLElement {
+         }]
+         return []
+     }
++    getViewportState() {
++        const viewport = this.#view?.viewportState()
++        return viewport ? { ...viewport, position: this.start, pages: this.pages } : null
++    }
+     setStyles(styles) {
+         this.#styles = styles
+         const $$styles = this.#styleMap.get(this.#view?.document)
+diff --git a/bounded-viewport.js b/bounded-viewport.js
+new file mode 100644
+index 0000000..16c70d4
+--- /dev/null
++++ b/bounded-viewport.js
+@@ -0,0 +1,12 @@
++// Logical chapter coordinates stay independent of the physical iframe window.
++// Only horizontal LTR pagination opts in; callers retain the two sentinel pages.
++export const boundedViewport = (size, contentSize, position) => {
++    const width = Math.min(contentSize, size * 3)
++    const start = Math.max(0, Math.min(contentSize - width,
++        (Math.floor(position / size) - 2) * size))
++    return { width, start, left: size + start }
++}
++
++export const logicalRect = (rect, scrollX) => ({
++    ...rect, left: rect.left + scrollX, right: rect.right + scrollX,
++})

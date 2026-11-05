@@ -4,11 +4,7 @@
  *
  * 运行：pnpm --filter @shudeng/eval eval:rag
  */
-import {
-  runBookAgent,
-  type AgentEvent,
-  type AgentRunResult,
-} from '@shudeng/core/agent';
+import { runBookAgent, type AgentEvent, type AgentRunResult } from '@shudeng/core/agent';
 import { createScriptedModel } from '@shudeng/core/agent/testing';
 import type { BookIdentity } from '@shudeng/core/domain';
 import { migrate } from '@shudeng/core/db';
@@ -23,7 +19,7 @@ import {
 } from '@shudeng/core/rag';
 import { evalCases, fixtureBook, type EvalCase } from './fixtures.js';
 
-function toRagBook(book: (typeof fixtureBook)): RagBook {
+function toRagBook(book: typeof fixtureBook): RagBook {
   return {
     book: book.book,
     chapters: book.chapters.map((chapter, index) => ({
@@ -45,9 +41,7 @@ function modelTurns(testCase: EvalCase, citationQuote: string) {
       chunks: [
         { reasoning: `先检索「${testCase.searchQuery}」。` },
         {
-          toolCalls: [
-            { id: 'call_1', name: 'search_book', args: { query: testCase.searchQuery } },
-          ],
+          toolCalls: [{ id: 'call_1', name: 'search_book', args: { query: testCase.searchQuery } }],
         },
       ],
     },
@@ -75,6 +69,12 @@ function formatEvent(event: AgentEvent): string {
       return `failed ${event.code} ${event.message}`;
     case 'cancelled':
       return 'cancelled';
+    case 'contextUsage':
+      return `contextUsage input=${event.usage.inputTokens} output=${event.usage.outputTokens}`;
+    case 'requestContext':
+      return `requestContext estimated=${event.estimate.estimatedTokens} materials=${event.materials.length}`;
+    case 'contextCompacted':
+      return 'contextCompacted';
   }
 }
 
@@ -100,7 +100,11 @@ function verify(
     if (!result.droppedCitationIds.includes('E1')) {
       return { id: testCase.id, ok: false, detail: '未记录被剔除的伪造引用' };
     }
-    return { id: testCase.id, ok: true, detail: `伪造引用被剔除（dropped=${result.droppedCitationIds.join(',')}）` };
+    return {
+      id: testCase.id,
+      ok: true,
+      detail: `伪造引用被剔除（dropped=${result.droppedCitationIds.join(',')}）`,
+    };
   }
   if (result.citations.length !== 1) {
     return { id: testCase.id, ok: false, detail: `真实引用数 ${result.citations.length} != 1` };
@@ -118,7 +122,11 @@ function verify(
   if (citation.chapter !== expectedChapter) {
     return { id: testCase.id, ok: false, detail: `引用章节 ${citation.chapter} != ${expectedChapter}` };
   }
-  return { id: testCase.id, ok: true, detail: `引用 ${citation.id} @ ${citation.chapter}（locator rag-chunk-v1）` };
+  return {
+    id: testCase.id,
+    ok: true,
+    detail: `引用 ${citation.id} @ ${citation.chapter}（locator rag-chunk-v1）`,
+  };
 }
 
 async function main(): Promise<void> {
@@ -141,7 +149,9 @@ async function main(): Promise<void> {
       chunkOptions: { maxChars: 120 },
     });
     const stats = await index.stats(ragBook.book.id);
-    console.log(`索引：${stats.chunkCount} chunks / ${stats.vectorCount} vectors / 维度 ${embedding.dimension}\n`);
+    console.log(
+      `索引：${stats.chunkCount} chunks / ${stats.vectorCount} vectors / 维度 ${embedding.dimension}\n`,
+    );
     const source = new SqliteBookSource(index, ragBook.book);
 
     for (const testCase of evalCases) {
@@ -153,7 +163,9 @@ async function main(): Promise<void> {
       const first = hits[0]!;
       const citationQuote = testCase.forgedCitation ?? first.quote.slice(0, Math.min(8, first.quote.length));
       console.log(`[${testCase.id}] ${testCase.question}`);
-      console.log(`  · 检索 top1（${first.chapter}${first.page ? ` / 第 ${first.page} 页` : ''}）：${first.quote.slice(0, 40)}…`);
+      console.log(
+        `  · 检索 top1（${first.chapter}${first.page ? ` / 第 ${first.page} 页` : ''}）：${first.quote.slice(0, 40)}…`,
+      );
       const model = createScriptedModel(modelTurns(testCase, citationQuote));
       const session = runBookAgent({
         model,
