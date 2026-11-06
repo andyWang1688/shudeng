@@ -1,5 +1,5 @@
-/** Visual prototype. Settings stay in memory. */
-import { useState } from "react";
+/** Visual prototype. Settings stay in memory; no service configuration is changed. */
+import { useState, type ReactNode } from "react";
 import {
   Pressable,
   ScrollView,
@@ -10,300 +10,270 @@ import {
   View,
 } from "react-native";
 import {
-  Check,
   ChevronLeft,
   ChevronRight,
   CircleHelp,
-  Palette,
-  Sparkles,
+  SlidersHorizontal,
+  BookOpen,
 } from "lucide-react-native";
+import { DemoHeading } from "./DemoChrome";
 import { demoColors as c } from "./demoTheme";
 
-type Page = "home" | "assistant" | "appearance" | "about";
-
+type Page = "home" | "assistant" | "service" | "about";
 export function DemoProfile() {
-  const initialDetail = process.env.EXPO_PUBLIC_UI_DEMO_DETAIL;
+  const detail = process.env.EXPO_PUBLIC_UI_DEMO_DETAIL;
   const [page, setPage] = useState<Page>(
-    initialDetail === "appearance" ||
-      initialDetail === "assistant" ||
-      initialDetail === "about"
-      ? initialDetail
-      : "home",
+    detail === "assistant" || detail === "about" ? detail : "home",
   );
-  const [webSearch, setWebSearch] = useState(true);
-  const [instructions, setInstructions] = useState(
-    "先从书中寻找依据，清楚区分原文与推断。",
-  );
-  const [appearance, setAppearance] = useState<"green" | "warm">("green");
-  const preview =
-    appearance === "green"
-      ? { paper: c.paper, ink: c.ink, accent: c.accent }
-      : { paper: "#FAF6EF", ink: "#352E24", accent: "#8B663C" };
-  const title =
-    page === "assistant"
-      ? "AI 与助手"
-      : page === "appearance"
-        ? "外观"
-        : page === "about"
-          ? "关于书灯"
-          : "我的";
-
+  const [web, setWeb] = useState(true);
+  const [text, setText] = useState("先从书中寻找依据，清楚区分原文与推断。");
+  const title = {
+    home: "我的",
+    assistant: "AI 与助手",
+    service: "OpenAI",
+    about: "关于书灯",
+  }[page];
   return (
     <View style={s.screen}>
-      {page !== "home" && (
+      {page === "home" ? (
+        <DemoHeading title="我的" />
+      ) : (
         <View style={s.navigation}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="返回我的"
-            onPress={() => setPage("home")}
+            accessibilityLabel="返回"
+            onPress={() => setPage(page === "service" ? "assistant" : "home")}
             style={s.back}
           >
-            <ChevronLeft size={23} color={c.accent} />
-            <Text style={s.backText}>我的</Text>
+            <ChevronLeft size={24} color={c.ink} />
           </Pressable>
-          <Text accessibilityRole="header" style={s.navigationTitle}>
+          <Text accessibilityRole="header" style={s.navTitle}>
             {title}
           </Text>
-          <View style={s.navigationBalance} />
+          <View style={s.balance} />
         </View>
       )}
       <ScrollView
-        contentInsetAdjustmentBehavior="never"
-        automaticallyAdjustContentInsets={false}
-        contentContainerStyle={s.content}
+        bounces
+        alwaysBounceVertical
+        keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        contentContainerStyle={s.content}
       >
         {page === "home" && (
           <>
-            <Text accessibilityRole="header" style={s.title}>
-              我的
-            </Text>
+            <View style={s.identity}>
+              <View style={s.appMark}>
+                <BookOpen size={25} color={c.accent} strokeWidth={1.6} />
+              </View>
+              <Text style={s.brand}>书灯</Text>
+            </View>
             <View style={s.group}>
-              <Pressable
-                style={s.row}
+              <Row
+                icon={<SlidersHorizontal size={21} color={c.secondary} />}
+                label="AI 与助手"
                 onPress={() => setPage("assistant")}
-                accessibilityRole="button"
-              >
-                <Sparkles size={21} color={c.secondary} strokeWidth={1.6} />
-                <Text style={s.rowTitle}>AI 与助手</Text>
-                <ChevronRight size={17} color={c.muted} />
-              </Pressable>
-              <View style={s.iconDivider} />
-              <Pressable
-                style={s.row}
-                onPress={() => setPage("appearance")}
-                accessibilityRole="button"
-              >
-                <Palette size={21} color={c.secondary} strokeWidth={1.6} />
-                <Text style={s.rowTitle}>外观</Text>
-                <Text style={s.rowValue}>
-                  {appearance === "green" ? "纸白墨绿" : "暖纸"}
-                </Text>
-                <ChevronRight size={17} color={c.muted} />
-              </Pressable>
-              <View style={s.iconDivider} />
-              <Pressable
-                style={s.row}
+              />
+              <Row
+                icon={<CircleHelp size={21} color={c.secondary} />}
+                label="关于书灯"
                 onPress={() => setPage("about")}
-                accessibilityRole="button"
-              >
-                <CircleHelp size={21} color={c.secondary} strokeWidth={1.6} />
-                <Text style={s.rowTitle}>关于书灯</Text>
-                <ChevronRight size={17} color={c.muted} />
-              </Pressable>
+                last
+              />
             </View>
           </>
         )}
         {page === "assistant" && (
           <>
-            <Text style={s.sectionLabel}>模型</Text>
+            <Text style={s.label}>模型服务</Text>
             <View style={s.group}>
-              <View style={s.row}>
-                <Text style={s.rowTitle}>OpenAI</Text>
-                <Text style={s.rowValue}>GPT-4.1</Text>
-              </View>
-              <View style={s.divider} />
-              <View style={s.row}>
-                <Text style={s.rowTitle}>联网搜索</Text>
-                <Switch
-                  accessibilityLabel="联网搜索"
-                  value={webSearch}
-                  onValueChange={setWebSearch}
-                  trackColor={{ false: "#DCE3D9", true: c.accent }}
-                  thumbColor={c.surface}
-                />
-              </View>
+              <Row
+                label="OpenAI"
+                value="GPT-4.1"
+                onPress={() => setPage("service")}
+                last
+              />
             </View>
-            <Text style={s.fieldHint}>由当前模型搜索网页，可能产生费用。</Text>
-            <Text style={[s.sectionLabel, s.nextSection]}>助手指令</Text>
+            <Text style={[s.label, s.sectionGap]}>助手指令</Text>
             <TextInput
               accessibilityLabel="助手指令"
-              value={instructions}
-              onChangeText={setInstructions}
+              value={text}
+              onChangeText={setText}
               multiline
               style={s.instructions}
               textAlignVertical="top"
             />
           </>
         )}
-        {page === "appearance" && (
+        {page === "service" && (
           <>
-            <Text style={s.sectionLabel}>配色</Text>
+            <Text style={s.label}>模型</Text>
             <View style={s.group}>
-              <Pressable
-                style={s.row}
-                onPress={() => setAppearance("green")}
-                accessibilityRole="radio"
-                accessibilityState={{ checked: appearance === "green" }}
-              >
-                <View style={[s.swatch, { backgroundColor: c.accent }]} />
-                <Text style={s.rowTitle}>纸白墨绿</Text>
-                {appearance === "green" && <Check size={19} color={c.accent} />}
-              </Pressable>
-              <View style={s.iconDivider} />
-              <Pressable
-                style={s.row}
-                onPress={() => setAppearance("warm")}
-                accessibilityRole="radio"
-                accessibilityState={{ checked: appearance === "warm" }}
-              >
-                <View style={[s.swatch, { backgroundColor: "#8B663C" }]} />
-                <Text style={s.rowTitle}>暖纸</Text>
-                {appearance === "warm" && <Check size={19} color={c.accent} />}
-              </Pressable>
+              <View style={s.valueRow}>
+                <Text style={s.rowText}>当前模型</Text>
+                <Text style={s.value}>GPT-4.1</Text>
+              </View>
             </View>
-            <Text style={[s.sectionLabel, s.nextSection]}>预览</Text>
-            <View style={[s.preview, { backgroundColor: preview.paper }]}>
-              <Text style={[s.previewBook, { color: preview.accent }]}>
-                瓦尔登湖
-              </Text>
-              <Text style={[s.previewQuote, { color: preview.ink }]}>
-                我到树林里去，是因为我希望有目的地生活。
-              </Text>
+            <Text style={[s.label, s.sectionGap]}>模型能力</Text>
+            <View style={s.group}>
+              <View style={s.valueRow}>
+                <Text style={s.rowText}>联网搜索</Text>
+                <Switch
+                  accessibilityLabel="联网搜索"
+                  value={web}
+                  onValueChange={setWeb}
+                  trackColor={{ false: c.line, true: c.accent }}
+                  thumbColor={c.surface}
+                />
+              </View>
             </View>
+            <Text style={s.hint}>由模型服务提供，可能产生额外费用。</Text>
           </>
         )}
         {page === "about" && (
-          <>
-            <View style={s.aboutBrand}>
-              <Text style={s.aboutTitle}>书灯</Text>
-              <Text style={s.rowValue}>UI Demo</Text>
+          <View style={s.about}>
+            <View style={s.appMark}>
+              <BookOpen size={25} color={c.accent} />
             </View>
-            <Text style={s.aboutText}>
-              当前使用示例数据，设置仅在本次预览中生效。
-            </Text>
-          </>
+            <Text style={s.brand}>书灯</Text>
+            <Text style={s.hint}>界面设计预览 · 示例数据</Text>
+          </View>
         )}
       </ScrollView>
     </View>
   );
 }
-
+function Row({
+  label,
+  value,
+  icon,
+  onPress,
+  last,
+}: {
+  label: string;
+  value?: string;
+  icon?: ReactNode;
+  onPress: () => void;
+  last?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        s.row,
+        !last && s.rowLine,
+        pressed && { opacity: 0.6 },
+      ]}
+    >
+      {icon}
+      <Text style={s.rowText}>{label}</Text>
+      {value && <Text style={s.value}>{value}</Text>}
+      <ChevronRight size={17} color={c.muted} />
+    </Pressable>
+  );
+}
 const s = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: c.paper },
-  content: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 32 },
-  title: {
+  screen: { flex: 1 },
+  content: {
+    paddingHorizontal: 24,
+    paddingTop: 10,
+    paddingBottom: 40,
+    width: "100%",
+    maxWidth: 760,
+    alignSelf: "center",
+  },
+  identity: {
+    flexDirection: "row",
+    gap: 15,
+    alignItems: "center",
+    marginTop: 4,
+    marginBottom: 38,
+  },
+  appMark: {
+    width: 56,
+    height: 56,
+    borderRadius: 17,
+    backgroundColor: c.accentWash,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  brand: {
     color: c.ink,
-    fontSize: 32,
-    lineHeight: 40,
-    fontWeight: "700",
-    letterSpacing: -0.8,
-    marginBottom: 28,
+    fontFamily: "Songti SC",
+    fontSize: 27,
+    lineHeight: 36,
   },
   navigation: {
-    minHeight: 48,
+    minHeight: 56,
     paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
   },
   back: {
-    flexDirection: "row",
+    width: 44,
+    height: 44,
+    justifyContent: "center",
     alignItems: "center",
-    minWidth: 78,
-    minHeight: 44,
-    gap: 2,
   },
-  backText: { color: c.accent, fontSize: 17, lineHeight: 24 },
-  navigationTitle: {
+  balance: { width: 44 },
+  navTitle: {
     flex: 1,
-    textAlign: "center",
     color: c.ink,
     fontSize: 17,
-    lineHeight: 24,
     fontWeight: "600",
+    textAlign: "center",
   },
-  navigationBalance: { width: 78 },
-  sectionLabel: {
-    color: c.muted,
-    fontSize: 13,
-    lineHeight: 19,
-    marginBottom: 9,
-    paddingHorizontal: 16,
-  },
-  nextSection: { marginTop: 28 },
   group: {
     backgroundColor: c.surface,
-    borderRadius: 12,
+    borderRadius: 16,
+    paddingHorizontal: 17,
     borderCurve: "continuous",
   },
   row: {
-    minHeight: 58,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    flexDirection: "row",
+    gap: 13,
+    alignItems: "center",
+    minHeight: 62,
+    paddingVertical: 16,
+  },
+  rowLine: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.line,
+  },
+  rowText: { flex: 1, fontSize: 17, lineHeight: 25, color: c.ink },
+  value: { color: c.secondary, fontSize: 14, lineHeight: 22 },
+  valueRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 14,
+    minHeight: 64,
+    paddingVertical: 12,
   },
-  rowTitle: { flex: 1, color: c.ink, fontSize: 17, lineHeight: 24 },
-  rowValue: { color: c.muted, fontSize: 14, lineHeight: 21 },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: c.line,
-    marginLeft: 16,
-  },
-  iconDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: c.line,
-    marginLeft: 49,
-  },
-  fieldHint: {
-    color: c.muted,
+  label: {
     fontSize: 13,
     lineHeight: 20,
-    marginTop: 8,
-    paddingHorizontal: 16,
+    color: c.secondary,
+    marginLeft: 4,
+    marginBottom: 10,
+  },
+  sectionGap: { marginTop: 32 },
+  hint: {
+    color: c.secondary,
+    fontSize: 13,
+    lineHeight: 21,
+    marginTop: 12,
+    paddingHorizontal: 4,
   },
   instructions: {
-    minHeight: 124,
+    minHeight: 160,
+    padding: 17,
+    borderRadius: 16,
     backgroundColor: c.surface,
-    borderRadius: 12,
-    padding: 16,
+    fontSize: 17,
+    lineHeight: 28,
     color: c.ink,
-    fontSize: 16,
-    lineHeight: 26,
   },
-  swatch: { height: 20, width: 20, borderRadius: 10 },
-  preview: {
-    padding: 20,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.line,
-    borderRadius: 12,
-    gap: 14,
-  },
-  previewBook: { fontSize: 13, lineHeight: 19, fontWeight: "500" },
-  previewQuote: { fontFamily: "Songti SC", fontSize: 18, lineHeight: 30 },
-  aboutBrand: { alignItems: "center", gap: 10, paddingVertical: 30 },
-  aboutTitle: {
-    color: c.ink,
-    fontFamily: "Songti SC",
-    fontSize: 34,
-    lineHeight: 44,
-  },
-  aboutText: {
-    color: c.secondary,
-    fontSize: 15,
-    lineHeight: 25,
-    marginTop: 20,
-  },
+  about: { alignItems: "center", paddingTop: 48, gap: 15 },
 });

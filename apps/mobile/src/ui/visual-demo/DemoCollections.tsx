@@ -1,552 +1,557 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  Alert,
+  FlatList,
+  Keyboard,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
-import { SymbolView } from "expo-symbols";
+import { ArrowUpRight, ChevronDown, ChevronRight } from "lucide-react-native";
+import Swipeable, {
+  type SwipeableMethods,
+} from "react-native-gesture-handler/ReanimatedSwipeable";
+import Animated, {
+  Easing,
+  ReduceMotion,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
+import { DemoEmpty, DemoHeading, DemoSearch } from "./DemoChrome";
+import { DemoBookCover } from "./DemoShelf";
+import { demoBooks, type DemoBook } from "./demoBooks";
+import {
+  demoConversations,
+  demoNotes,
+  type DemoConversation,
+  type DemoNote,
+} from "./collectionFixtures";
 import { demoColors as c } from "./demoTheme";
 
-const BOOKS = [
-  {
-    id: "river",
-    title: "额尔古纳河右岸",
-    author: "迟子建",
-    cover: "#334D40",
-    coverInk: "#F3EBD7",
-  },
-  {
-    id: "moon",
-    title: "月亮与六便士",
-    author: "威廉·萨默塞特·毛姆",
-    cover: "#A65F46",
-    coverInk: "#F7EADB",
-  },
-] as const;
-const NOTES = [
-  {
-    id: "n1",
-    bookId: "river",
-    quote: "我是雨和雪的老熟人了，我有九十岁了。",
-    location: "清晨 · 第 1 章",
-    date: "今天",
-    thought:
-      "开篇用天气来介绍自己，而不是名字和身份。人与自然之间的关系，从第一句就已经开始了。",
-  },
-  {
-    id: "n2",
-    bookId: "river",
-    quote: "人的心在痛的时候，泪水才会流下来。",
-    location: "正午 · 第 2 章",
-    date: "昨天",
-    thought:
-      "那些没有直接说出口的感情，常常藏在最简单的叙述里。再读时留意她如何描写失去。",
-  },
-  {
-    id: "n3",
-    bookId: "river",
-    quote: "这片森林，记得每一个离开它的人。",
-    location: "黄昏 · 第 3 章",
-    date: "11 月 3 日",
-    thought:
-      "阅读随记：森林既是生活的地方，也是记忆的容器。想把“地方与记忆”这个线索继续读下去。",
-    personal: true,
-  },
-  {
-    id: "n4",
-    bookId: "moon",
-    quote: "满地都是六便士，他却抬头看见了月亮。",
-    location: "第 21 章",
-    date: "11 月 2 日",
-    thought:
-      "关于理想与生活的取舍，还没有一个简单的答案。让我在意的是：追逐月亮时，身边的人承担了什么。",
-  },
-  {
-    id: "n5",
-    bookId: "moon",
-    quote: "艺术为什么会成为一个人无法放下的事？",
-    location: "第 35 章",
-    date: "10 月 31 日",
-    thought: "阅读随记：不急着赞同或反对主人公，先看看他每一次选择付出的代价。",
-    personal: true,
-  },
-] as const;
-const CONVERSATIONS = [
-  {
-    id: "c1",
-    bookId: "river",
-    title: "为什么从一场雨开始讲故事？",
-    preview: "从开篇的天气、叙述者的年龄与森林的关系，重新理解这段文字。",
-    date: "今天 09:42",
-    count: 8,
-  },
-  {
-    id: "c2",
-    bookId: "river",
-    title: "森林在这本书里意味着什么",
-    preview: "它既是族人生活的家园，也承载着一代代人的记忆。",
-    date: "昨天",
-    count: 6,
-  },
-  {
-    id: "c3",
-    bookId: "moon",
-    title: "“月亮”与“六便士”分别指什么？",
-    preview: "从理想、世俗生活和主人公的选择，梳理书名中的两种力量。",
-    date: "11 月 2 日",
-    count: 4,
-  },
-  {
-    id: "c4",
-    bookId: "moon",
-    title: "如何看待斯特里克兰的选择",
-    preview: "先回到几段具体情节，看看他的自由与他人的代价。",
-    date: "10 月 31 日",
-    count: 10,
-  },
-] as const;
-
-type Book = (typeof BOOKS)[number];
+const DISCLOSURE_MOTION = {
+  duration: 220,
+  easing: Easing.bezier(0.22, 1, 0.36, 1),
+  reduceMotion: ReduceMotion.System,
+};
 
 export function DemoNotes({
   onOpenBook,
+  items = demoNotes,
 }: {
-  readonly onOpenBook: (title?: string) => void;
+  onOpenBook: (title: string, position?: number) => void;
+  items?: readonly DemoNote[];
 }) {
-  const [query, setQuery] = useState("");
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [closedGroups, setClosedGroups] = useState<readonly string[]>([]);
-  const matches = NOTES.filter((note) => {
-    const book = BOOKS.find((book) => book.id === note.bookId)!;
-    return (note.quote + note.thought + book.title).includes(query.trim());
-  });
+  const [expandedNote, setExpandedNote] = useState<string | null>(null);
   return (
-    <CollectionFrame
+    <CollectionBrowser
       title="笔记"
-      query={query}
-      onChangeQuery={setQuery}
+      unit="条笔记"
       placeholder="搜索摘录、想法或书名"
-    >
-      <View style={styles.summary}>
-        <Text style={styles.summaryCount}>{matches.length} 条笔记</Text>
-      </View>
-      {BOOKS.map((book) => {
-        const notes = matches.filter((note) => note.bookId === book.id);
-        if (notes.length === 0) return null;
-        const closed = closedGroups.includes(book.id);
+      items={items}
+      searchText={(note) => note.quote + note.thought + note.location}
+      renderItem={(note) => {
+        const open = expandedNote === note.id;
+        const book = demoBooks.find((book) => book.id === note.bookId)!;
         return (
-          <View key={book.id} style={styles.group}>
-            <BookGroup
-              book={book}
-              count={notes.length + " 条笔记"}
-              closed={closed}
-              onPress={() =>
-                setClosedGroups((value) =>
-                  closed
-                    ? value.filter((id) => id !== book.id)
-                    : [...value, book.id],
-                )
-              }
-            />
-            {!closed
-              ? notes.map((note) => {
-                  const open = expanded === note.id;
-                  return (
-                    <View key={note.id} style={styles.note}>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={"展开笔记：" + note.quote}
-                        accessibilityState={{ expanded: open }}
-                        onPress={() => setExpanded(open ? null : note.id)}
-                        style={({ pressed }) => pressed && styles.pressed}
-                      >
-                        <View style={styles.noteBody}>
-                          <View
-                            style={[
-                              styles.quoteRule,
-                              "personal" in note && note.personal
-                                ? styles.thoughtRule
-                                : null,
-                            ]}
-                          />
-                          <Text style={styles.quote}>{note.quote}</Text>
-                        </View>
-                        <View style={styles.noteMeta}>
-                          <Text style={styles.meta}>
-                            {"personal" in note && note.personal
-                              ? "阅读随记"
-                              : note.location}
-                          </Text>
-                          <Text style={styles.meta}>{note.date}</Text>
-                        </View>
-                        {!open ? (
-                          <Text style={styles.thoughtPreview} numberOfLines={1}>
-                            {note.thought}
-                          </Text>
-                        ) : null}
-                      </Pressable>
-                      {open ? (
-                        <View style={styles.expandedNote}>
-                          <Text style={styles.thoughtLabel}>我的想法</Text>
-                          <Text style={styles.thought}>{note.thought}</Text>
-                          <Pressable
-                            accessibilityRole="button"
-                            onPress={() => onOpenBook(book.title)}
-                            style={styles.sourceAction}
-                          >
-                            <Text style={styles.sourceText}>回到原文</Text>
-                            <SymbolView
-                              name="arrow.up.right"
-                              size={12}
-                              tintColor={c.accent}
-                            />
-                          </Pressable>
-                        </View>
-                      ) : null}
-                    </View>
-                  );
-                })
-              : null}
+          <View style={s.note}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={"查看笔记：" + note.quote}
+              accessibilityState={{ expanded: open }}
+              onPress={() => setExpandedNote(open ? null : note.id)}
+              style={({ pressed }) => pressed && s.pressed}
+            >
+              <View style={[s.quoteBlock, note.personal && s.personalBlock]}>
+                <Text numberOfLines={open ? undefined : 2} style={s.quote}>
+                  {note.quote}
+                </Text>
+              </View>
+              {!!note.thought && (
+                <Text style={s.thought} numberOfLines={open ? undefined : 1}>
+                  {note.thought}
+                </Text>
+              )}
+              <Text style={s.meta}>
+                {note.location} · {note.date}
+              </Text>
+            </Pressable>
+            {open && (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => onOpenBook(book.title, note.position)}
+                style={s.source}
+              >
+                <Text style={s.sourceText}>回到原文</Text>
+                <ArrowUpRight size={16} color={c.accent} />
+              </Pressable>
+            )}
           </View>
         );
-      })}
-      {matches.length === 0 ? (
-        <Text style={styles.empty}>没有找到这条笔记，换个词试试。</Text>
-      ) : null}
-    </CollectionFrame>
+      }}
+    />
   );
 }
 
 export function DemoConversations({
   onOpenChat,
 }: {
-  readonly onOpenChat: () => void;
+  onOpenChat: (book: DemoBook, question: string, selection?: string) => void;
 }) {
-  const [query, setQuery] = useState("");
-  const [closedGroups, setClosedGroups] = useState<readonly string[]>([]);
-  const matches = CONVERSATIONS.filter((chat) => {
-    const book = BOOKS.find((book) => book.id === chat.bookId)!;
-    return (chat.title + chat.preview + book.title).includes(query.trim());
-  });
+  // Renaming changes the list label, while the original question stays intact.
+  const [chats, setChats] = useState(() =>
+    demoConversations.map((chat) => ({ ...chat, question: chat.title })),
+  );
+  const activeSwipe = useRef<SwipeableMethods | null>(null);
+  const [revealedChat, setRevealedChat] = useState<string | null>(null);
+  const swipes = useRef(new Map<string, SwipeableMethods>());
+  const closeSwipe = () => {
+    activeSwipe.current?.close();
+    activeSwipe.current = null;
+    setRevealedChat(null);
+  };
+  const rename = (chat: DemoConversation) => {
+    closeSwipe();
+    Alert.prompt(
+      "重新命名",
+      undefined,
+      [
+        { text: "取消", style: "cancel" },
+        {
+          text: "保存",
+          onPress: (value) => {
+            const title = value?.trim();
+            if (title)
+              setChats((old) =>
+                old.map((item) =>
+                  item.id === chat.id ? { ...item, title } : item,
+                ),
+              );
+          },
+        },
+      ],
+      "plain-text",
+      chat.title,
+    );
+  };
+  const remove = (chat: DemoConversation) => {
+    closeSwipe();
+    Alert.alert("删除这条对话？", undefined, [
+      { text: "取消", style: "cancel" },
+      {
+        text: "删除",
+        style: "destructive",
+        onPress: () =>
+          setChats((old) => old.filter((item) => item.id !== chat.id)),
+      },
+    ]);
+  };
+  const actions = (chat: DemoConversation) => {
+    closeSwipe();
+    Alert.alert(chat.title, undefined, [
+      { text: "重新命名", onPress: () => rename(chat) },
+      { text: "删除", style: "destructive", onPress: () => remove(chat) },
+      { text: "取消", style: "cancel" },
+    ]);
+  };
   return (
-    <CollectionFrame
+    <CollectionBrowser
       title="对话"
-      query={query}
-      onChangeQuery={setQuery}
-      placeholder="搜索对话或书名"
-    >
-      <View style={styles.summary}>
-        <Text style={styles.summaryCount}>{matches.length} 段对话</Text>
-      </View>
-      {BOOKS.map((book) => {
-        const chats = matches.filter((chat) => chat.bookId === book.id);
-        if (chats.length === 0) return null;
-        const closed = closedGroups.includes(book.id);
-        return (
-          <View key={book.id} style={styles.group}>
-            <BookGroup
-              book={book}
-              count={chats.length + " 段对话"}
-              closed={closed}
-              onPress={() =>
-                setClosedGroups((value) =>
-                  closed
-                    ? value.filter((id) => id !== book.id)
-                    : [...value, book.id],
-                )
+      unit="条对话"
+      placeholder="搜索问题或书名"
+      items={chats}
+      onInteract={closeSwipe}
+      searchText={(chat) => chat.title + (chat.selection ?? "")}
+      renderItem={(chat) => (
+        <Swipeable
+          ref={(swipe) => {
+            if (swipe) swipes.current.set(chat.id, swipe);
+            else swipes.current.delete(chat.id);
+          }}
+          overshootRight={false}
+          onSwipeableWillOpen={() => {
+            const swipe = swipes.current.get(chat.id) ?? null;
+            if (activeSwipe.current !== swipe) activeSwipe.current?.close();
+            activeSwipe.current = swipe;
+            setRevealedChat(chat.id);
+          }}
+          onSwipeableClose={() =>
+            setRevealedChat((id) => (id === chat.id ? null : id))
+          }
+          renderRightActions={() => (
+            <View
+              style={s.swipeActions}
+              accessibilityElementsHidden={revealedChat !== chat.id}
+              importantForAccessibility={
+                revealedChat === chat.id ? "auto" : "no-hide-descendants"
               }
-            />
-            {!closed
-              ? chats.map((chat) => (
-                  <Pressable
-                    accessibilityRole="button"
-                    key={chat.id}
-                    accessibilityLabel={chat.title}
-                    onPress={onOpenChat}
-                    style={({ pressed }) => [
-                      styles.chat,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <View style={styles.chatTitleRow}>
-                      <Text style={styles.chatTitle}>{chat.title}</Text>
-                      <SymbolView
-                        name="chevron.right"
-                        size={11}
-                        tintColor={c.muted}
-                      />
-                    </View>
-                    <Text style={styles.chatPreview} numberOfLines={2}>
-                      {chat.preview}
-                    </Text>
-                    <View style={styles.chatMeta}>
-                      <Text style={styles.meta}>{chat.date}</Text>
-                      <Text style={styles.meta}>{chat.count} 条消息</Text>
-                    </View>
-                  </Pressable>
-                ))
-              : null}
-          </View>
-        );
-      })}
-      {matches.length === 0 ? (
-        <Text style={styles.empty}>没有找到这段对话，换个词试试。</Text>
-      ) : null}
-    </CollectionFrame>
+            >
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={"重新命名：" + chat.title}
+                onPress={() => rename(chat)}
+                style={[s.swipeAction, s.renameAction]}
+              >
+                <Text style={s.actionText}>重命名</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={"删除：" + chat.title}
+                onPress={() => remove(chat)}
+                style={[s.swipeAction, s.deleteAction]}
+              >
+                <Text style={s.actionText}>删除</Text>
+              </Pressable>
+            </View>
+          )}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={"打开对话：" + chat.title}
+            accessibilityHint="左滑或长按可重新命名和删除"
+            accessibilityActions={[
+              { name: "rename", label: "重新命名" },
+              { name: "delete", label: "删除" },
+            ]}
+            onAccessibilityAction={({ nativeEvent }) => {
+              if (nativeEvent.actionName === "rename") rename(chat);
+              else if (nativeEvent.actionName === "delete") remove(chat);
+            }}
+            onLongPress={() => actions(chat)}
+            onPress={() => {
+              closeSwipe();
+              onOpenChat(
+                demoBooks.find((book) => book.id === chat.bookId)!,
+                chat.question,
+                chat.selection,
+              );
+            }}
+            style={({ pressed }) => [s.chat, pressed && s.pressed]}
+          >
+            <View style={s.chatBody}>
+              <Text style={s.chatTitle} numberOfLines={2}>
+                {chat.title}
+              </Text>
+            </View>
+            <ChevronRight size={15} color={c.muted} />
+          </Pressable>
+        </Swipeable>
+      )}
+    />
   );
 }
 
-function CollectionFrame({
+/** Keep book context and expand the sample rows in place. */
+function CollectionBrowser<T extends DemoNote | DemoConversation>({
   title,
-  query,
-  onChangeQuery,
+  unit,
   placeholder,
+  items,
+  searchText,
+  renderItem,
+  onInteract,
+}: {
+  title: string;
+  unit: string;
+  placeholder: string;
+  items: readonly T[];
+  searchText: (item: T) => string;
+  renderItem: (item: T) => ReactNode;
+  onInteract?: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [expandedBook, setExpandedBook] = useState<string | null>(
+    items[0]?.bookId ?? null,
+  );
+  const [allBooks, setAllBooks] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const { height, fontScale } = useWindowDimensions();
+  const previewLimit = height < 740 || fontScale > 1.2 ? 2 : 3;
+  const overview = useRef<FlatList<{ book: DemoBook; rows: T[] }>>(null);
+  const filter = (item: T, term: string) => {
+    const book = demoBooks.find((book) => book.id === item.bookId)!;
+    return (book.title + searchText(item))
+      .toLocaleLowerCase()
+      .includes(term.trim().toLocaleLowerCase());
+  };
+  const groups = demoBooks.flatMap((book) => {
+    const rows = items.filter(
+      (item) => item.bookId === book.id && filter(item, query),
+    );
+    return rows.length ? [{ book, rows }] : [];
+  });
+  const toggleAll = (bookId: string) => {
+    Keyboard.dismiss();
+    onInteract?.();
+    setAllBooks((old) => {
+      const next = new Set(old);
+      if (next.has(bookId)) next.delete(bookId);
+      else next.add(bookId);
+      return next;
+    });
+  };
+  return (
+    <View style={s.screen}>
+      <DemoHeading title={title} />
+      <DemoSearch
+        value={query}
+        onChange={(text) => {
+          onInteract?.();
+          overview.current?.scrollToOffset({ offset: 0, animated: false });
+          setQuery(text);
+        }}
+        placeholder={placeholder}
+      />
+      <FlatList
+        ref={overview}
+        data={groups}
+        keyExtractor={(group) => group.book.id}
+        bounces
+        alwaysBounceVertical
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
+        onScrollBeginDrag={onInteract}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={s.content}
+        ListEmptyComponent={<DemoEmpty query={query} />}
+        renderItem={({ item: group }) => {
+          const open =
+            query.trim().length > 0 || expandedBook === group.book.id;
+          const all = !!query.trim() || allBooks.has(group.book.id);
+          return (
+            <View style={s.group}>
+              <BookGroup
+                book={group.book}
+                count={group.rows.length}
+                unit={unit}
+                expanded={open}
+                searching={!!query.trim()}
+                onPress={() => {
+                  onInteract?.();
+                  setExpandedBook((id) =>
+                    id === group.book.id ? null : group.book.id,
+                  );
+                }}
+              />
+              <DisclosureBody expanded={open}>
+                {(all ? group.rows : group.rows.slice(0, previewLimit)).map(
+                  (item) => (
+                    <View key={item.id}>{renderItem(item)}</View>
+                  ),
+                )}
+                {!query.trim() && group.rows.length > previewLimit && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: all }}
+                    accessibilityLabel={
+                      all
+                        ? "收起" + group.book.title + "的列表"
+                        : "查看" +
+                          group.book.title +
+                          "的全部" +
+                          group.rows.length +
+                          unit
+                    }
+                    onPress={() => toggleAll(group.book.id)}
+                    style={({ pressed }) => [s.more, pressed && s.pressed]}
+                  >
+                    <Text style={s.moreText}>
+                      {all
+                        ? "收起"
+                        : "查看全部 " + group.rows.length + " " + unit}
+                    </Text>
+                    <ChevronDown
+                      size={15}
+                      color={c.accent}
+                      style={
+                        all ? { transform: [{ rotate: "180deg" }] } : undefined
+                      }
+                    />
+                  </Pressable>
+                )}
+              </DisclosureBody>
+            </View>
+          );
+        }}
+      />
+    </View>
+  );
+}
+
+/** Text stays anchored and opaque; only its clipped viewport opens or closes. */
+function DisclosureBody({
+  expanded,
   children,
 }: {
-  readonly title: string;
-  readonly query: string;
-  readonly onChangeQuery: (query: string) => void;
-  readonly placeholder: string;
-  readonly children: ReactNode;
+  expanded: boolean;
+  children: ReactNode;
 }) {
+  const progress = useSharedValue(expanded ? 1 : 0);
+  const contentHeight = useSharedValue(0);
+  const measured = useRef(false);
+  useEffect(() => {
+    progress.set(withTiming(expanded ? 1 : 0, DISCLOSURE_MOTION));
+  }, [expanded, progress]);
+  const viewport = useAnimatedStyle(() => ({
+    height: contentHeight.get() * progress.get(),
+  }));
   return (
-    <ScrollView
-      contentInsetAdjustmentBehavior="never"
-      automaticallyAdjustContentInsets={false}
-      style={styles.screen}
-      contentContainerStyle={styles.content}
-      keyboardDismissMode="on-drag"
-      keyboardShouldPersistTaps="handled"
-      showsVerticalScrollIndicator={false}
+    <Animated.View
+      style={[s.disclosure, viewport]}
+      pointerEvents={expanded ? "auto" : "none"}
+      accessibilityElementsHidden={!expanded}
+      importantForAccessibility={expanded ? "auto" : "no-hide-descendants"}
     >
-      <View style={styles.heading}>
-        <Text accessibilityRole="header" style={styles.title}>
-          {title}
-        </Text>
+      <View
+        style={s.disclosureContent}
+        onLayout={({ nativeEvent }) => {
+          const height = nativeEvent.layout.height;
+          contentHeight.set(
+            measured.current ? withTiming(height, DISCLOSURE_MOTION) : height,
+          );
+          measured.current = true;
+        }}
+      >
+        {children}
       </View>
-      <View style={styles.search}>
-        <SymbolView name="magnifyingglass" size={17} tintColor={c.muted} />
-        <TextInput
-          accessibilityLabel={placeholder}
-          placeholder={placeholder}
-          placeholderTextColor={c.muted}
-          value={query}
-          onChangeText={onChangeQuery}
-          style={styles.searchInput}
-          clearButtonMode="while-editing"
-          returnKeyType="search"
-        />
-      </View>
-      {children}
-    </ScrollView>
+    </Animated.View>
   );
 }
 
 function BookGroup({
   book,
   count,
-  closed,
+  unit,
+  expanded,
+  searching,
   onPress,
 }: {
-  readonly book: Book;
-  readonly count: string;
-  readonly closed: boolean;
-  readonly onPress: () => void;
+  book: DemoBook;
+  count: number;
+  unit: string;
+  expanded: boolean;
+  searching: boolean;
+  onPress: () => void;
 }) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={book.title + "，" + count}
-      accessibilityState={{ expanded: !closed }}
-      onPress={onPress}
-      style={({ pressed }) => [styles.groupHeader, pressed && styles.pressed]}
-    >
-      <View style={[styles.swatch, { backgroundColor: book.cover }]}>
-        <View style={styles.swatchSpine} />
-        <Text style={[styles.swatchText, { color: book.coverInk }]}>
-          {book.title.slice(0, 2)}
+  const indicator = useAnimatedStyle(
+    () => ({
+      transform: [
+        { rotate: withTiming(expanded ? "0deg" : "-90deg", DISCLOSURE_MOTION) },
+      ],
+    }),
+    [expanded],
+  );
+  const content = (
+    <>
+      <DemoBookCover book={book} miniature />
+      <View style={s.groupLabel}>
+        <Text style={s.groupTitle}>{book.title}</Text>
+        <Text style={s.groupCount}>
+          {count} {unit}
         </Text>
       </View>
-      <View style={styles.groupIdentity}>
-        <Text style={styles.groupTitle}>{book.title}</Text>
-        <Text style={styles.groupCount}>{count}</Text>
-      </View>
-      <SymbolView
-        name={closed ? "chevron.right" : "chevron.down"}
-        size={11}
-        weight="medium"
-        tintColor={c.muted}
-      />
+      {!searching && (
+        <Animated.View style={indicator}>
+          <ChevronDown size={18} color={c.secondary} />
+        </Animated.View>
+      )}
+    </>
+  );
+  // Search exposes every matching group; a decorative chevron must not imply it can hide results.
+  return searching ? (
+    <View style={s.groupHeading}>{content}</View>
+  ) : (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={book.title + "，" + count + unit}
+      accessibilityState={{ expanded }}
+      onPress={onPress}
+      style={({ pressed }) => [s.groupHeading, pressed && s.pressed]}
+    >
+      {content}
     </Pressable>
   );
 }
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: c.paper },
-  content: { paddingHorizontal: 24, paddingTop: 16, paddingBottom: 32 },
-  heading: { marginBottom: 23 },
-  title: {
-    fontSize: 32,
-    lineHeight: 40,
-    fontWeight: "700",
-    letterSpacing: -0.8,
-    color: c.ink,
+const s = StyleSheet.create({
+  screen: { flex: 1 },
+  content: {
+    paddingHorizontal: 24,
+    paddingTop: 6,
+    paddingBottom: 32,
+    width: "100%",
+    maxWidth: 760,
+    alignSelf: "center",
   },
-  search: {
+  group: {
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.line,
+  },
+  groupHeading: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 9,
-    backgroundColor: c.tint,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    minHeight: 46,
+    minHeight: 76,
+    gap: 12,
+    paddingVertical: 8,
   },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    minHeight: 46,
-    color: c.ink,
-    paddingVertical: 10,
+  groupLabel: { flex: 1 },
+  groupTitle: { fontSize: 23, lineHeight: 31, fontWeight: "700", color: c.ink },
+  groupCount: { fontSize: 13, lineHeight: 20, color: c.muted, marginTop: 5 },
+  disclosure: { overflow: "hidden" },
+  disclosureContent: {
+    position: "absolute",
+    top: 0,
+    left: 40,
+    right: 0,
+    paddingLeft: 8,
+    paddingTop: 3,
   },
-  summary: {
+  note: {
+    paddingVertical: 15,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.line,
+  },
+  quoteBlock: { borderLeftWidth: 2, borderLeftColor: c.gold, paddingLeft: 10 },
+  personalBlock: { borderLeftWidth: 0, paddingLeft: 0 },
+  quote: { fontSize: 17, lineHeight: 27, color: c.ink },
+  thought: { fontSize: 14, lineHeight: 22, color: c.secondary, marginTop: 8 },
+  meta: { fontSize: 12, lineHeight: 19, color: c.muted, marginTop: 7 },
+  source: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    marginTop: 30,
-    marginBottom: 4,
+    gap: 6,
+    alignSelf: "flex-start",
+    minHeight: 44,
+    marginTop: 5,
   },
-  summaryCount: { fontSize: 12, color: c.muted },
-  group: { marginBottom: 17 },
-  groupHeader: {
-    minHeight: 70,
+  sourceText: { fontSize: 14, color: c.accent },
+  chat: {
+    minHeight: 62,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    paddingVertical: 14,
-  },
-  swatch: {
-    width: 27,
-    height: 38,
-    borderRadius: 2,
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-  },
-  swatchSpine: {
-    position: "absolute",
-    left: 2,
-    top: 0,
-    bottom: 0,
-    width: 2,
-    backgroundColor: "#00000018",
-  },
-  swatchText: {
-    fontFamily: "Songti SC",
-    fontSize: 8,
-    lineHeight: 12,
-    fontWeight: "600",
-  },
-  groupIdentity: { flex: 1 },
-  groupTitle: { fontSize: 15, lineHeight: 21, fontWeight: "600", color: c.ink },
-  groupCount: { fontSize: 11, lineHeight: 17, color: c.muted, marginTop: 2 },
-  note: {
-    paddingTop: 14,
-    paddingBottom: 17,
+    paddingVertical: 16,
+    backgroundColor: c.paper,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: c.line,
   },
-  noteBody: { flexDirection: "row", gap: 13 },
-  quoteRule: {
-    width: 2,
-    borderRadius: 1,
-    backgroundColor: c.gold,
-    marginVertical: 3,
-  },
-  thoughtRule: { backgroundColor: c.accent },
-  quote: {
-    flex: 1,
-    fontFamily: "Songti SC",
-    fontSize: 18,
-    lineHeight: 29,
-    color: c.ink,
-  },
-  noteMeta: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingLeft: 15,
-    marginTop: 11,
-  },
-  meta: { fontSize: 11, lineHeight: 17, color: c.muted },
-  thoughtPreview: {
-    fontSize: 13,
-    lineHeight: 21,
-    color: c.secondary,
-    paddingLeft: 15,
-    marginTop: 8,
-  },
-  expandedNote: {
-    marginLeft: 15,
-    marginTop: 15,
-    paddingLeft: 13,
-    borderLeftWidth: 1,
-    borderLeftColor: c.line,
-  },
-  thoughtLabel: {
-    fontSize: 11,
-    lineHeight: 17,
-    color: c.accent,
-    fontWeight: "500",
-    marginBottom: 6,
-  },
-  thought: { fontSize: 14, lineHeight: 23, color: c.secondary },
-  sourceAction: {
-    minHeight: 44,
+  chatBody: { flex: 1 },
+  swipeActions: { flexDirection: "row" },
+  swipeAction: { width: 76, justifyContent: "center", alignItems: "center" },
+  renameAction: { backgroundColor: c.secondary },
+  deleteAction: { backgroundColor: "#B94237" },
+  actionText: { fontSize: 14, color: c.surface },
+  chatTitle: { fontSize: 17, lineHeight: 26, color: c.ink },
+  more: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    alignSelf: "flex-start",
-    marginTop: 2,
+    gap: 6,
+    minHeight: 48,
+    paddingVertical: 12,
   },
-  sourceText: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: c.accent,
-    fontWeight: "500",
-  },
-  chat: {
-    paddingVertical: 17,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: c.line,
-  },
-  chatTitleRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-  chatTitle: {
-    flex: 1,
-    fontSize: 16,
-    lineHeight: 24,
-    fontWeight: "600",
-    color: c.ink,
-  },
-  chatPreview: {
-    fontSize: 13,
-    lineHeight: 22,
-    color: c.secondary,
-    marginTop: 7,
-    paddingRight: 20,
-  },
-  chatMeta: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 11,
-  },
-  pressed: { opacity: 0.65 },
-  empty: {
-    color: c.muted,
-    fontSize: 14,
-    lineHeight: 22,
-    paddingVertical: 40,
-    textAlign: "center",
-  },
+  moreText: { color: c.accent, fontSize: 14, lineHeight: 22 },
+  pressed: { opacity: 0.6 },
 });

@@ -1,13 +1,13 @@
-/** UI experiment only. Do not import these tokens into the product. */
+/** Visual prototype only. Product tokens are independent. */
 export const demoColors = {
-  paper: "#F8FAF7",
+  paper: "#FAF9F6",
   surface: "#FFFFFF",
-  tint: "#EEF2ED",
-  ink: "#202923",
-  secondary: "#536058",
-  muted: "#68746B",
-  line: "#E0E7DE",
-  accent: "#34634D",
-  accentWash: "#E7F0E8",
-  gold: "#A78447",
+  tint: "#F0EDE7",
+  ink: "#292722",
+  secondary: "#625E56",
+  muted: "#777168",
+  line: "#E4E0D8",
+  accent: "#805638",
+  accentWash: "#EDE4D9",
+  gold: "#AA7A44",
 } as const;
