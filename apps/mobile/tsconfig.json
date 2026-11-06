@@ -4,9 +4,12 @@
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM"],
     "moduleResolution": "Bundler",
+    "paths": { "@/*": ["./*"] },
     "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "types": ["expo/types", "react", "react-native"],
     "skipLibCheck": true
   },
-  "include": ["app/**/*.ts", "app/**/*.tsx", "src/**/*.ts", "src/**/*.tsx", "expo-env.d.ts"]
+  "include": ["app/**/*.ts", "app/**/*.tsx", "src/**/*.ts", "src/**/*.tsx", "components/**/*.ts", "components/**/*.tsx", "lib/**/*.ts", "expo-env.d.ts", "uniwind-types.d.ts"]
 }

@@ -34,3 +34,30 @@ export function ftsMatchQuery(query: string): string | null {
   if (!tokens.length) return null;
   return tokens.map(escapeToken).join(' AND ');
 }
+
+/** 长问句保留严格匹配优先，再用相邻字词短语召回；短关键词仍维持 AND。 */
+export function ftsQueryVariants(query: string): string[] {
+  const bounded = query.slice(0, 2000);
+  const exact = ftsMatchQuery(bounded);
+  if (!exact) return [];
+  const phrases = retrievalQueryTerms(bounded).map(term => escapeToken(ftsTokens(term).join(' ')));
+  const relaxed = [...new Set(phrases)].join(' OR ');
+  return relaxed && relaxed !== exact ? [exact, relaxed] : [exact];
+}
+
+/** 只用于长问句的补充召回；不改变普通短关键词的 AND 约定。 */
+export function retrievalQueryTerms(query: string): string[] {
+  if (ftsTokens(query).length < 7) return [];
+  const bounded = query.slice(0, 2000);
+  const terms = ftsTokens(bounded
+    .replace(/请问|请你|帮我|告诉我|为什么|是什么|怎么样|怎么|如何|是否|这本书|本书|书中|作者|认为|提到|哪些|什么|一下|关于|的|了|呢|吗/g, ' ')
+    .replace(/\b(?:the|a|an|is|are|was|were|what|why|how|does|do|in|of|this|book|author|please)\b/gi, ' '));
+  const phrases: string[] = [];
+  for (let index = 0; index < terms.length && phrases.length < 48; index += 1) {
+    const current = terms[index]!;
+    const next = terms[index + 1];
+    if (/^[a-z0-9]/i.test(current)) phrases.push(current);
+    else if (next && !/^[a-z0-9]/i.test(next)) phrases.push(`${current}${next}`);
+  }
+  return [...new Set(phrases)];
+}

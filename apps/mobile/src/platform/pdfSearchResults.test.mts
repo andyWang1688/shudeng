@@ -4,6 +4,7 @@ import Module, { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { collectPdfSearch, pdfSearchFragmentRanges, pdfSearchSnippet, trimPdfSearchQuery, type PdfSearchMatch, type PdfTextRange } from './pdfSearchResults.ts';
+import { normalizePdfOpenError } from './pdfErrors.ts';
 
 const match = (offset: number, length: number): PdfSearchMatch => ({ offset, length, rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.04 }] });
 
@@ -128,6 +129,7 @@ function port(native: any) {
   compiled.require = (id: string) => {
     if (id === 'expo') return { requireOptionalNativeModule: () => native };
     if (id === './pdfSearchResults') return { collectPdfSearch, trimPdfSearchQuery };
+    if (id === './pdfErrors') return { normalizePdfOpenError };
     throw new Error(id);
   };
   compiled._compile(nativeCode, nativeFile);

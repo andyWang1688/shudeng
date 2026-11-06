@@ -33,6 +33,7 @@ test('notes list hides removed books while retaining their annotations for reimp
     listAnchors: async (id: string) => [{ id: 'anchor-' + id, quote: 'original ' + id, chapter: 'Chapter', page: null, locatorJson: '{}' }],
   };
   const api = load(new URL('../platform/library/annotations.ts', import.meta.url), {
+    '@shudeng/core/db': {},
     '@shudeng/core/domain': { decodeEpubAnchor: () => null },
     './epubAnnotations': {},
     '../db': { getDataLayer: async () => ({ store, driver: { run: async () => { writes++; } } }) },
@@ -51,6 +52,7 @@ test('notes list hides removed books while retaining their annotations for reimp
 test('saved notes validate nonblank content but preserve the original leading/trailing text', async () => {
   const writes: any[] = [];
   const api = load(new URL('../platform/library/annotations.ts', import.meta.url), {
+    '@shudeng/core/db': {},
     '@shudeng/core/domain': {}, './epubAnnotations': {}, './import': {}, './pure': {},
     '../db': { getDataLayer: async () => ({ driver: {
       all: async () => [{ kind: 'note' }], run: async (...args: any[]) => writes.push(args),
@@ -126,6 +128,7 @@ function notesRoute(items: any[], preferences: Record<string, boolean> | null = 
     '../format': { recordTime: () => '今天 09:41' },
     '../chat/format': { SERIF: 'Songti SC' },
     '../theme': { usePalette: () => palette, type: {} },
+    '../navigation/useNativeListSearch': load(new URL('./navigation/useNativeListSearch.ts', import.meta.url), { react: hooks }),
   });
   return { navigation, writes, alerts, files, shares, unmount() { state.forEach((entry) => entry.cleanup?.()); }, render() {
     cursor = 0;

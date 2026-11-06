@@ -2,7 +2,7 @@
  * 最小 store：用共享 Drizzle schema 做增删改查，不直接拼 SQL（迁移/建表除外）。
  * 数据库对象由注入驱动创建（createDatabase）；本文件不 import 任何平台驱动。
  */
-import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { ShudengDatabase } from './drizzle.js';
 import {
   anchors,
@@ -310,7 +310,7 @@ export class ShudengStore {
 
   /** 删除对话（messages / citations / checkpoints；不删书与标注）。 */
   async deleteConversation(conversationId: string): Promise<void> {
-    await this.db.transaction(async (tx) => {
+    await this.db.withTransaction(async (tx) => {
       const rows = await tx
         .select({ id: messages.id })
         .from(messages)

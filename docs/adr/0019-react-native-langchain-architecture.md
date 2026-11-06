@@ -28,6 +28,45 @@ date: 2026-11-02
 - 界面只消费自定义 `AgentEvent`；LangChain 类型不出 Agent 模块。
 - 旧数据使用版本化 `Anchor` 迁移，不直接用 CFI/新坐标覆盖旧 Readium Locator/PDF 坐标。
 
+### 书架入口简化
+
+用户明确取消 RN 书架的“继续阅读”卡片及其最近一本书偏好读写。搜索下方直接展示书籍网格，点书封打开；各书阅读进度的保存、恢复与展示继续保留。此项取代旧设计中对继续阅读卡片的要求，是用户确认的原生对照差异；旧原型、已发布版本的用户文档与原生基线保留为历史记录。
+
+书架与笔记、对话统一使用 Expo Router 原生 Stack 的大标题和系统搜索栏（`placement: stacked`、`hideWhenScrolling: false`），让系统处理标题收缩及搜索交互。书架不再把页头、搜索框放进网格的滚动头部，也不新增手写吸顶动画；内容仍为两列书籍网格，导入置于系统导航工具栏。书架独立导航栈保持根路径 `/` 及 `/(tabs)` 的默认书架入口，取消搜索清空查询并恢复搜索前位置。
+
+### 阅读问答前端（2026-11-04 用户确认）
+
+- 采用 **assistant-ui 的 `@assistant-ui/react-native`** 作为阅读问答界面的基础，复用通用聊天组件与交互状态；应用框架仍为 React Native/Expo，范围不扩展到书架、阅读器和其他页面。
+- 保留现有阅读内问答弹层，以及上拉展开到全屏、下拉收回和关闭返回阅读的交互；原生导航维护路由生命周期，窗口交互采用成熟的 Bottom Sheet 组件，assistant-ui 嵌入其内容区域。弹层内部的标题、消息、输入区、工具过程和引用布局允许重做。切换窗口高度不得重建对话、清空输入或中断回答；关闭面板仍不等于取消生成。
+- 通过原生包导出的 `useExternalStoreRuntime` 适配设备内 Agent：将 `AgentEvent` 和已保存消息转换为界面状态，并连接发送、取消等操作。LangChain 类型继续封装在 Agent 模块内，不因采用 UI 库增加 AI 服务器或更换模型请求路径。
+- 书灯负责提问选文、当前书绑定、书内依据与网页来源展示、引用回到原文，以及本地 SQLite 会话持久化。组件展示的操作必须由实际执行层支持；UI 能力不代表已经实现执行恢复或存储语义。
+- 已接入原生包 0.1.51，采用官方 React Native Elements registry 的完整 `Thread`，保留消息、Markdown、Reasoning、工具展示、输入、发送与停止。2026-11-05 用户选择 Claude 风格，外观根据官方 Claude Web 示例适配 RN 手机：暖色主题、中文提示、固定底部多行输入和触控操作；这是本地原生适配，不是官方另行提供的 RN Claude 主题。源码与来源摘要位于 `apps/mobile/components/assistant-ui/`；书内选文、引用和设置通过附加插槽接入。
+- 2026-11-05 用户截图确认 UIKit `formSheet` 的最大档仍露出阅读器工具栏，并明确要求复用现成组件。该选择取代上一轮系统卡片方案：采用 **`@gorhom/bottom-sheet@5.2.14`**，`['76%', '100%']` 固定两档、关闭动态增档，由组件处理松手吸附、回弹、把手、遮罩、滚动协作和键盘。透明全屏路由仅作为宿主，不编写自定义 Pan 手势、吸附阈值或键盘几何算法。最大档背景到容器顶部，安全区只用于内部把手与内容；不使用 `topInset` 给窗口保留外部空白。灯泡和品牌标题行移除，只留紧凑关闭入口与组件把手。输入和列表通过官方 `BottomSheetTextInput/BottomSheetScrollView` 接入，关闭 Thread 内部重复键盘避让；设备边界与手势验收记录在开发验收文档。
+
+依据：[LangChain 官方集成文档](https://docs.langchain.com/oss/javascript/langchain/frontend/integrations/assistant-ui)、[assistant-ui React Native 文档](https://www.assistant-ui.com/docs/react-native)、[官方 Native Elements](https://www.assistant-ui.com/docs/react-native/elements)与[原生 external-store 示例](https://www.assistant-ui.com/docs/react-native/testing)。LangChain 文档中的界面示例使用 Web 包，RN 应使用原生包完成对应适配。
+
+### 内置联网搜索（2026-11-04 用户确认）
+
+- 首版采用模型服务商的内置搜索，沿用所选模型服务的地址、密钥和模型配置，不要求额外配置搜索服务，不新增独立搜索 API 或 MCP 服务。搜索由模型服务商执行，LangChain 负责接入。
+- 复用 LangChain 对应服务商的内置工具支持。例如 OpenAI 搜索走 Responses API，Anthropic 搜索使用其服务端搜索工具；不同服务商分别适配，不将“OpenAI 兼容”视为支持内置搜索。
+- 联网默认关闭，由每个模型服务单独保存，在该服务的编辑页开启；阅读助手设置只维护用户自定义指令。切换服务使用该服务自己的联网偏好，每轮发问固定配置快照。旧全局联网偏好仅一次迁到当时选中的服务，已有服务级偏好优先，不扩散到其他或未来新增服务。官方 OpenAI/Anthropic 端点使用各自的服务端搜索协议；自定义地址或中转服务缺乏显式能力确认时仅进行书内问答，模型名称不作为能力凭证。明确搜索能力错误且尚未输出内容时，本轮移除联网工具后重试一次；已有正文后不重复请求。鉴权、额度或一般参数错误保留其真实失败。
+- 复用模型密钥不代表免费；AI 服务配置说明应覆盖搜索可能产生的费用。回答继续区分书内依据与网页来源，网页引用可打开出处。
+- 服务商真实 SDK 的受控协议测试已覆盖开关、工具混用、来源、调用预算和错误降级；来源保存与重开使用真实 SQLite 验证。真实外网搜索质量、服务端计费及端到端设备操作须单独验收。
+
+依据：[LangChain 服务商内置工具说明](https://docs.langchain.com/oss/javascript/langchain/tools#server-side-tool-use)、[OpenAI 内置搜索](https://docs.langchain.com/oss/javascript/integrations/chat/openai#web-search)与[Anthropic 集成](https://docs.langchain.com/oss/javascript/integrations/chat/anthropic)。
+
+### AI 设置分组
+
+“我的”保留一个“AI 与助手”入口，统一管理模型服务、助手自定义指令、本地语义资料与扩展入口。联网开关跟随具体模型服务；第三方 MCP 是额外扩展，与内置搜索分开，在“外部工具”次级列表管理。调整入口不删除已有工具配置、白名单、授权、密钥或会话；模型服务发送说明及 MCP 首次调用确认继续生效。
+
+### RAG 重构（2026-11-04 用户确认）
+
+本次 AI 重构包含 RAG。以当前书为范围，采用 Agent 调用检索与原文工具的方向，复用 LangChain BaseRetriever/Document、官方 Agent 循环及 Deep Agents 的 Memory/Skills。书灯维护本地 SQLite/ONNX 混合检索、定位、引用核对和已有上下文压缩策略。工具、规则/Skills、兼容边界与验收状态集中记录于[阅读 Agent 与 RAG 重构](../design/reading-agent-rebuild.md)。
+
+用户确认阅读 Agent 的基础行为与人设支持自定义，以产品配置承载用户级统一指令（可按 AGENTS.md 表达）；与开发助手的仓库规则分开。Skills 指导检索策略，允许根据实际依据多轮搜索和原文读取，权限和资源边界由代码执行。
+
+本方向取代 ADR-0007/0008 中对本次重构的“不引入工具 Agent、仅一次最终生成、不展开逐章取材”的限制；旧首发验收继续作为历史记录，不代表新方案已经通过。整书概括需要相应章节覆盖，材料不足时明确范围。
+
 ## 当前证据
 
 本节以下为 2026-11-02 spike 的历史证据，不能替代正式迁移验收。2026-11-03 起的双模拟器基线、当前差异和验收状态统一记录于 `docs/design/2026-11-03/rn-native-parity.md`。类型检查或实现者测试通过，不代表功能、UI 和效果已经与原生一致。

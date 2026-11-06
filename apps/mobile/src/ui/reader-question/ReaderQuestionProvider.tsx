@@ -107,7 +107,7 @@ export function ReaderQuestionProvider({ children }: { readonly children: ReactN
     let listeners = appearances.current.get(presentationId);
     if (!listeners) { listeners = new Set(); appearances.current.set(presentationId, listeners); }
     listeners.add(listener);
-    // ChatList can mount after availability/history reads outlast the native
+    // The thread can mount after availability/history reads outlast the native
     // transition. Replay its current appearance, never a hidden question's event.
     if (hasCurrentAppearance(presentationId)) listener();
     return () => { listeners.delete(listener); if (listeners.size === 0) appearances.current.delete(presentationId); };

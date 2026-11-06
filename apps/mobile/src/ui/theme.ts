@@ -2,7 +2,7 @@
  * 书灯设计令牌：对齐 docs/design/ui-development-standard.md、Swift BookDesign 与 design-baseline。
  * `colors` 保留浅色静态导出给旧页面；根四栏用 `usePalette()` 跟随系统深色。
  */
-import { useColorScheme, type ViewStyle } from 'react-native';
+import { useColorScheme } from 'react-native';
 import { useAppearanceMode } from './appearance';
 
 export const lightColors = {
@@ -144,32 +144,4 @@ export function bookCoverTone(title: string, _format?: string): BookCoverTone {
 export function bookSwatchTone(title: string, _format?: string): BookCoverTone {
   const background = ['#38483F', '#8F5336', '#3A4653', '#6D5A3A'][titlePaletteIndex(title)]!;
   return { background, ink: lightColors.paper, rule: `${lightColors.paper}66` };
-}
-
-/** 书架/笔记/对话统一搜索条：白色圆角立体条、细描边 + 轻微阴影。 */
-export function searchFieldTextColor(palette: Palette): string {
-  return palette.ink;
-}
-
-export function searchFieldPlaceholderColor(palette: Palette): string {
-  return palette.paper === darkColors.paper ? palette.ink3 : '#8A8375';
-}
-
-export function searchFieldIconColor(palette: Palette): string {
-  return palette.paper === darkColors.paper ? palette.ink2 : '#57534A';
-}
-
-export function searchFieldChrome(palette: Palette): ViewStyle {
-  const dark = palette.paper === darkColors.paper;
-  return {
-    backgroundColor: dark ? '#1F1D1A' : '#FFFFFF',
-    borderWidth: 1,
-    borderColor: palette.line,
-    borderRadius: 15,
-    shadowColor: '#000000',
-    shadowOpacity: dark ? 0.12 : 0.08,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
-  };
 }

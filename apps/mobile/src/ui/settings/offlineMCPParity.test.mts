@@ -69,10 +69,10 @@ function screenHarness(installed = false, removeFailure = false) {
     "../../platform/settings/semanticPreparation": { observeSemanticPreparation: () => () => {}, prepareExistingBooks() { preparation++; }, async cancelSemanticPreparation() { preparationCancelled++; } },
   });
   const Screen = load("apps/mobile/src/ui/settings/AISettingsScreen.tsx").AISettingsScreen;
-  const render = () => h.render(() => Screen({ onBack() {}, onEditService() {}, onEditMCP() {}, onSendingDetails() {} }));
+  const render = () => h.render(() => Screen({ onBack() {}, onEditService() {}, onMCPSettings() {}, onSendingDetails() {} }));
   return { render, alerts, unmount: h.unmount, finish: () => finish(), cancelComplete: () => reject(Object.assign(new Error("下载已取消。"), { name: "AbortError" })), lateProgress: () => progress({ stage: "download", fraction: .9 }), get preparation() { return preparation; }, get removed() { return removed; }, get preparationCancelled() { return preparationCancelled; } };
 }
-const modelRow = (tree: any) => nodes(tree, n => n.type === "SettingsRow" && n.props.title === "离线语义资料")[0];
+const modelRow = (tree: any) => nodes(tree, n => n.type === "SettingsRow" && n.props.testID === "ai-semantic")[0];
 test("r11 cancellation restores normal not-installed state and ignores late progress", async () => {
   const h = screenHarness(); let tree = h.render(); await flush(); tree = h.render();
   modelRow(tree).props.onPress(); await flush(); tree = h.render();
@@ -87,7 +87,7 @@ test("r11 successful install shows the native paper notice with 完成 action", 
   modelRow(tree).props.onPress(); h.finish(); await flush(); tree = h.render();
   assert.equal(modelRow(tree).props.detail, "已下载 · 约 81MB");
   const card = nodes(tree, n => n.type === "BookNotice")[0]; assert.ok(card);
-  assert.equal(card.props.title, "离线语义资料已下载");
+  assert.equal(card.props.title, "语义资料已下载");
   assert.equal(card.props.message, "语义资料会在后台准备；阅读、原文搜索和笔记不受影响。");
   assert.deepEqual(card.props.actions.map((action: any) => action.title), ["完成"]);
   assert.equal(h.preparation, 1); assert.deepEqual(h.alerts, []);
@@ -112,7 +112,7 @@ test("model removal uses native paper text; cancellation and repeated stale call
   const h = screenHarness(true); let tree = h.render(); await flush(); tree = h.render();
   modelRow(tree).props.onPress(); tree = h.render();
   const card = nodes(tree, n => n.type === "BookNotice")[0];
-  assert.equal(card.props.title, "删除离线语义资料？");
+  assert.equal(card.props.title, "删除语义资料？");
   assert.equal(card.props.message, "删除后书内 AI 语义检索暂不可用；阅读、原文搜索和笔记不受影响。");
   assert.deepEqual(card.props.actions.map((action: any) => [action.title, action.style]), [["取消", "cancel"], ["删除", "destructive"]]);
   card.props.actions[0].onPress(); card.props.actions[1].onPress(); await flush(); tree = h.render();
@@ -128,7 +128,7 @@ test("confirmed removal runs once; failure keeps installed state and shows nativ
     assert.equal(h.removed, 1); assert.equal(h.preparationCancelled, 1);
     assert.equal(modelRow(tree).props.detail, failing ? "已下载 · 约 81MB" : "未下载 · 约 81MB");
     const failure = nodes(tree, n => n.type === "BookNotice")[0];
-    if (failing) { assert.equal(failure.props.title, "删除未完成"); assert.equal(failure.props.message, "离线语义资料仍保留；请稍后重试。"); }
+    if (failing) { assert.equal(failure.props.title, "删除未完成"); assert.equal(failure.props.message, "语义资料仍保留；请稍后重试。"); }
     else assert.equal(failure, undefined);
     h.unmount();
   }

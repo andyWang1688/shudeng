@@ -32,6 +32,9 @@ function useDraftState(service: AIService | null, selected: boolean) {
     service?.contextWindowTokens?.toString() ?? "",
   );
   const [key, setKey] = useState("");
+  const [webSearchEnabled, setWebSearchEnabled] = useState(
+    service?.webSearchEnabled ?? false,
+  );
   return {
     service,
     selected,
@@ -47,6 +50,8 @@ function useDraftState(service: AIService | null, selected: boolean) {
     setWindowSize,
     key,
     setKey,
+    webSearchEnabled,
+    setWebSearchEnabled,
   };
 }
 const DraftContext = createContext<ReturnType<typeof useDraftState> | null>(

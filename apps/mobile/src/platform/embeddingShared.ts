@@ -3,7 +3,7 @@ import type { EmbeddingProvider } from '@shudeng/core/rag';
 /** 与 iOS/Node 共用的向量空间标识（manifest.vector_space）。 */
 export const EMBEDDING_MODEL_ID = 'minilm-e8f8c211-arm64-int8-128-mean-l2-v1';
 export const EMBEDDING_DIMENSION = 384;
-/** 含 specials 的最大 token 数；超限保留前 127 + eos。 */
+/** 含 specials 的最大 token 数；超限必须先切块，不静默剪裁正文。 */
 export const EMBEDDING_MAX_TOKENS = 128;
 
 export type EmbeddingStatus =

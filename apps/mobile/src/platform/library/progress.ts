@@ -1,6 +1,6 @@
 /**
  * 阅读进度：版本迁移管理 reading_progress 表；首次读到旧书时
- * 把 library.json 的 locatorJSON 回填成进度（幂等）。供书架「继续阅读」与阅读器恢复。
+ * 把 library.json 的 locatorJSON 回填成进度（幂等）。供书架展示进度与阅读器恢复位置。
  */
 import type { SQLiteValue } from '@shudeng/core/db';
 import { getDataLayer, type ShudengDataLayer } from '../db';

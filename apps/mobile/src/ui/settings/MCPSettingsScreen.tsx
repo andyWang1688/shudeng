@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   loadMCPServers,
@@ -7,7 +7,12 @@ import {
   type MCPServer,
 } from "../../platform/mcp";
 import { MCPServerEditor } from "./MCPServerEditor";
-import { SettingsHeader, SettingsRow, SettingsSection } from "./SettingsParts";
+import {
+  SettingsAction,
+  SettingsHeader,
+  SettingsRow,
+  SettingsSection,
+} from "./SettingsParts";
 import { usePalette } from "../theme";
 interface MCPSettingsScreenProps {
   readonly serverId?: string | undefined;
@@ -19,50 +24,128 @@ export function MCPSettingsScreen({
   onBack,
 }: MCPSettingsScreenProps) {
   const p = usePalette();
-  const [server, setServer] = useState<MCPServer | null>(null);
+  const [servers, setServers] = useState<readonly MCPServer[] | null>(null);
+  const [editing, setEditing] = useState<{
+    server: MCPServer;
+    isNew: boolean;
+  } | null>(null);
   const [error, setError] = useState("");
-  useEffect(() => {
-    let active = true;
-    if (!serverId) {
-      setServer(newMCPServer());
-      return;
+  const [loading, setLoading] = useState(true);
+  const mounted = useRef(true);
+  const generation = useRef(0);
+  const refresh = useCallback(async () => {
+    const request = ++generation.current;
+    setLoading(true);
+    setError("");
+    try {
+      const values = await loadMCPServers();
+      if (mounted.current && generation.current === request) setServers(values);
+    } catch (cause) {
+      if (mounted.current && generation.current === request)
+        setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (mounted.current && generation.current === request) setLoading(false);
     }
-    void loadMCPServers()
-      .then((servers) => {
-        if (!active) return;
-        const value = servers.find((item) => item.id === serverId);
-        if (!value) throw new Error("找不到这个外部工具，请返回后重试。");
-        setServer(value);
-      })
-      .catch((cause: unknown) => {
-        if (active)
-          setError(cause instanceof Error ? cause.message : String(cause));
-      });
+  }, []);
+  useEffect(() => {
+    mounted.current = true;
+    setEditing(null);
+    setServers(null);
+    void refresh();
     return () => {
-      active = false;
+      mounted.current = false;
+      generation.current++;
     };
-  }, [serverId]);
-  if (!server)
+  }, [refresh, serverId]);
+  const deepLinkedServer = serverId
+    ? servers?.find((item) => item.id === serverId)
+    : undefined;
+  const editor =
+    editing ??
+    (deepLinkedServer ? { server: deepLinkedServer, isNew: false } : null);
+  if (editor)
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: p.paper }}>
-        <SettingsHeader title="外部工具" onBack={onBack} />
-        {error ? (
-          <View style={{ paddingHorizontal: 16 }}>
-            <SettingsSection>
-              <SettingsRow title={error} danger />
-            </SettingsSection>
-          </View>
-        ) : (
-          <ActivityIndicator color={p.lampInk} />
-        )}
-      </SafeAreaView>
+      <MCPServerEditor
+        key={editor.server.id}
+        initial={editor.server}
+        isNew={editor.isNew}
+        onClose={serverId ? onBack : () => setEditing(null)}
+        onChanged={() => {
+          void refresh();
+        }}
+      />
     );
+  const notice =
+    error ||
+    (serverId && !loading && servers
+      ? "找不到这个外部工具，请返回后重试。"
+      : "");
   return (
-    <MCPServerEditor
-      initial={server}
-      isNew={!serverId}
-      onClose={onBack}
-      onChanged={() => undefined}
-    />
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: p.paper }}
+      edges={["top", "left", "right"]}
+    >
+      <SettingsHeader
+        title="外部工具"
+        onBack={onBack}
+        actions={
+          !serverId ? (
+            <SettingsAction
+              title="添加"
+              disabled={loading || !servers || !!error}
+              onPress={() =>
+                setEditing({ server: newMCPServer(), isNew: true })
+              }
+            />
+          ) : undefined
+        }
+      />
+      <ScrollView
+        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
+      >
+        {loading ? (
+          <ActivityIndicator color={p.lampInk} style={{ marginTop: 24 }} />
+        ) : null}
+        {notice ? (
+          <SettingsSection>
+            <SettingsRow
+              title={notice}
+              detail="点按重试，已有配置未覆盖"
+              danger
+              onPress={() => {
+                void refresh();
+              }}
+            />
+          </SettingsSection>
+        ) : null}
+        {!serverId && servers ? (
+          <SettingsSection
+            title="MCP 服务"
+            first
+            footer="外部工具默认关闭；只允许已授权的工具，首次调用前仍需确认。"
+          >
+            {servers.length ? (
+              servers.map((server) => (
+                <SettingsRow
+                  key={server.id}
+                  title={server.name}
+                  detail={
+                    (server.enabled ? "已启用" : "未启用") +
+                    " · " +
+                    new URL(server.endpoint).host +
+                    " · " +
+                    server.allowedTools.length +
+                    " 个工具"
+                  }
+                  onPress={() => setEditing({ server, isNew: false })}
+                />
+              ))
+            ) : (
+              <SettingsRow title="尚未添加外部工具" detail="书内问答无需配置" />
+            )}
+          </SettingsSection>
+        ) : null}
+      </ScrollView>
+    </SafeAreaView>
   );
 }

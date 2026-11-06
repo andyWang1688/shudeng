@@ -13,6 +13,7 @@ import {
   type RagChapter,
   type TextChunk,
   type TextChunker,
+  type EmbeddingProvider,
 } from './types.js';
 import type { CancellationSignal } from './types.js';
 
@@ -72,7 +73,7 @@ function splitParagraph(text: string, range: Range, maxChars: number): Array<{ s
   if (slice.length <= maxChars) return [{ start: range.start, end: range.end }];
 
   const segments: Array<{ start: number; end: number }> = [];
-  const sentence = /[^。！？!?.\n]+[。！？!?.\n]*/g;
+  const sentence = /[^。！？!?.\n]*[。！？!?.\n]+|[^。！？!?.\n]+/g;
   for (const match of slice.matchAll(sentence)) {
     const value = match[0];
     if (value.length > 0) segments.push({ start: match.index ?? 0, end: (match.index ?? 0) + value.length });
@@ -144,10 +145,13 @@ export class ParagraphTextChunker implements TextChunker {
   /** Callers can persist bounded batches instead of retaining a whole book's chunk objects. */
   *iterate(book: RagBook, options: ChunkerOptions = {}, context: { signal?: CancellationSignal } = {}): Generator<TextChunk> {
     const maxChars = Math.max(80, Math.floor(options.maxChars ?? 120));
+    if ((options.maxTokens === undefined) !== (options.countTokens === undefined)) throw new Error('token 切块需要同时提供 maxTokens 与 countTokens');
+    if (options.maxTokens !== undefined && (!Number.isInteger(options.maxTokens) || options.maxTokens < 1)) throw new Error('token 预算必须为正整数');
     for (const chapter of book.chapters) {
       assertNotAborted(context.signal);
       const source = chapterSource(chapter);
-      for (const range of chunkChapter(chapter, maxChars, context.signal)) {
+      const ranges = chunkChapter(chapter, maxChars, context.signal).flatMap(range => splitTokenRange(source.text, range, options, context.signal));
+      for (const range of ranges) {
         const text = source.text.slice(range.start, range.end);
         const locator: ChunkLocator = {
           engine: 'rag-chunk-v1',
@@ -179,6 +183,48 @@ export class ParagraphTextChunker implements TextChunker {
       }
     }
   }
+}
+
+/** 原文不经 normalize/rejoin；切片的位置直接继承 UTF-16 范围，重复文字不会串位。 */
+function splitTokenRange(text: string, range: Range, options: ChunkerOptions, signal?: CancellationSignal): Range[] {
+  if (!options.countTokens || options.maxTokens === undefined) return [range];
+  const countTokens = options.countTokens;
+  const fits = (start: number, end: number): boolean => {
+    const count = countTokens(text.slice(start, end));
+    if (!Number.isInteger(count) || count < 0) throw new Error('tokenizer 返回了无效的 token 数');
+    return count <= options.maxTokens!;
+  };
+  const ranges: Range[] = [];
+  let start = range.start;
+  while (start < range.end) {
+    assertNotAborted(signal);
+    let end = range.end;
+    if (!fits(start, end)) {
+      const boundaries = [start];
+      let position = start;
+      for (const point of text.slice(start, range.end)) { position += point.length; boundaries.push(position); }
+      let low = 1, high = boundaries.length - 1, best = 0;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        if (fits(start, boundaries[middle]!)) { best = middle; low = middle + 1; }
+        else high = middle - 1;
+      }
+      if (!best) throw new Error('单个字符超过语义模型的 token 预算，不能无损切块');
+      end = boundaries[best]!;
+      // Tokenizer 不是严格单调的；最终切片再核对一次，绝不依赖字符数猜测。
+      while (!fits(start, end) && best > 0) end = boundaries[--best]!;
+      if (end <= start) throw new Error('无法在语义模型的 token 预算内切块');
+    }
+    ranges.push({ ...range, start, end });
+    start = end;
+  }
+  return ranges;
+}
+
+export function embeddingChunkOptions(embedding: EmbeddingProvider | null, options: ChunkerOptions = {}): ChunkerOptions {
+  if (!embedding?.countTokens || embedding.maxInputTokens === undefined) return options;
+  return { ...options, maxTokens: Math.min(options.maxTokens ?? embedding.maxInputTokens, embedding.maxInputTokens),
+    countTokens: embedding.countTokens.bind(embedding) };
 }
 
 /** 由 locator JSON 还原章节/页码（BookSource/UI 回跳用）。 */

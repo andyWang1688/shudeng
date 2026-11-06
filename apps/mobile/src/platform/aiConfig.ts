@@ -1,6 +1,7 @@
 /** Versioned AI services. Catalog and independent secret revisions live in device SecureStore. */
 import * as SecureStore from "expo-secure-store";
 import { createLocalId } from "@shudeng/core";
+import { loadLegacyAssistantWebSearchEnabled } from "./assistantPreferences";
 import {
   aiConsentScope,
   EMPTY_CATALOG,
@@ -23,6 +24,7 @@ export type AIConfig = {
   readonly model: string;
   readonly apiKey: string;
   readonly contextWindowTokens?: number;
+  readonly webSearchEnabled?: boolean;
 };
 const CATALOG_KEY = "shudeng.ai-services.v2";
 const LEGACY_KEY = "shudeng.ai-config.v1";
@@ -35,7 +37,7 @@ function mutate<T>(work: () => Promise<T>): Promise<T> {
   writes = pending.catch(() => undefined);
   return pending;
 }
-async function catalog(): Promise<AICatalog> {
+async function storedCatalog(): Promise<AICatalog> {
   const raw = await SecureStore.getItemAsync(CATALOG_KEY);
   if (raw) return parseAICatalog(raw);
   const legacy = await SecureStore.getItemAsync(LEGACY_KEY);
@@ -58,6 +60,29 @@ async function catalog(): Promise<AICatalog> {
     services: [{ ...draft, id: "legacy", secretId: LEGACY_KEY }],
   };
 }
+/** Commit the destination and completion marker in one SecureStore write. Never touch a key. */
+async function catalog(): Promise<AICatalog> {
+  const value = await storedCatalog();
+  if (value.webSearchMigrated) return value;
+  const enabled = await loadLegacyAssistantWebSearchEnabled();
+  const migrated: AICatalog = {
+    ...value,
+    webSearchMigrated: true,
+    services: value.services.map((row) =>
+      enabled === true &&
+      row.id === value.selectedId &&
+      row.webSearchEnabled === undefined
+        ? { ...row, webSearchEnabled: true }
+        : row,
+    ),
+  };
+  await SecureStore.setItemAsync(
+    CATALOG_KEY,
+    JSON.stringify(migrated),
+    OPTIONS,
+  );
+  return migrated;
+}
 async function readKey(row: AIService): Promise<string> {
   const raw = await SecureStore.getItemAsync(row.secretId);
   const key =
@@ -71,15 +96,15 @@ async function readKey(row: AIService): Promise<string> {
   return key;
 }
 export async function loadAIServiceCatalog(): Promise<AICatalog> {
-  await writes;
-  return catalog();
+  // Reads can perform the one-time migration, so they share the mutation queue.
+  return mutate(catalog);
 }
 export async function loadAIConfig(): Promise<AIConfig | null> {
   const value = await loadAIServiceCatalog();
   const row = value.services.find((item) => item.id === value.selectedId);
   if (!row) return null;
   if (row.consentScope !== aiConsentScope(row))
-    throw new Error("请先到「我的 → AI 服务」确认此服务的发送说明。");
+    throw new Error("请先到「我的 → AI 与助手」确认此服务的发送说明。");
   return {
     id: row.id,
     name: row.name,
@@ -87,6 +112,7 @@ export async function loadAIConfig(): Promise<AIConfig | null> {
     baseUrl: row.baseUrl,
     model: row.model,
     apiKey: await readKey(row),
+    webSearchEnabled: row.webSearchEnabled ?? false,
     ...(row.contextWindowTokens
       ? { contextWindowTokens: row.contextWindowTokens }
       : {}),
@@ -97,7 +123,11 @@ export async function loadAIServiceForTest(id: string): Promise<AIConfig> {
     (item) => item.id === id,
   );
   if (!row) throw new Error("找不到这个服务。");
-  return { ...row, apiKey: await readKey(row) };
+  return {
+    ...row,
+    webSearchEnabled: row.webSearchEnabled ?? false,
+    apiKey: await readKey(row),
+  };
 }
 export function saveAIService(
   draft: AIServiceDraft,
@@ -118,14 +148,21 @@ export function saveAIService(
     const scope = aiConsentScope(validated);
     if (!confirmingSendConsent && old?.consentScope !== scope)
       throw new Error("请先确认 AI 服务发送说明。");
-    const row: AIService = { ...validated, id, secretId, consentScope: scope };
+    const row: AIService = {
+      ...validated,
+      id,
+      secretId,
+      consentScope: scope,
+      webSearchEnabled:
+        validated.webSearchEnabled ?? old?.webSearchEnabled ?? false,
+    };
     if (key) await SecureStore.setItemAsync(secretId, key, OPTIONS);
     else await readKey(row);
     try {
       await SecureStore.setItemAsync(
         CATALOG_KEY,
         JSON.stringify({
-          version: 2,
+          ...next,
           selectedId: next.selectedId ?? id,
           services: [...next.services.filter((item) => item.id !== id), row],
         }),
@@ -199,6 +236,9 @@ export async function saveAIConfig(
       model: config.model,
       ...(config.contextWindowTokens
         ? { contextWindowTokens: config.contextWindowTokens }
+        : {}),
+      ...(config.webSearchEnabled !== undefined
+        ? { webSearchEnabled: config.webSearchEnabled }
         : {}),
     },
     config.apiKey,

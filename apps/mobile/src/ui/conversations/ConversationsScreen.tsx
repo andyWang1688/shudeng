@@ -1,8 +1,7 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef } from 'react';
 import { ActivityIndicator, PlatformColor, Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
-import type { SearchBarCommands } from 'react-native-screens';
 import Swipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { SymbolView } from 'expo-symbols';
 import { EmptyState } from '../components/EmptyState';
@@ -14,37 +13,27 @@ import { usePalette, type Palette } from '../theme';
 import { ConversationRenamePrompt } from './ConversationRenamePrompt';
 import { conversationSections, conversationTitle, type ConversationItem, type ConversationSection } from './model';
 import { useConversationList } from './useConversationList';
+import { useNativeListSearch } from '../navigation/useNativeListSearch';
 
 export default function ConversationsScreen() {
   const router = useRouter();
   const palette = usePalette();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const state = useConversationList();
-  const [query, setQuery] = useState('');
   const list = useRef<SectionList<ConversationItem, ConversationSection>>(null);
-  const searchBar = useRef<SearchBarCommands>(null);
-  const offset = useRef(0);
-  const beforeSearch = useRef<number | null>(null);
+  const { query, clear: clearSearch, headerSearchBarOptions, onScroll } = useNativeListSearch({
+    placeholder: '搜索你的问题', palette,
+    restoreOffset: y => list.current?.getScrollResponder()?.scrollTo({ y, animated: false }),
+  });
   const needle = query.trim();
   const sections = state.loadError ? [] : conversationSections(state.items, state.books, query, state.collapsed);
-  const clearSearch = () => { searchBar.current?.clearText(); setQuery(''); };
-  const cancelSearch = () => {
-    setQuery('');
-    const y = beforeSearch.current; beforeSearch.current = null;
-    if (y !== null) requestAnimationFrame(() => list.current?.getScrollResponder()?.scrollTo({ y, animated: false }));
-  };
   const dialog = state.dialog;
   return (
     <SafeAreaView style={styles.safeArea} edges={['left', 'right']} testID="conversations-surface">
-      <Stack.Screen options={{ headerSearchBarOptions: {
-        ref: searchBar, placeholder: '搜索你的问题', placement: 'stacked', hideWhenScrolling: false,
-        obscureBackground: false, cancelButtonText: '取消', tintColor: palette.lamp, textColor: palette.ink,
-        onFocus: () => { beforeSearch.current ??= offset.current; },
-        onChangeText: event => setQuery(event.nativeEvent.text), onCancelButtonPress: cancelSearch,
-      } }} />
+      <Stack.Screen options={{ headerSearchBarOptions }} />
       <SectionList ref={list} testID="question-history" sections={sections}
         contentInsetAdjustmentBehavior="automatic" scrollEventThrottle={16}
-        onScroll={event => { offset.current = event.nativeEvent.contentOffset.y; }}
+        onScroll={onScroll}
         keyExtractor={item => item.conversationId}
         renderItem={({ item, index, section }) => <ConversationRow item={item} first={index === 0} last={index === section.data.length - 1}
           palette={palette} styles={styles} onRename={() => state.openDialog('rename', item)} onDelete={() => state.openDialog('delete', item)}

@@ -11,3 +11,5 @@ export type {
   AgentModelHandle,
   AgentProvider,
 } from './providers.js';
+export type { AgentWebSearchConfig } from './web-search.js';
+export { resolveWebSearchPolicy } from './web-search.js';

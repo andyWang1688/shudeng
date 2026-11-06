@@ -3,11 +3,14 @@
  * drizzle 类型只在 db 内部使用；调用方拿到的数据库对象只需配合 store 使用。
  */
 import { drizzle } from 'drizzle-orm/sqlite-proxy';
-import type { AsyncRemoteCallback } from 'drizzle-orm/sqlite-proxy';
+import type { AsyncRemoteCallback, SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy';
 import type { SQLiteDriver, SQLiteValue } from './driver.js';
 import { schema } from './schema.js';
 
-export type ShudengDatabase = ReturnType<typeof createDatabase>;
+type QueryDatabase = Omit<SqliteRemoteDatabase<typeof schema>, 'transaction'>;
+export type ShudengDatabase = QueryDatabase & {
+  withTransaction<T>(callback: (tx: QueryDatabase) => Promise<T>): Promise<T>;
+};
 
 function driverCallback(driver: SQLiteDriver): AsyncRemoteCallback {
   // Drizzle sqlite-proxy 要求位置数组行（mapResultRow 用 row[columnIndex]）；
@@ -33,6 +36,12 @@ function driverCallback(driver: SQLiteDriver): AsyncRemoteCallback {
 }
 
 /** 用注入驱动创建 drizzle 数据库（schema 共享，纯 TS）。 */
-export function createDatabase(driver: SQLiteDriver) {
-  return drizzle(driverCallback(driver), { schema });
+export function createDatabase(driver: SQLiteDriver): ShudengDatabase {
+  const db = drizzle(driverCallback(driver), { schema });
+  return Object.assign(db, {
+    /** sqlite-proxy's own transaction sends separate root queries and cannot hold the driver lock. */
+    withTransaction<T>(callback: (tx: QueryDatabase) => Promise<T>): Promise<T> {
+      return driver.transaction(tx => callback(drizzle(driverCallback(tx), { schema })));
+    },
+  });
 }

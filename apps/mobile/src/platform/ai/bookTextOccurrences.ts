@@ -1,5 +1,5 @@
 /** Exact literal reader search. Source text is streamed; result storage grows only with real hits. */
-import { assertNotAborted, type CancellationSignal, type ChunkLocator, type TextChunk } from '@shudeng/core';
+import { assertNotAborted, type CancellationSignal, type TextChunk } from '@shudeng/core';
 import { graphemeSegments } from 'unicode-segmenter/grapheme';
 export interface BookTextSearchHit { readonly id: string; readonly chapter: string; readonly context: string; readonly locator: string }
 export interface BookTextSearchOptions { readonly signal?: CancellationSignal }

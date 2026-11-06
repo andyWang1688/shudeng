@@ -1,25 +1,20 @@
 import type { AgentContextEstimate } from '@shudeng/core';
 
-export function contextPercent(fraction: number): string {
-  const percent = Math.max(0, Math.min(1, fraction)) * 100;
-  return (percent > 0 && percent < 1 ? percent.toFixed(1) : Math.round(percent).toString()) + '%';
-}
-
-export function humanContextSize(count: number): string {
-  if (count >= 10000) return (count / 10000).toFixed(1) + ' 万字';
-  if (count >= 1000) return (count / 1000).toFixed(1) + ' 千字';
-  return count + ' 字';
-}
-
-export function contextBreakdown(estimate: AgentContextEstimate, external: boolean): string {
-  if (!estimate.estimatedTokens) return '构成：暂无已发送内容';
-  return '构成：' + [
-    ['对话历史', estimate.historyTokens],
-    [external ? '资料与工具' : '书内资料', estimate.toolTokens],
-    ['摘要', estimate.summaryTokens],
-    ['系统提示', estimate.systemTokens],
-  ].filter(([, tokens]) => Number(tokens) > 0)
-    .map(([label, tokens]) => label + ' ' + Math.round(Number(tokens) / estimate.estimatedTokens * 100) + '%').join(' · ');
+/** Display the last prepared request without inventing usage for an unknown window. */
+export function contextUsagePresentation(estimate: AgentContextEstimate | undefined) {
+  if (!estimate || !Number.isFinite(estimate.estimatedTokens)) return {
+    ratio: undefined, percent: '—', tokenAmount: '尚无请求记录',
+  };
+  const used = Math.max(0, Math.round(estimate.estimatedTokens));
+  const window = estimate.contextWindowTokens;
+  const knownWindow = window !== undefined && Number.isFinite(window) && window > 0;
+  const ratio = knownWindow ? used / window : undefined;
+  const percent = ratio === undefined ? '—' :
+    ((ratio > 0 && ratio < 0.01) ? (ratio * 100).toFixed(1) : Math.round(ratio * 100).toString()) + '%';
+  const compact = (count: number) => count >= 1000
+    ? Number((count / 1000).toFixed(count < 10000 ? 1 : 0)) + 'k' : Math.round(count).toString();
+  const tokenAmount = compact(used) + ' / ' + (knownWindow ? compact(window) : '—') + ' token';
+  return { ratio, percent, tokenAmount };
 }
 
 /** Continuous 16pt ring, matching native radius, stroke and top start. */

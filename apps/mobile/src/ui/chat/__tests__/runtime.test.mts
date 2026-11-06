@@ -8,6 +8,18 @@ const turn = (id: string): ChatTurn => ({ id, role: 'assistant', text: '', reaso
 afterEach(() => { for (const record of getConversationRuntimeSnapshots()) discardConversationRun(record.conversationId); vi.useRealTimers(); });
 
 describe('readonly history runtime port', () => {
+  it('freezes website sources and search status independently from a mutable running turn', () => {
+    const source = { id: 'web-1', url: 'https://example.com/source', title: '真实外部来源', provider: 'openai' as const };
+    const status = { status: 'searching' as const, message: '正在搜索' };
+    publishConversationRun('runtime-web', { ...turn('answer'), webSources: [source], webSearchStatus: status }, { bookId: 'book', bookTitle: '书' });
+    source.title = '后来修改'; status.message = '后来状态';
+    const saved = getConversationRuntimeSnapshots()[0]!.turn;
+    expect(saved.webSources?.[0]?.title).toBe('真实外部来源');
+    expect(saved.webSearchStatus?.message).toBe('正在搜索');
+    expect(Object.isFrozen(saved.webSources?.[0])).toBe(true);
+    expect(Object.isFrozen(saved.webSearchStatus)).toBe(true);
+  });
+
   it('keeps stable snapshots and first book identity across updates before storage', () => {
     vi.useFakeTimers(); vi.setSystemTime(100);
     const changed = vi.fn(); const stop = subscribeConversationRuntime(changed);

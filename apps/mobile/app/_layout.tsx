@@ -1,15 +1,16 @@
 import "../src/shims/installGlobals";
-import { useEffect, useMemo, useState } from "react";
-import { Dimensions, type DimensionsPayload } from "react-native";
+import "../global.css";
+import { useEffect, useMemo } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { Uniwind } from "uniwind";
 import { AppearanceProvider, useAppearance } from "../src/ui/appearance";
 import { usePalette } from "../src/ui/theme";
 import { MCPToolConsentHost } from "../src/ui/settings/MCPToolConsentHost";
 import { mcpToolConsentScreenLayout } from "../src/ui/settings/MCPToolConsentScreenHost";
-import { ReaderQuestionProvider, questionPresentationIdFromRoute, useQuestionTransitionEnd, useReaderQuestionRegistry } from "../src/ui/reader-question/ReaderQuestionProvider";
+import { ReaderQuestionProvider, useQuestionTransitionEnd } from "../src/ui/reader-question/ReaderQuestionProvider";
 
 export const unstable_settings = { anchor: "(tabs)" };
 
@@ -26,19 +27,12 @@ export default function RootLayout() {
 }
 
 function RootLayoutContent() {
-  const [sheetDetentReferenceHeight, setSheetDetentReferenceHeight] = useState(
-    () => Dimensions.get("screen").height,
-  );
-  useEffect(() => {
-    const subscription = Dimensions.addEventListener("change", ({ screen }: DimensionsPayload) => {
-      if (screen) setSheetDetentReferenceHeight(screen.height);
-    });
-    return () => subscription.remove();
-  }, []);
   const transitionEnd = useQuestionTransitionEnd();
-  const questions = useReaderQuestionRegistry();
   const palette = usePalette();
   const { resolvedMode } = useAppearance();
+  useEffect(() => {
+    Uniwind.setTheme(resolvedMode);
+  }, [resolvedMode]);
   const contentStyle = useMemo(
     () => ({ backgroundColor: palette.paper }),
     [palette],
@@ -74,24 +68,15 @@ function RootLayoutContent() {
             gestureEnabled: false,
           }}
         />
-        {/* 书内问答是浮层：底部上滑，透出下层阅读页。 */}
+        {/* Navigation owns route lifetime; Gorhom owns sheet gestures and sizing. */}
         <Stack.Screen
           name="book-chat"
-          listeners={({ route }) => ({ sheetDetentChange: event => {
-            const presentation = questions.get(questionPresentationIdFromRoute(route));
-            if (presentation && event.data.stable) presentation.update({ sheetDetent: event.data.index }, false);
-          } })}
-          options={({ route }) => ({
-            presentation: "formSheet",
-            animation: "slide_from_bottom",
-            sheetAllowedDetents: [0.76, 1],
-            sheetDetentReferenceHeight,
-            sheetInitialDetentIndex: questions.get(questionPresentationIdFromRoute(route))?.getSnapshot().sheetDetent ?? 0,
-            sheetGrabberVisible: false,
-            sheetCornerRadius: 22,
-            sheetExpandsWhenScrolledToEdge: true,
-            contentStyle,
-          })}
+          options={{
+            presentation: "transparentModal",
+            animation: "fade",
+            gestureEnabled: false,
+            contentStyle: { backgroundColor: "transparent" },
+          }}
         />
       </Stack>
       <MCPToolConsentHost />

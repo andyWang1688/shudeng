@@ -5,13 +5,6 @@ import type { AIConfig } from '../../platform/aiConfig';
 export const SERIF = 'SongtiSC-Regular';
 export const SERIF_BOLD = 'SongtiSC-Bold';
 
-export function toolLabel(name: string): string {
-  if (name === 'search_book') return '检索书内原文';
-  if (name === 'read_page') return '读取页/章';
-  if (name === 'read_chapter') return '读取章节';
-  return name;
-}
-
 export function serviceName(config: Pick<AIConfig, 'name' | 'provider'> | null | undefined): string {
   const name = config?.name?.trim();
   if (name) return name;

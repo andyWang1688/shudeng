@@ -1,4 +1,5 @@
-import type { AgentContextEstimate, AgentContextUsage, AgentSentMaterial, LegacyNativeSnapshot, VerifiedCitation } from '@shudeng/core';
+import type { AgentContextEstimate, AgentContextUsage, AgentSentMaterial, LegacyNativeSnapshot, VerifiedCitation, WebSource } from '@shudeng/core';
+import type { WebSearchPresentation } from '../../platform/library/assistantSources';
 import type { QuestionOriginSnapshot } from '../../platform/library/questionOrigin';
 
 export interface ToolLine {
@@ -21,6 +22,8 @@ export interface ChatTurn {
   /** Reader-facing process title, separate from compressed conversation context. */
   toolSummary?: string;
   citations: VerifiedCitation[];
+  webSources?: readonly WebSource[];
+  webSearchStatus?: WebSearchPresentation;
   warnings: string[];
   status: 'streaming' | 'done' | 'error' | 'cancelled' | 'interrupted';
   error?: string;

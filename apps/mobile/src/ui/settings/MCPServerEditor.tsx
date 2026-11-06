@@ -45,9 +45,14 @@ export function MCPServerEditor({
       .join("\n"),
   );
   const [busy, setBusy] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
+  const [commitPhase, setCommitPhase] = useState<"connection" | "tools" | null>(null);
   const [status, setStatus] = useState("");
+  const inFlight = useRef(false);
   const task = useRef<AbortController | null>(null);
   const mounted = useRef(true);
+  const closing = useRef(false);
+  const discoveryCommit = useRef(false);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -55,8 +60,26 @@ export function MCPServerEditor({
       task.current?.abort();
     };
   }, []);
+  const active = () => mounted.current && !closing.current;
+  const close = () => {
+    if (closing.current) return;
+    closing.current = true;
+    task.current?.abort();
+    onClose();
+  };
+  const editable = () => active() && !inFlight.current;
+  const begin = () => {
+    if (!editable()) return false;
+    inFlight.current = true;
+    setBusy(true);
+    return true;
+  };
+  const finish = () => {
+    inFlight.current = false;
+    if (active()) setBusy(false);
+  };
   const fail = (error: unknown) => {
-    if (mounted.current)
+    if (active())
       setStatus(error instanceof Error ? error.message : String(error));
   };
   const draft = (): MCPServer => {
@@ -69,38 +92,53 @@ export function MCPServerEditor({
     return { ...server, headers };
   };
   const save = async () => {
-    if (busy) return;
-    setBusy(true);
+    if (!begin()) return;
     try {
       const saved = await saveMCPServer(draft());
-      if (mounted.current) setServer(saved);
+      if (!active()) return;
+      setServer(saved);
       onChanged();
-      if (isNew) onClose();
+      if (isNew) close();
       else setStatus("已保存。");
     } catch (error) {
       fail(error);
     } finally {
-      if (mounted.current) setBusy(false);
+      finish();
     }
   };
   const discover = async () => {
-    if (busy) return;
-    setBusy(true);
-    task.current = new AbortController();
+    if (!begin()) return;
+    setDiscovering(true);
+    const request = new AbortController();
+    task.current = request;
     setStatus("正在连接外部工具…");
     try {
       // Reading a disabled draft must not implicitly persist it.
       const candidate = parseMCPServer(draft());
       if (!candidate.enabled) throw new Error("请先启用这个外部工具，再读取工具。");
+      discoveryCommit.current = true;
+      setCommitPhase("connection");
+      setStatus("正在保存连接…");
       const value = await saveMCPServer(candidate);
-      if (mounted.current) setServer(value);
-      const tools = await discoverMCPTools(value, task.current.signal);
+      if (!active()) return;
+      setServer(value);
+      discoveryCommit.current = false;
+      setCommitPhase(null);
+      if (request.signal.aborted) return;
+      setStatus("正在连接外部工具…");
+      const tools = await discoverMCPTools(value, request.signal);
+      if (!active() || request.signal.aborted) return;
+      // Persistence has no cancellation contract once queued. Keep both the
+      // visible control and any retained cancel callback out of this phase.
+      discoveryCommit.current = true;
+      setCommitPhase("tools");
+      setStatus("正在保存工具…");
       const next = await saveMCPServer({
         ...value,
         tools,
         allowedTools: retainedMCPToolPermissions(value, tools),
       });
-      if (mounted.current) {
+      if (active()) {
         setServer(next);
         const revoked = value.allowedTools.length - next.allowedTools.length;
         setStatus(
@@ -118,15 +156,20 @@ export function MCPServerEditor({
         onChanged();
       }
     } catch (error) {
-      fail(error);
+      if (discoveryCommit.current || !request.signal.aborted) fail(error);
     } finally {
-      if (mounted.current) setBusy(false);
+      if (active()) {
+        if (!discoveryCommit.current && request.signal.aborted) setStatus("连接已取消。");
+        setDiscovering(false);
+        setCommitPhase(null);
+      }
+      discoveryCommit.current = false;
+      finish();
       task.current = null;
     }
   };
   const toggleTool = async (name: string, enabled: boolean) => {
-    if (busy) return;
-    setBusy(true);
+    if (!begin()) return;
     try {
       const next = {
         ...draft(),
@@ -135,13 +178,46 @@ export function MCPServerEditor({
           : server.allowedTools.filter((value) => value !== name),
       };
       const saved = await saveMCPServer(next);
-      if (mounted.current) setServer(saved);
+      if (!active()) return;
+      setServer(saved);
       onChanged();
     } catch (error) {
       fail(error);
     } finally {
-      if (mounted.current) setBusy(false);
+      finish();
     }
+  };
+  const chooseTransport = () => {
+    if (!editable()) return;
+    showSettingsChoices("传输方式",
+      (["http", "sse"] as const).map((transport) => ({
+        title: transport === "http" ? "HTTP" : "SSE 流式",
+        onPress: () => {
+          if (editable())
+            setServer({ ...server, transport, tools: [], allowedTools: [] });
+        },
+      })),
+    );
+  };
+  const remove = async () => {
+    if (!begin()) return;
+    try {
+      await removeMCPServer(server.id);
+      if (!active()) return;
+      onChanged();
+      close();
+    } catch (error) {
+      fail(error);
+    } finally {
+      finish();
+    }
+  };
+  const confirmRemove = () => {
+    if (!editable()) return;
+    Alert.alert("删除这个外部工具？", "书内问答不受影响。", [
+      { text: "取消", style: "cancel" },
+      { text: "删除", style: "destructive", onPress: () => void remove() },
+    ]);
   };
   return (
     <SafeAreaView
@@ -150,7 +226,7 @@ export function MCPServerEditor({
     >
       <SettingsHeader
         title={isNew ? "添加外部工具" : "外部工具"}
-        onBack={onClose}
+        onBack={close}
         actions={
           <SettingsAction
             title="保存"
@@ -172,7 +248,9 @@ export function MCPServerEditor({
             <TextInput
               accessibilityLabel="外部工具名称"
               value={server.name}
-              onChangeText={(name) => setServer({ ...server, name })}
+              onChangeText={(name) => {
+                if (editable()) setServer({ ...server, name });
+              }}
               style={styles.input}
               editable={!busy}
             />
@@ -182,9 +260,10 @@ export function MCPServerEditor({
             <TextInput
               accessibilityLabel="外部工具地址"
               value={server.endpoint}
-              onChangeText={(endpoint) =>
-                setServer({ ...server, endpoint, tools: [], allowedTools: [] })
-              }
+              onChangeText={(endpoint) => {
+                if (editable())
+                  setServer({ ...server, endpoint, tools: [], allowedTools: [] });
+              }}
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
@@ -195,37 +274,17 @@ export function MCPServerEditor({
           <SettingsRow
             title="传输方式"
             detail={server.transport === "http" ? "HTTP" : "SSE 流式"}
-            onPress={() =>
-              showSettingsChoices("传输方式", [
-                {
-                  title: "HTTP",
-                  onPress: () =>
-                    setServer({
-                      ...server,
-                      transport: "http",
-                      tools: [],
-                      allowedTools: [],
-                    }),
-                },
-                {
-                  title: "SSE 流式",
-                  onPress: () =>
-                    setServer({
-                      ...server,
-                      transport: "sse",
-                      tools: [],
-                      allowedTools: [],
-                    }),
-                },
-              ])
-            }
+            disabled={busy}
+            onPress={chooseTransport}
           />
           <View style={styles.field}>
             <Text style={styles.label}>请求 Header</Text>
             <TextInput
               accessibilityLabel="请求 Header"
               value={header}
-              onChangeText={setHeader}
+              onChangeText={(value) => {
+                if (editable()) setHeader(value);
+              }}
               placeholder="可选，如 Authorization: Bearer …"
               placeholderTextColor={p.ink3}
               autoCapitalize="none"
@@ -243,7 +302,9 @@ export function MCPServerEditor({
                 accessibilityLabel="启用外部工具"
                 value={server.enabled}
                 disabled={busy}
-                onValueChange={(enabled) => setServer({ ...server, enabled })}
+                onValueChange={(enabled) => {
+                  if (editable()) setServer({ ...server, enabled });
+                }}
                 trackColor={{ true: p.lampInk }}
               />
             }
@@ -254,13 +315,18 @@ export function MCPServerEditor({
           footer="只有打开开关的工具才会交给 AI。首次调用前仍会请求确认。"
         >
           <SettingsRow
-            title={busy ? "正在读取工具…" : "读取可用工具"}
-            onPress={busy ? undefined : () => void discover()}
+            title={commitPhase === "connection" ? "正在保存连接…"
+              : commitPhase === "tools" ? "正在保存工具…"
+              : discovering ? "正在读取工具…" : "读取可用工具"}
+            disabled={busy}
+            onPress={() => void discover()}
           />
-          {busy ? (
+          {discovering && !commitPhase ? (
             <SettingsRow
               title="取消连接"
-              onPress={() => task.current?.abort()}
+              onPress={() => {
+                if (!discoveryCommit.current) task.current?.abort();
+              }}
             />
           ) : null}
           {server.tools.map((tool) => (
@@ -296,23 +362,8 @@ export function MCPServerEditor({
             <SettingsRow
               title="删除这个外部工具"
               danger
-              onPress={() =>
-                Alert.alert("删除这个外部工具？", "书内问答不受影响。", [
-                  { text: "取消", style: "cancel" },
-                  {
-                    text: "删除",
-                    style: "destructive",
-                    onPress: () => {
-                      void removeMCPServer(server.id)
-                        .then(() => {
-                          onChanged();
-                          onClose();
-                        })
-                        .catch(fail);
-                    },
-                  },
-                ])
-              }
+              disabled={busy}
+              onPress={confirmRemove}
             />
           </SettingsSection>
         ) : null}

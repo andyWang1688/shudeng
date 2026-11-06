@@ -29,6 +29,22 @@ export interface VerifiedCitation extends EvidenceRef {
   locator: string;
   chapter?: string;
   page?: number;
+  chunkId?: string;
+  readRef?: string;
+  sourceVersion?: string;
+}
+
+/** A source URL emitted by the provider's search protocol, never parsed from answer prose. */
+export interface WebSource {
+  id: string;
+  url: string;
+  title: string;
+  provider: 'openai' | 'anthropic';
+}
+
+export interface WebSearchState {
+  status: 'disabled' | 'unsupported' | 'enabled' | 'searching' | 'complete' | 'failed';
+  message?: string;
 }
 
 export interface AgentRunResult {
@@ -45,6 +61,8 @@ export interface AgentRunResult {
   contextSummary?: string;
   contextEstimate?: AgentContextEstimate;
   sentMaterials?: readonly AgentSentMaterial[];
+  webSources?: readonly WebSource[];
+  webSearch?: WebSearchState;
 }
 
 /** Provider-reported tokens for the most recent model request; never an estimated percentage. */
@@ -92,6 +110,8 @@ export type AgentEvent =
       durationMs: number;
     }
   | { type: 'citation'; citation: VerifiedCitation }
+  | { type: 'webSource'; source: WebSource }
+  | ({ type: 'webSearchStatus' } & WebSearchState)
   | { type: 'contextUsage'; usage: AgentContextUsage }
   | { type: 'requestContext'; estimate: AgentContextEstimate; materials: readonly AgentSentMaterial[] }
   | { type: 'contextCompacted'; summary: string }

@@ -119,7 +119,6 @@ export function readerLocatorFromLegacy(raw: unknown, format: BookFormat): Store
   if (!isRecord(parsed)) return null;
   const href = typeof parsed.href === 'string' ? parsed.href : undefined;
   const locations = isRecord(parsed.locations) ? parsed.locations : undefined;
-  const title = typeof parsed.title === 'string' ? parsed.title : undefined;
   if (format === 'PDF') {
     const fromHref = href ? /^pdf:\/\/page\/(\d+)(?:$|[/?#])/i.exec(href)?.[1] : undefined;
     const fromFragment = Array.isArray(locations?.fragments)

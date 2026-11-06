@@ -10,6 +10,7 @@ import type { BookRow } from '@shudeng/core/db';
 import { loadAIConfig, type AIConfig } from '../aiConfig';
 import { fetch as expoFetch } from 'expo/fetch';
 import { getDataLayer } from '../db';
+import { loadAssistantPreferences } from '../assistantPreferences';
 import { loadMCPAgentTools } from '../mcp';
 import { createLegacyBookSource, getLegacyIndexStatus } from './legacyIndex';
 import {
@@ -84,7 +85,9 @@ export interface BookChatTurn {
 
 export async function startBookChatTurn(options: StartBookChatTurnOptions): Promise<BookChatTurn> {
   const config = await loadAIConfig();
-  if (!config) throw new BookChatConfigError('请先在「我的 → AI 服务」配置模型 API Key');
+  if (!config) throw new BookChatConfigError('请先在「我的 → AI 与助手」配置模型 API Key');
+  // Snapshot once: editing preferences must not alter an in-flight run.
+  const preferences = await loadAssistantPreferences();
   const layer = await getDataLayer();
   const book = await layer.store.getBook(options.bookId);
   if (!book) throw new BookChatIndexError('找不到这本书');
@@ -113,19 +116,21 @@ export async function startBookChatTurn(options: StartBookChatTurnOptions): Prom
     thinking: deepSeekThinking,
     reasoningEffort: 'high' as const,
   };
-  const model = createChatModel({ ...modelConfig, maxTokens: deepSeekThinking ? 16384 : 1400 });
+  const model = createChatModel({ ...modelConfig, maxTokens: deepSeekThinking ? 16384 : 4096,
+    webSearch: { enabled: config.webSearchEnabled ?? false, maxUses: 3 } });
   const summaryModel = createChatModel({ ...modelConfig, maxTokens: deepSeekThinking ? 16384 : 2000 });
   const configuredWindow = options.contextWindowTokens ?? config.contextWindowTokens ??
     (config.provider === 'anthropic' ? 200000 : 128000);
   const contextWindowTokens = Math.max(2000, Math.min(1000000, Math.floor(configuredWindow)));
   const extraTools = await loadMCPAgentTools();
   const session = runBookAgent({
+    assistantInstructions: preferences.instructions,
     model,
     summaryModel,
     summaryIdleTimeoutMs: deepSeekThinking ? 180000 : 45000,
     modelIdleTimeoutMs: deepSeekThinking ? 180000 : 90000,
     runTimeoutMs: deepSeekThinking ? 300000 : 240000,
-    outputReserveTokens: 1400,
+    outputReserveTokens: deepSeekThinking ? 16384 : 4096,
     source,
     book: identity,
     question: options.question,

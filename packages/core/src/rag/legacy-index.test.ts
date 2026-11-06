@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeSQLiteDriver, type NodeSQLiteDriver } from '../db/testing/node-sqlite-driver.js';
 import { DeterministicEmbeddingProvider } from './embedding.js';
 import { LegacyIndexBookSource, LegacyIndexSearch, legacyFtsTerms } from './legacy-index.js';
@@ -122,6 +122,113 @@ describe('LegacyIndexSearch / LegacyIndexBookSource（旧 Swift book-index.sqlit
     const search = new LegacyIndexSearch(driver, provider);
     expect(await search.hasBook(BOOK_ID)).toBe(true);
     expect(await search.hasBook('missing-book')).toBe(false);
+  });
+
+  it('pages old vectors, retains the best piece per fragment and accepts only verified model identities', async () => {
+    const aligned = new Float32Array(384); aligned[0] = 1;
+    const orthogonal = new Float32Array(384); orthogonal[1] = 1;
+    const swiftModel = 'minilm-e8f8c211-arm64-int8-128-mean-l2-sentence100-overlap20-v2';
+    const model = { modelId: 'minilm-e8f8c211-arm64-int8-128-mean-l2-v1', dimension: 384,
+      async embed(texts: ReadonlyArray<string>) { return texts.map(() => aligned); } };
+    await driver.run('UPDATE embeddings SET model = ?, vector = ?', [swiftModel, bytes(orthogonal)]);
+    for (let piece = 1; piece < 140; piece += 1) {
+      await driver.run('INSERT INTO embeddings VALUES (?,?,?,?,?,?,?)', [BOOK_ID, swiftModel, 1, piece, 0,
+        piece === 139 ? 'THE_BEST_PIECE' : 'other piece', bytes(piece === 139 ? aligned : orthogonal)]);
+    }
+    // Equal dimensions cannot make an unrelated model compatible.
+    await driver.run('INSERT INTO embeddings VALUES (?,?,?,?,?,?,?)', [BOOK_ID, 'unrelated-384d-model', 2, 1, 0, 'FOREIGN_MODEL', bytes(aligned)]);
+    const read = driver.all.bind(driver), pageSizes: number[] = [];
+    const spy = vi.spyOn(driver, 'all').mockImplementation(async (sql, params) => {
+      const rows = await read(sql, params);
+      if (sql.includes('FROM embeddings e')) {
+        expect(sql).toContain('ORDER BY e.fragment_id, e.piece LIMIT 64'); pageSizes.push(rows.length);
+      }
+      return rows;
+    });
+    const hits = await new LegacyIndexSearch(driver, model, { vectorCandidateLimit: 1 }).searchBook(BOOK_ID, 'not present in the book', 1);
+    expect(hits).toMatchObject([{ fragmentId: 1, quote: 'THE_BEST_PIECE', sources: ['vector'] }]);
+    expect(pageSizes.length).toBeGreaterThan(2);
+    expect(Math.max(...pageSizes)).toBe(64);
+    spy.mockRestore();
+    await driver.run('UPDATE embeddings SET model = NULL');
+    expect(await new LegacyIndexSearch(driver, model).searchBook(BOOK_ID, 'not present in the book')).toEqual([]);
+    expect((await new LegacyIndexSearch(driver, model).searchBook(BOOK_ID, '灯把书页'))[0]?.sources).toEqual(['fts']);
+  });
+
+  it('cancels at the old vector page boundary without treating cancellation as model fallback', async () => {
+    let cancelled = false;
+    const read = driver.all.bind(driver);
+    const spy = vi.spyOn(driver, 'all').mockImplementation(async (sql, params) => {
+      const rows = await read(sql, params);
+      if (sql.includes('FROM embeddings e')) cancelled = true;
+      return rows;
+    });
+    const fallback = vi.fn();
+    await expect(new LegacyIndexSearch(driver, provider, { onVectorError: fallback })
+      .searchBook(BOOK_ID, '灯', 5, { get aborted() { return cancelled; } })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fallback).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('keeps legacy semantic and keyword retrieval working for long natural-language questions', async () => {
+    let prepared = false;
+    const embedded: string[] = [];
+    const budgeted = { dimension: 384, modelId: provider.modelId, maxInputTokens: 8,
+      prepare: async () => { prepared = true; }, countTokens: (text: string) => [...text].length + 2,
+      async embed(texts: ReadonlyArray<string>) {
+        expect(prepared).toBe(true);
+        for (const text of texts) { expect([...text].length + 2).toBeLessThanOrEqual(8); embedded.push(text); }
+        return provider.embed(texts);
+      } };
+    const query = '请告诉我这本书中关于月亮的描述有哪些';
+    const hits = await new LegacyIndexSearch(driver, budgeted).searchBook(BOOK_ID, query);
+    expect(embedded.join('')).toBe(query);
+    expect(hits.some(hit => hit.quote.includes('月亮'))).toBe(true);
+    const fts = await new LegacyIndexSearch(driver, null).searchBook(BOOK_ID, query);
+    expect(fts[0]?.quote).toContain('月亮');
+  });
+
+  it('continues legacy fragments when a remaining UTF-16 unit cannot fit the next emoji', async () => {
+    await driver.run('UPDATE fragments SET original = ? WHERE id = 1', ['a'.repeat(255)]);
+    await driver.run('INSERT INTO fragments VALUES (?, ?, ?, ?, ?, ?)', [3, BOOK_ID, 0, 1, '😀THIS_CONTENT_MUST_NOT_DISAPPEAR', readiumLocator('emoji')]);
+    await driver.run('INSERT INTO fragments VALUES (?, ?, ?, ?, ?, ?)', [4, BOOK_ID, 0, 2, 'END_MARKER', readiumLocator('end')]);
+    let passage = await source.passage({ reference: 'chapter:1', before: 0, after: 19, maxChars: 256 });
+    let text = passage!.excerpts.map(excerpt => excerpt.quote).join('');
+    while (passage?.nextCursor) {
+      passage = await source.passage({ reference: 'chapter:1', cursor: passage.nextCursor, before: 0, after: 19, maxChars: 256 });
+      expect(passage).not.toBeNull(); text += passage!.excerpts.map(excerpt => excerpt.quote).join('');
+    }
+    expect(text).toBe('a'.repeat(255) + '😀THIS_CONTENT_MUST_NOT_DISAPPEAR' + 'END_MARKER');
+  });
+
+  it('starts a long legacy fragment at the selected tail and continues without lost or repeated text', async () => {
+    const selected = 'SELECTED_UNIQUE_TEXT', tail = selected + '😀尾部'.repeat(180);
+    await driver.run('UPDATE fragments SET original = ? WHERE id = 1', ['前置段落。'.repeat(300)]);
+    await driver.run('INSERT INTO fragments VALUES (?, ?, ?, ?, ?, ?)', [3, BOOK_ID, 0, 1, 'a'.repeat(1000) + tail, readiumLocator('长段')]);
+    const reference = JSON.stringify({ type: 'epub', href: 'OEBPS/chapter1.xhtml', text: { highlight: selected } });
+    for (const before of [0, 1]) {
+      let passage = await source.passage({ reference, before, after: 0, maxChars: 256 });
+      expect(passage?.locationPrecision).toBe('exact');
+      expect(passage!.excerpts[0]!.quote).toContain(selected);
+      let collected = passage!.excerpts.map(item => item.quote).join('');
+      while (passage?.nextCursor) {
+        passage = await source.passage({ reference, cursor: passage.nextCursor, before: 0, after: 0, maxChars: 256 });
+        expect(passage).not.toBeNull(); collected += passage!.excerpts.map(item => item.quote).join('');
+      }
+      expect(collected).toBe(tail);
+    }
+  });
+
+  it('locates legacy reader highlights with context and refuses an ambiguous duplicate or unsupported CFI', async () => {
+    await driver.run('INSERT INTO fragments VALUES (?, ?, ?, ?, ?, ?)', [3, BOOK_ID, 0, 1, '前乙。重复原文。后乙。', readiumLocator('重复段')]);
+    await driver.run('INSERT INTO fragments VALUES (?, ?, ?, ?, ?, ?)', [4, BOOK_ID, 0, 2, '前甲。重复原文。后甲。', readiumLocator('重复段2')]);
+    const reference = JSON.stringify({ type: 'epub', href: 'OEBPS/chapter1.xhtml', selection: { href: 'OEBPS/chapter1.xhtml', text: { before: '前甲。', highlight: '重复原文。', after: '后甲。' } } });
+    const located = await source.passage({ reference, before: 0, after: 0 });
+    expect(located?.locationPrecision).toBe('exact');
+    expect(located?.excerpts[0]?.quote).toBe('前甲。重复原文。后甲。');
+    await expect(source.passage({ reference: JSON.stringify({ href: 'OEBPS/chapter1.xhtml', text: { highlight: '重复原文。' } }) })).rejects.toThrow(/多次出现/);
+    await expect(source.passage({ reference: JSON.stringify({ type: 'epub', cfi: 'epubcfi(/6/2)' }) })).rejects.toThrow(/只有 CFI/);
+    expect((await source.passage({ reference: JSON.stringify({ type: 'pdf', page: 2 }) }))?.excerpts[0]?.quote).toContain('月亮');
   });
 
   it('falls back to the existing real text index only when an optional-model error policy is explicit', async () => {

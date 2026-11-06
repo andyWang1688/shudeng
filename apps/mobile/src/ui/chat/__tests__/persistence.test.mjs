@@ -91,7 +91,7 @@ describe('durable conversation lifecycle', () => {
     const restored = await loadBookConversation('partial');
     expect(restored[1].text).toBe('已经收到的半段回答');
     expect(restored[1].reasoning).toBe('已经收到的思考');
-    expect(restored[1].details.status).toBe('cancelled');
+    expect(restored[1].details.status).toBe('interrupted');
   });
 
   it('finishes after a slow partial write without overwriting the final answer', async () => {
@@ -176,7 +176,7 @@ describe('durable conversation lifecycle', () => {
       answer: '',
       details: { status: 'streaming', agentQuestion: '选文+问题', selectionQuote: '原文' },
     });
-    expect((await loadBookConversation('first'))[1].details.status).toBe('cancelled');
+    expect((await loadBookConversation('first'))[1].details.status).toBe('interrupted');
     await appendBookChatTurn({
       bookId: 'book-1',
       conversationId: 'first',

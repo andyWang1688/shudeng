@@ -63,6 +63,10 @@ function formatEvent(event: AgentEvent): string {
       return `toolFinished ${event.name} isError=${event.isError} ${event.content.slice(0, 50).replace(/\n/g, ' ')}…`;
     case 'citation':
       return `citation ${event.citation.id} 「${event.citation.quote}」 @ ${event.citation.locator}`;
+    case 'webSource':
+      return `webSource ${event.source.id} ${event.source.url}`;
+    case 'webSearchStatus':
+      return `webSearchStatus ${event.status}`;
     case 'completed':
       return `completed citations=${event.result.citations.length} dropped=${event.result.droppedCitationIds.length}`;
     case 'failed':

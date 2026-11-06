@@ -72,14 +72,14 @@ describe('native timeout checkpoints and stream cancellation', () => {
     const summary = createScriptedModel([{ chunks: [{ text: '长摘要', delayMs: 50000 }] }]);
     const main = createScriptedModel([{ chunks: [{ text: '{"answer":"不会请求","citations":[]}' }] }]);
     const session = runBookAgent({ model: main, summaryModel: summary, source: source(), book,
-      question: '新问', contextWindowTokens: 2000,
-      history: Array.from({ length: 5 }, () => ({ question: '旧问'.repeat(100), answer: '旧答'.repeat(100) })),
+      question: '新问', contextWindowTokens: 8192,
+      history: Array.from({ length: 5 }, () => ({ question: '旧问'.repeat(400), answer: '旧答'.repeat(400) })),
     });
     const pending = collect(session);
     await vi.advanceTimersByTimeAsync(100);
     session.cancel();
     const events = await pending;
-    expect(events.map(event => event.type)).toEqual(['started', 'cancelled']);
+    expect(events.map(event => event.type)).toEqual(['started', 'webSearchStatus', 'cancelled']);
     expect((summary.langChainModel as ScriptedChatModel).calls).toHaveLength(1);
     expect((main.langChainModel as ScriptedChatModel).calls).toHaveLength(0);
     expect(await session.result).toBeNull();

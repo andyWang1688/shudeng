@@ -2,6 +2,7 @@
 // 目标：让核心包的纯 TS 源码与少量 Node 内置依赖可以在 Metro 里打包；
 // 运行时行为尽量贴近浏览器/单线程 JS（AsyncLocalStorage 用同步栈模拟）。
 const { getDefaultConfig } = require('expo/metro-config');
+const { withUniwindConfig } = require('uniwind/metro');
 const path = require('path');
 
 const projectRoot = __dirname;
@@ -44,6 +45,9 @@ const aliases = {
   perf_hooks: shim('perf_hooks'),
   'node:perf_hooks': shim('perf_hooks'),
   undici: shim('undici'),
+  // deepagents/browser also re-exports an optional server sandbox. StateBackend
+  // and reading Skills remain the real package; only the unused server API fails closed.
+  'langsmith/experimental/sandbox': shim('langsmith_sandbox'),
 };
 
 const defaultResolve = config.resolver.resolveRequest;
@@ -68,4 +72,9 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   }
 };
 
-module.exports = config;
+// assistant-ui's official native registry elements use Uniwind class names.
+// Keep this wrapper outermost so the existing resolver aliases stay intact.
+module.exports = withUniwindConfig(config, {
+  cssEntryFile: './global.css',
+  dtsFile: './uniwind-types.d.ts',
+});

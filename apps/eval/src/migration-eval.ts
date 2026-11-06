@@ -58,7 +58,7 @@ async function main(): Promise<void> {
     const migration = await migrate(driver);
     console.log(`schema 迁移：${migration.applied.join(',') || '(已是最新)'}`);
     const db = createDatabase(driver);
-    await db.transaction(async (tx) => {
+    await db.withTransaction(async (tx) => {
       if (result.tables.books.length) await tx.insert(booksTable).values([...result.tables.books]);
       if (result.tables.anchors.length) await tx.insert(anchorsTable).values([...result.tables.anchors]);
       if (result.tables.annotations.length) await tx.insert(annotationsTable).values([...result.tables.annotations]);

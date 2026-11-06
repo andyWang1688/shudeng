@@ -67,11 +67,16 @@ export interface TextChunk {
   readonly text: string;
   readonly locator: ChunkLocator;
   readonly locatorJson: string;
+  /** 读取时绑定的索引版本；不改变持久 chunkId。 */
+  readonly sourceVersion?: string;
 }
 
 export interface ChunkerOptions {
   /** 单块最大字符数（默认 120，给 128 token 窗口留出 specials 余量）。 */
   maxChars?: number;
+  /** 含特殊 token 的真实模型预算。必须与 countTokens 一起提供。 */
+  maxTokens?: number;
+  countTokens?: (text: string) => number;
 }
 
 export interface TextChunker {
@@ -86,6 +91,10 @@ export interface EmbeddingProvider {
   /** 固定模型/版本标识，写入向量表用于校验（换模型需重建索引）。 */
   readonly modelId: string;
   readonly dimension: number;
+  readonly maxInputTokens?: number;
+  countTokens?(text: string): number;
+  /** 异步平台在切块前准备 tokenizer，无须提前执行推理。 */
+  prepare?(): Promise<void>;
   embed(texts: ReadonlyArray<string>, options?: EmbeddingOptions): Promise<Float32Array[]>;
 }
 
@@ -114,19 +123,48 @@ export interface IndexBookOptions {
   signal?: CancellationSignal;
 }
 
-/** 索引端口：实现必须可被异步驱动注入（Node node:sqlite / Expo expo-sqlite）。 */
-export interface SearchIndex {
+export interface BookSearchIndex {
+  search(query: string, options: SearchOptions): Promise<SearchHit[]>;
+}
+
+/** Agent 与阅读器依赖的只读、可取消、有界读取能力。 */
+export interface BookReadIndex extends BookSearchIndex {
+  iterateChunks(bookId: string, options?: { readonly batchSize?: number; readonly signal?: CancellationSignal }): AsyncIterable<TextChunk>;
+  outline(bookId: string, options?: { cursor?: string; limit?: number; signal?: CancellationSignal }): Promise<ChunkOutline>;
+  readPassage(bookId: string, request: ChunkReadRequest): Promise<ChunkReadPage | null>;
+}
+
+export interface BookIndexWriter {
   indexBook(
     book: RagBook,
     chunks: ReadonlyArray<TextChunk>,
     embeddings: ReadonlyArray<Float32Array>,
     options?: IndexBookOptions,
   ): Promise<void>;
-  search(query: string, options: SearchOptions): Promise<SearchHit[]>;
+  deleteBook(bookId: string): Promise<void>;
+}
+
+/** SQLite 索引完整端口；数组读取保留给现有评测与迁移调用。 */
+export interface SearchIndex extends BookReadIndex, BookIndexWriter {
   listChunks(bookId: string): Promise<TextChunk[]>;
   chunksForChapter(bookId: string, reference: string | number): Promise<TextChunk[]>;
   chunksForPage(bookId: string, page: number): Promise<TextChunk[]>;
-  deleteBook(bookId: string): Promise<void>;
+}
+
+export interface ChunkOutline {
+  entries: Array<{ reference: string; ordinal: number; title: string; page?: number; href?: string; chunkCount: number }>;
+  nextCursor?: string;
+}
+
+export interface ChunkReadRequest {
+  reference: string; cursor?: string; before?: number; after?: number; maxChars?: number;
+  signal?: CancellationSignal;
+}
+
+export interface ChunkReadPage {
+  chunks: TextChunk[]; reference: string; nextCursor?: string;
+  locationPrecision?: 'exact' | 'chapter' | 'approximate';
+  locationNote?: string;
 }
 
 export interface IndexStats {
@@ -138,7 +176,7 @@ export interface IndexStats {
 
 /** 从书导入到索引完成（chunk→embed→write），测试/评测共用。 */
 export interface IndexRagBookOptions {
-  index: SearchIndex;
+  index: BookIndexWriter;
   chunker: TextChunker;
   embedding: EmbeddingProvider;
   book: RagBook;

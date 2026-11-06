@@ -4,7 +4,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  View,
 } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -18,7 +17,6 @@ import {
   removeSemanticModel,
   type SemanticProgress,
 } from "../../platform/semanticModel";
-import { loadMCPServers, type MCPServer } from "../../platform/mcp";
 import { useAISendingConsent } from "./useAISendingConsent";
 import { BookNotice } from "../components/BookNotice";
 import {
@@ -37,8 +35,9 @@ import {
 interface AISettingsScreenProps {
   readonly onBack: () => void;
   readonly onEditService: (serviceId: string) => void;
-  readonly onEditMCP: (serverId?: string) => void;
+  readonly onMCPSettings: () => void;
   readonly onSendingDetails: () => void;
+  readonly onAssistantSettings?: () => void;
 }
 type SemanticNotice = {
   readonly id: number;
@@ -49,20 +48,22 @@ type SemanticNotice = {
 export function AISettingsScreen({
   onBack,
   onEditService,
-  onEditMCP,
+  onMCPSettings,
   onSendingDetails,
+  onAssistantSettings,
 }: AISettingsScreenProps) {
   const p = usePalette();
   const styles = useMemo(() => makeStyles(p), [p]);
   const { confirmAISending, sendingConsent } = useAISendingConsent();
   const [catalog, setCatalog] = useState<AICatalog | null>(null);
-  const [servers, setServers] = useState<readonly MCPServer[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [installed, setInstalled] = useState(false);
   const [progress, setProgress] = useState<SemanticProgress | null>(null);
   const [semanticError, setSemanticError] = useState("");
-  const [semanticNotice, setSemanticNotice] = useState<SemanticNotice | null>(null);
+  const [semanticNotice, setSemanticNotice] = useState<SemanticNotice | null>(
+    null,
+  );
   const activeSemanticNotice = useRef<SemanticNotice | null>(null);
   const noticeSequence = useRef(0);
   const task = useRef<AbortController | null>(null);
@@ -75,11 +76,10 @@ export function AISettingsScreen({
     setError("");
     const results = await Promise.allSettled([
       loadAIServiceCatalog(),
-      loadMCPServers(),
       getSemanticModelState(),
     ]);
     if (!mounted.current) return;
-    const [ai, mcp, model] = results;
+    const [ai, model] = results;
     if (ai.status === "fulfilled") setCatalog(ai.value);
     else {
       setCatalog(null);
@@ -89,13 +89,6 @@ export function AISettingsScreen({
           : "AI 配置读取失败；已有配置未覆盖。",
       );
     }
-    if (mcp.status === "fulfilled") setServers(mcp.value);
-    else
-      setError(
-        mcp.reason instanceof Error
-          ? mcp.reason.message
-          : "外部工具配置读取失败。",
-      );
     if (
       model.status === "fulfilled" &&
       semanticGeneration.current === generation &&
@@ -128,21 +121,28 @@ export function AISettingsScreen({
     setSemanticNotice(next);
   };
   const dismissSemanticNotice = (notice: SemanticNotice) => {
-    if (!mounted.current || activeSemanticNotice.current !== notice) return false;
+    if (!mounted.current || activeSemanticNotice.current !== notice)
+      return false;
     activeSemanticNotice.current = null;
     setSemanticNotice(null);
     return true;
   };
   const download = async () => {
     if (
-      !mounted.current || task.current || removingSemantic.current || activeSemanticNotice.current
-    ) return;
+      !mounted.current ||
+      task.current ||
+      removingSemantic.current ||
+      activeSemanticNotice.current
+    )
+      return;
     const controller = new AbortController();
     task.current = controller;
     const generation = ++semanticGeneration.current;
     const current = () =>
-      mounted.current && semanticGeneration.current === generation &&
-      task.current === controller && !controller.signal.aborted;
+      mounted.current &&
+      semanticGeneration.current === generation &&
+      task.current === controller &&
+      !controller.signal.aborted;
     setSemanticError("");
     setProgress({ stage: "download", fraction: 0 });
     try {
@@ -163,7 +163,8 @@ export function AISettingsScreen({
         );
     } finally {
       if (task.current === controller) task.current = null;
-      if (mounted.current && semanticGeneration.current === generation) setProgress(null);
+      if (mounted.current && semanticGeneration.current === generation)
+        setProgress(null);
     }
   };
   const removeInstalledSemantic = async () => {
@@ -240,7 +241,7 @@ export function AISettingsScreen({
   return (
     <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
       <SettingsHeader
-        title="AI 服务"
+        title="AI 与助手"
         centered={false}
         onBack={onBack}
         actions={
@@ -276,7 +277,7 @@ export function AISettingsScreen({
           </SettingsSection>
         ) : null}
         <SettingsSection
-          title="服务"
+          title="模型服务"
           first
           footer="API Key 仅保存在本机 Keychain；点按服务可编辑或检查连接。"
         >
@@ -301,16 +302,30 @@ export function AISettingsScreen({
             <SettingsRow title="尚未配置 AI 服务，仍可正常阅读。" />
           )}
         </SettingsSection>
+        {onAssistantSettings ? (
+          <SettingsSection title="阅读助手">
+            <SettingsRow
+              title="自定义指令"
+              detail="人设、语气与回答偏好"
+              onPress={onAssistantSettings}
+            />
+          </SettingsSection>
+        ) : null}
         <SettingsSection
-          title="离线语义资料"
-          footer="用于书内 AI 语义检索；阅读、原文搜索、笔记不受影响。下载约 81MB，需联网一次；优先使用国内加速线路，失败自动切换。"
+          title="本地语义资料"
+          footer="用于书内语义检索，一次下载约 81MB。"
         >
           <SettingsRow
-            title="离线语义资料"
+            title="语义资料"
             testID="ai-semantic"
             accessibilityValue={
-              progress ? "下载中 " + Math.round(progress.fraction * 100) + "%"
-                : installed ? "已下载" : semanticError ? "下载失败" : "未下载"
+              progress
+                ? "下载中 " + Math.round(progress.fraction * 100) + "%"
+                : installed
+                  ? "已下载"
+                  : semanticError
+                    ? "下载失败"
+                    : "未下载"
             }
             detail={
               progress
@@ -336,37 +351,16 @@ export function AISettingsScreen({
         {semanticError ? (
           <Text style={styles.error}>{semanticError}</Text>
         ) : null}
-        <SettingsSection>
+        <SettingsSection title="其他">
           <SettingsRow
-            title="提问时问题与相关原文会发送到所选服务。详情"
-            compact
-            muted
-            onPress={onSendingDetails}
+            title="外部工具"
+            detail="MCP 服务与工具授权"
+            onPress={onMCPSettings}
           />
-        </SettingsSection>
-        <SettingsSection
-          title="外部工具"
-          footer="外部工具默认关闭，只有白名单中的工具会交给 AI；首次调用前再次确认。仅发送调用参数，不会自动上传书库或发送 AI Key。"
-        >
-          {servers.map((server) => (
-            <SettingsRow
-              key={server.id}
-              title={server.name}
-              detail={
-                (server.enabled ? "已启用" : "未启用") +
-                " · " +
-                new URL(server.endpoint).host +
-                " · " +
-                server.allowedTools.length +
-                " 个工具"
-              }
-              onPress={() => onEditMCP(server.id)}
-            />
-          ))}
           <SettingsRow
-            title="添加外部工具…"
-            detail="默认关闭"
-            onPress={() => onEditMCP()}
+            title="AI 发送说明"
+            detail="问题与相关原文会发送到所选服务"
+            onPress={onSendingDetails}
           />
         </SettingsSection>
       </ScrollView>
@@ -375,22 +369,48 @@ export function AISettingsScreen({
         <BookNotice
           key={semanticNotice.id}
           title={
-            semanticNotice.kind === "downloaded" ? "离线语义资料已下载"
-              : semanticNotice.kind === "remove" ? "删除离线语义资料？" : "删除未完成"
+            semanticNotice.kind === "downloaded"
+              ? "语义资料已下载"
+              : semanticNotice.kind === "remove"
+                ? "删除语义资料？"
+                : "删除未完成"
           }
           message={
-            semanticNotice.kind === "downloaded" ? "语义资料会在后台准备；阅读、原文搜索和笔记不受影响。"
-              : semanticNotice.kind === "remove" ? "删除后书内 AI 语义检索暂不可用；阅读、原文搜索和笔记不受影响。"
-                : "离线语义资料仍保留；请稍后重试。"
+            semanticNotice.kind === "downloaded"
+              ? "语义资料会在后台准备；阅读、原文搜索和笔记不受影响。"
+              : semanticNotice.kind === "remove"
+                ? "删除后书内 AI 语义检索暂不可用；阅读、原文搜索和笔记不受影响。"
+                : "语义资料仍保留；请稍后重试。"
           }
-          actions={semanticNotice.kind === "remove" ? [
-            { title: "取消", style: "cancel", onPress: () => { dismissSemanticNotice(semanticNotice); } },
-            { title: "删除", style: "destructive", onPress: () => {
-              if (dismissSemanticNotice(semanticNotice)) void removeInstalledSemantic();
-            } },
-          ] : [
-            { title: semanticNotice.kind === "downloaded" ? "完成" : "知道了", onPress: () => { dismissSemanticNotice(semanticNotice); } },
-          ]}
+          actions={
+            semanticNotice.kind === "remove"
+              ? [
+                  {
+                    title: "取消",
+                    style: "cancel",
+                    onPress: () => {
+                      dismissSemanticNotice(semanticNotice);
+                    },
+                  },
+                  {
+                    title: "删除",
+                    style: "destructive",
+                    onPress: () => {
+                      if (dismissSemanticNotice(semanticNotice))
+                        void removeInstalledSemantic();
+                    },
+                  },
+                ]
+              : [
+                  {
+                    title:
+                      semanticNotice.kind === "downloaded" ? "完成" : "知道了",
+                    onPress: () => {
+                      dismissSemanticNotice(semanticNotice);
+                    },
+                  },
+                ]
+          }
         />
       ) : null}
     </SafeAreaView>

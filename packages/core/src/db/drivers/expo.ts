@@ -11,7 +11,8 @@
  * 注意：
  * - expo-sqlite 是异步 API（execAsync/runAsync/getAllAsync/getFirstAsync），
  *   与官方 @langchain/langgraph-checkpoint-sqlite 依赖的 better-sqlite3 同步 API 不同（见 checkpoint-saver.ts）。
- * - 所有驱动调用通过内部队列串行化；transaction 使用 BEGIN IMMEDIATE，保证单写者。
+ * - 根驱动调用串行化；事务优先使用原生能力，缺少时回退为 BEGIN IMMEDIATE。
+ * - 事务 callback 只使用传入 driver；嵌套复用当前事务，不提供 savepoint。
  */
 import type { SQLiteDriver, SQLiteRunResult, SQLiteValue } from '../driver.js';
 
@@ -28,92 +29,87 @@ export interface ExpoSQLiteDatabaseLike {
   withTransactionAsync?(task: () => Promise<void>): Promise<void>;
 }
 
-class ExpoSQLiteDriver implements SQLiteDriver {
-  private readonly db: ExpoSQLiteDatabaseLike;
-  private tail: Promise<unknown> = Promise.resolve();
-  private depth = 0;
+/** Transaction-local calls bypass the root queue without letting unrelated root calls enter the transaction. */
+function transactionAdapter(db: ExpoSQLiteDatabaseLike): { driver: SQLiteDriver; close(): void } {
+  let active = true;
+  const check = (): void => {
+    if (!active) throw new Error('事务已结束，不能继续使用其 driver');
+  };
+  const driver: SQLiteDriver = {
+    async exec(sql) {
+      check();
+      await db.execAsync(sql);
+    },
+    async run(sql, params = []) {
+      check();
+      const result = await db.runAsync(sql, ...params);
+      return { changes: Number(result?.changes ?? 0) };
+    },
+    async all<T extends Record<string, SQLiteValue>>(sql: string, params: ReadonlyArray<SQLiteValue> = []): Promise<T[]> {
+      check();
+      return db.getAllAsync<T>(sql, ...params);
+    },
+    async allValues(sql, params = []) {
+      check();
+      const rows = await db.getAllAsync<Record<string, SQLiteValue>>(sql, ...params);
+      return rows.map(row => Object.values(row));
+    },
+    async transaction(fn) {
+      check();
+      return fn(driver);
+    },
+  };
+  return { driver, close() { active = false; } };
+}
 
-  constructor(db: ExpoSQLiteDatabaseLike) {
-    this.db = db;
-  }
+class ExpoSQLiteDriver implements SQLiteDriver {
+  private tail: Promise<unknown> = Promise.resolve();
+  constructor(private readonly db: ExpoSQLiteDatabaseLike) {}
 
   private async exclusive<R>(fn: () => Promise<R>): Promise<R> {
     const previous = this.tail;
     let release!: () => void;
-    this.tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    this.tail = new Promise<void>(resolve => { release = resolve; });
     await previous.catch(() => undefined);
-    try {
-      return await fn();
-    } finally {
-      release();
-    }
+    try { return await fn(); } finally { release(); }
   }
 
-  async exec(sql: string): Promise<void> {
-    // 事务内直接执行（外层已持有串行锁，避免事务内再取锁死锁）。
-    if (this.depth > 0) return this.db.execAsync(sql);
-    await this.exclusive(() => this.db.execAsync(sql));
+  exec(sql: string): Promise<void> { return this.exclusive(() => this.db.execAsync(sql)); }
+
+  run(sql: string, params: ReadonlyArray<SQLiteValue> = []): Promise<SQLiteRunResult> {
+    return this.exclusive(async () => { const result = await this.db.runAsync(sql, ...params); return { changes: Number(result?.changes ?? 0) }; });
   }
 
-  async run(sql: string, params: ReadonlyArray<SQLiteValue> = []): Promise<SQLiteRunResult> {
-    const execute = async (): Promise<SQLiteRunResult> => {
-      const result = await this.db.runAsync(sql, ...params);
-      return { changes: Number(result?.changes ?? 0) };
-    };
-    if (this.depth > 0) return execute();
-    return this.exclusive(execute);
-  }
-
-  async all<T extends Record<string, SQLiteValue> = Record<string, SQLiteValue>>(
-    sql: string,
-    params: ReadonlyArray<SQLiteValue> = [],
-  ): Promise<T[]> {
-    if (this.depth > 0) return this.db.getAllAsync<T>(sql, ...params);
+  all<T extends Record<string, SQLiteValue> = Record<string, SQLiteValue>>(sql: string, params: ReadonlyArray<SQLiteValue> = []): Promise<T[]> {
     return this.exclusive(() => this.db.getAllAsync<T>(sql, ...params));
   }
 
-  async allValues(
-    sql: string,
-    params: ReadonlyArray<SQLiteValue> = [],
-  ): Promise<SQLiteValue[][]> {
-    const rows = await this.all<Record<string, SQLiteValue>>(sql, params);
-    return rows.map((row) => Object.values(row));
+  async allValues(sql: string, params: ReadonlyArray<SQLiteValue> = []): Promise<SQLiteValue[][]> {
+    const rows = await this.all(sql, params); return rows.map(row => Object.values(row));
   }
 
-  async transaction<R>(fn: (driver: SQLiteDriver) => Promise<R>): Promise<R> {
-    // 嵌套事务直接复用当前事务。
-    if (this.depth > 0) return fn(this);
+  transaction<R>(fn: (driver: SQLiteDriver) => Promise<R>): Promise<R> {
     return this.exclusive(async () => {
+      const execute = async (db: ExpoSQLiteDatabaseLike): Promise<R> => {
+        const adapter = transactionAdapter(db);
+        try { return await fn(adapter.driver); } finally { adapter.close(); }
+      };
       if (this.db.withExclusiveTransactionAsync) {
-        // Expo resolves with void, even when its callback returns a value. Preserve
-        // the core transaction result separately and expose it only after commit.
         let result!: R;
-        await this.db.withExclusiveTransactionAsync(async (txn) => {
-          result = await fn(new ExpoSQLiteDriver(txn));
-        });
+        await this.db.withExclusiveTransactionAsync(async txn => { result = await execute(txn); });
         return result;
       }
       if (this.db.withTransactionAsync) {
         let result!: R;
-        await this.db.withTransactionAsync(async () => {
-          result = await fn(this);
-        });
+        await this.db.withTransactionAsync(async () => { result = await execute(this.db); });
         return result;
       }
       await this.db.execAsync('BEGIN IMMEDIATE');
-      this.depth += 1;
       try {
-        const result = await fn(this);
-        this.depth -= 1;
+        const result = await execute(this.db);
         await this.db.execAsync('COMMIT');
         return result;
-      } catch (error) {
-        this.depth = Math.max(0, this.depth - 1);
-        await this.db.execAsync('ROLLBACK');
-        throw error;
-      }
+      } catch (error) { await this.db.execAsync('ROLLBACK'); throw error; }
     });
   }
 }

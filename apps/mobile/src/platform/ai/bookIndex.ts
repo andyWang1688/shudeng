@@ -2,6 +2,7 @@
 import {
   ChapterIndexBuild, ParagraphTextChunker, SqliteBookSource, SqliteSearchIndex, assertNotAborted,
   cleanupStaleBookIndexBuilds, inspectEpubResources, readEpubChapter, validateEpubChapter,
+  embeddingChunkOptions,
   type BookIdentity, type CancellationSignal, type EpubContent, type EpubPublication,
   type EpubResourceArchive, type RagChapter, type TextChunk, type EmbeddingProvider,
 } from '@shudeng/core';
@@ -32,6 +33,14 @@ type IndexJob = {
 };
 const active = new Map<string, IndexJob>(), queue: IndexJob[] = [], autoAttempted = new Set<string>();
 let draining = false, cleanup: Promise<void> | null = null;
+export const BOOK_INDEX_FORMAT_VERSION = 'token-budget-v2';
+function indexFormatKey(bookId: string): string { return `book-index-format:${bookId}`; }
+async function hasCurrentIndexFormat(driver: SQLiteDriver, book: { id: string; sourceHash: string }): Promise<boolean> {
+  const [saved] = await driver.all<{ value_json: string }>('SELECT value_json FROM app_preferences WHERE key = ?', [indexFormatKey(book.id)]);
+  if (!saved) return false;
+  try { const value = JSON.parse(saved.value_json) as { version?: unknown; sourceHash?: unknown }; return value.version === BOOK_INDEX_FORMAT_VERSION && value.sourceHash === book.sourceHash; }
+  catch { return false; }
+}
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function report(options: BookIndexOptions, stage: BookImportProgress['stage'], completed: number, total: number): void { options.onProgress?.({ stage, completed, total }); }
 function cancelled(): Error { const error = new Error('检索已取消'); error.name = 'AbortError'; return error; }
@@ -86,11 +95,15 @@ async function buildIndex(book: BookIdentity, generation: string, contentFactory
     const content = await contentFactory();
     await assertCurrent(driver, book, generation, options.signal);
     let embedding: EmbeddingProvider | null = null, modelFailure: string | null = null;
-    try { if ((await embeddingStatus()).available) embedding = getEmbeddingProvider(); }
-    catch (error) { assertNotAborted(options.signal); modelFailure = messageOf(error); }
+    try {
+      if ((await embeddingStatus()).available) {
+        embedding = getEmbeddingProvider();
+        await embedding.prepare?.();
+      }
+    } catch (error) { assertNotAborted(options.signal); modelFailure = messageOf(error); embedding = null; }
     const chapterCount = content.epub?.publication.chapters.length ?? content.chapters.length;
     const build = await ChapterIndexBuild.open(driver, {
-      book, generation, extractionVersion: 'epub-normalized-utf16-v1:paragraph-120-v1', chapterCount,
+      book, generation, extractionVersion: `epub-normalized-utf16-v1:${BOOK_INDEX_FORMAT_VERSION}:${embedding?.modelId ?? 'fts'}:${embedding?.maxInputTokens ?? 0}`, chapterCount,
       model: embedding ? { id: embedding.modelId, dimension: embedding.dimension } : null,
       guard: tx => assertCurrent(tx, book, generation, options.signal), ...(options.signal ? { signal: options.signal } : {}),
     });
@@ -122,7 +135,7 @@ async function buildIndex(book: BookIdentity, generation: string, contentFactory
         if (embedding) report(options, 'embedding', build.cursor.vectorCount, build.cursor.chunkCount);
         batch = [];
       };
-      for (const chunk of chunker.iterate({ book, chapters: [chapter] }, {}, options.signal ? { signal: options.signal } : {})) {
+      for (const chunk of chunker.iterate({ book, chapters: [chapter] }, embeddingChunkOptions(embedding), options.signal ? { signal: options.signal } : {})) {
         chunkOffset += 1;
         if (chunkOffset <= resumeAt) continue;
         batch.push(chunk);
@@ -137,6 +150,7 @@ async function buildIndex(book: BookIdentity, generation: string, contentFactory
     await build.promote(async (tx, summary) => {
       result = preparedStatus(book, summary.chunkCount, summary.semantic, summary.semanticFailure);
       await recordBookIndexState(tx, book, summary.chunkCount === 0 ? 'empty' : summary.semanticFailure ? 'fts' : 'ready', result.detail, generation);
+      await tx.run('INSERT OR REPLACE INTO app_preferences (key, value_json) VALUES (?, ?)', [indexFormatKey(book.id), JSON.stringify({ version: BOOK_INDEX_FORMAT_VERSION, sourceHash: book.sourceHash })]);
     });
     return result!;
   } catch (error) {
@@ -202,7 +216,8 @@ export async function getLocalBookIndexStatus(bookId: string): Promise<BookIndex
   const stats = await new SqliteSearchIndex(driver, null).stats(bookId);
   const [saved] = await driver.all<{ status: string; detail: string; source_hash: string }>('SELECT status, detail, source_hash FROM book_index_state WHERE book_id = ?', [bookId]);
   const state = saved?.source_hash === book.source_hash ? saved : undefined, model = await embeddingStatus().catch(() => null);
-  const semantic = state?.status !== 'fts' && model?.available === true && stats.models.some(item => item.model === model.modelId && item.dim === model.dimension && item.count === stats.chunkCount) && stats.chunkCount > 0;
+  const currentFormat = await hasCurrentIndexFormat(driver, { id: bookId, sourceHash: book.source_hash });
+  const semantic = currentFormat && state?.status !== 'fts' && model?.available === true && stats.models.some(item => item.model === model.modelId && item.dim === model.dimension && item.count === stats.chunkCount) && stats.chunkCount > 0;
   return { state: state?.status ?? 'missing', available: stats.chunkCount > 0, semantic, detail: state?.detail ?? (stats.chunkCount > 0 ? '书内文字已就绪' : '尚未准备书内文字') };
 }
 async function contentForExistingBook(book: BookIdentity, options: BookIndexOptions): Promise<BookContent> {
@@ -244,7 +259,7 @@ export async function resumeAvailableBookIndexes(books: readonly (BookIdentity &
     if (!retryPaused && autoAttempted.has(attempt)) continue;
     const [state] = await driver.all<{ status: string; source_hash: string }>('SELECT status, source_hash FROM book_index_state WHERE book_id = ?', [book.id]);
     autoAttempted.add(attempt);
-    if (state?.source_hash === book.sourceHash && ['ready', 'empty', 'fts'].includes(state.status)) continue;
+    if (state?.source_hash === book.sourceHash && ['ready', 'empty', 'fts'].includes(state.status) && await hasCurrentIndexFormat(driver, book)) continue;
     startBookPreparation(book);
   }
 }

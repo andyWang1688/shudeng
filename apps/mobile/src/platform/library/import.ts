@@ -13,7 +13,7 @@ import {
 } from '../ai/bookIndex';
 import { detectBookFormat, engineFormatOf, formatOf, formatProgressLabel } from './pure';
 import { ensureProgressTable, loadAllBookProgress } from './progress';
-import { cancelConversationRun, loadConversationSummaries, markConversationsDeleted } from './conversations';
+import { cancelConversationRun, listConversationIdsForBook, markConversationsDeleted } from './conversations';
 import { deleteBookRecords, lockBookFileOperation, recoverBookFileIntent, recoverBookFileOperations, removeBookIndexRecords, saveBookFileIntent, type BookFileIntent } from './bookFileOperations';
 import { loadBookCover } from './bookCovers';
 import type { ImportBookResult, ShelfBookRecord } from './types';
@@ -175,8 +175,8 @@ export async function removeShelfBook(bookId: string): Promise<void> {
   const intent: BookFileIntent = { kind: 'remove', targetUri: file.uri, stagingUri: staging.uri };
   const unlock = lockBookFileOperation(bookId);
   try {
-    const conversations = await loadConversationSummaries();
-    for (const conversation of conversations) if (conversation.bookId === bookId) cancelConversationRun(conversation.conversationId);
+    const conversations = await listConversationIdsForBook(bookId);
+    for (const conversationId of conversations) cancelConversationRun(conversationId);
     await cancelBookIndexing(bookId);
     await saveBookFileIntent(bookId, intent);
     if (file.exists) await file.move(staging);
@@ -209,8 +209,7 @@ export async function deleteShelfBook(bookId: string): Promise<void> {
   let rollbackDeleted = (): void => {};
   try {
     await cancelBookIndexing(bookId);
-    const conversations = await loadConversationSummaries();
-    const ids = ['book:' + bookId, ...conversations.filter((conversation) => conversation.bookId === bookId).map((conversation) => conversation.conversationId)];
+    const ids = await listConversationIdsForBook(bookId);
     rollbackDeleted = markConversationsDeleted(ids);
     await saveBookFileIntent(bookId, intent);
     if (file.exists) await file.move(staging);

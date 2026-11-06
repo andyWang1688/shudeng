@@ -79,7 +79,7 @@ export default function ProfileRoute() {
         <View style={styles.card}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="AI 服务"
+            accessibilityLabel="AI 与助手"
             onPress={() => router.push("/ai-settings")}
             style={({ pressed }) => [
               styles.row,
@@ -92,7 +92,7 @@ export default function ProfileRoute() {
             </View>
             <View style={styles.rowBody}>
               <Text style={[styles.rowTitle, { fontWeight: "500" }]}>
-                AI 服务
+                AI 与助手
               </Text>
               <Text style={styles.rowDetail} numberOfLines={1}>
                 {aiDetail}
@@ -157,7 +157,7 @@ export default function ProfileRoute() {
         <BookActionSheet
           title="外观"
           message="选择适合此刻阅读的界面外观。"
-          actions={(["system", "light", "dark"] as const).map(value => ({
+          actions={(["system", "light", "dark"] as const).map((value) => ({
             key: value,
             title: (mode === value ? "✓ " : "") + APPEARANCE_LABEL[value],
             onPress: () => {

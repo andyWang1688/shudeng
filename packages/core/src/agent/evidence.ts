@@ -52,7 +52,9 @@ export class EvidenceRegistry {
   register(excerpt: BookExcerpt): RegisteredEvidence {
     for (const id of this.order) {
       const existing = this.byId.get(id)!;
-      if (existing.quote === excerpt.quote && existing.chapter === excerpt.chapter) {
+      if (existing.quote === excerpt.quote && existing.locator === excerpt.locator &&
+          existing.chunkId === excerpt.chunkId && existing.readRef === excerpt.readRef &&
+          existing.sourceVersion === excerpt.sourceVersion) {
         return existing;
       }
     }
@@ -148,6 +150,9 @@ export function verifyCitations(
       id,
       quote,
       locator: evidence.locator,
+      ...(evidence.chunkId ? { chunkId: evidence.chunkId } : {}),
+      ...(evidence.readRef ? { readRef: evidence.readRef } : {}),
+      ...(evidence.sourceVersion ? { sourceVersion: evidence.sourceVersion } : {}),
       ...(evidence.chapter ? { chapter: evidence.chapter } : {}),
       ...(evidence.page !== undefined ? { page: evidence.page } : {}),
     };

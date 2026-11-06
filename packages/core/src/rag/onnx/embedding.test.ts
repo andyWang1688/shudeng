@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cosineSimilarity } from '../embedding.js';
+import { embeddingChunkOptions, ParagraphTextChunker } from '../chunker.js';
 import { OnnxEmbeddingProvider, prepareOnnxModel } from './embedding.js';
 
 const modelDir =
@@ -60,13 +61,26 @@ suite('OnnxEmbeddingProvider（真实 MiniLM int8 ONNX）', () => {
   );
 
   it(
-    '超过 128 token 的文本截断后仍返回合法归一化向量',
+    '超长文本明确拒绝；真实 tokenizer 切分后全文都能向量化',
     async () => {
-      const longText = '灯把书页照亮，也把问题留在纸上。'.repeat(300);
-      const [vector] = await provider.embed([longText]);
-      expect(vector).toHaveLength(384);
-      const norm = Math.sqrt([...vector!].reduce((sum, value) => sum + value * value, 0));
-      expect(norm).toBeCloseTo(1, 5);
+      const longText = '灯把书页照亮，也把问题留在纸上。'.repeat(30);
+      expect(provider.countTokens(longText)).toBeGreaterThan(provider.maxInputTokens);
+      await expect(provider.embed([longText])).rejects.toThrow(/超过.*tokens/);
+      const chunks = new ParagraphTextChunker().chunk({
+        book: { id: 'token-book', title: '原文', format: 'epub', sourceHash: 'token-hash' },
+        chapters: [{ ordinal: 1, title: '一', text: longText }],
+      }, embeddingChunkOptions(provider));
+      expect(chunks.map(chunk => chunk.text).join('')).toBe(longText);
+      for (const chunk of chunks) {
+        expect(provider.countTokens(chunk.text)).toBeLessThanOrEqual(provider.maxInputTokens);
+        expect(longText.slice(chunk.startOffset, chunk.endOffset)).toBe(chunk.text);
+      }
+      const vectors = await provider.embed(chunks.map(chunk => chunk.text));
+      expect(vectors).toHaveLength(chunks.length);
+      for (const vector of vectors) {
+        expect(vector).toHaveLength(384);
+        expect(Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0))).toBeCloseTo(1, 5);
+      }
     },
     120_000,
   );

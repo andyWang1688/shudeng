@@ -118,8 +118,8 @@ describe('real SDK SSE body idle contract', () => {
       ], requests) });
     (summaryModel.langChainModel as BaseChatModel).getNumTokens = async text => Math.ceil(text.length / 4);
     const session = runBookAgent({ model: createScriptedModel([{ chunks: [{ text: '{"answer":"整理后回答","citations":[]}' }] }]),
-      summaryModel, source: source(), book, question: '新问', contextWindowTokens: 2000,
-      history: Array.from({ length: 5 }, () => ({ question: '旧问'.repeat(100), answer: '旧答'.repeat(100) })),
+      summaryModel, source: source(), book, question: '新问', contextWindowTokens: 8192,
+      history: Array.from({ length: 5 }, () => ({ question: '旧问'.repeat(400), answer: '旧答'.repeat(400) })),
     });
     const pending = (async () => { for await (const _event of session.events) { /* consume */ } })();
     await vi.advanceTimersByTimeAsync(90001);

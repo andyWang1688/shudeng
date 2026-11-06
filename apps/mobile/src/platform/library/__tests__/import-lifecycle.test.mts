@@ -63,9 +63,9 @@ vi.mock('../../ai/bookIndex', () => ({
   deleteBookIndex: async (id: string) => { state.indexed.delete(id); },
 }));
 vi.mock('../conversations', () => ({
-  loadConversationSummaries: async () => {
-    const rows = await state.layer!.driver.all<{ id: string; book_id: string }>('SELECT id, book_id FROM conversations');
-    return rows.map((row) => ({ conversationId: row.id, bookId: row.book_id }));
+  listConversationIdsForBook: async (bookId: string) => {
+    const rows = await state.layer!.driver.all<{ id: string }>('SELECT id FROM conversations WHERE book_id=?', [bookId]);
+    return ['book:' + bookId, ...rows.map(row => row.id)];
   },
   cancelConversationRun: () => {},
   markConversationsDeleted: () => () => { state.rollbacks += 1; },

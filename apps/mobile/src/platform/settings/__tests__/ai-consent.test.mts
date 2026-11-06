@@ -19,7 +19,7 @@ const b = { id: "local-b", secretId: "local-key-b", name: "本机B", provider: "
   model: "model-b", baseUrl: "http://127.0.0.1:8766/v1" };
 function harness(services: readonly any[]) {
   const entries = new Map<string, string>([
-    [key, JSON.stringify({ version: 2, selectedId: a.id, services })],
+    [key, JSON.stringify({ version: 2, selectedId: a.id, services, webSearchMigrated: true })],
     [a.secretId, "fake-only-key-a"], [b.secretId, "fake-only-key-b"],
   ]);
   const reads: string[] = [], writes: string[] = [], deletes: string[] = [];
@@ -35,6 +35,7 @@ function harness(services: readonly any[]) {
     };
     if (id === "@shudeng/core") return { createLocalId: (prefix: string) => prefix + ".test-" + ++sequence };
     if (id === "./settings/aiCatalog") return rules;
+    if (id === "./assistantPreferences") return { loadLegacyAssistantWebSearchEnabled: async () => { throw new Error("Already migrated catalogs must not read the old global switch"); } };
     throw new Error("Unexpected dependency: " + id);
   };
   compiled._compile(configCode, configFile);

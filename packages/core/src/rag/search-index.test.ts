@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createNodeSQLiteDriver, type NodeSQLiteDriver } from '../db/testing/node-sqlite-driver.js';
 import { migrate } from '../db/migrations.js';
 import { ParagraphTextChunker } from './chunker.js';
 import { SqliteSearchIndex } from './search-index.js';
-import { assertNotAborted, type EmbeddingProvider, type RagBook, type SearchHit } from './types.js';
+import { assertNotAborted, type EmbeddingProvider, type RagBook } from './types.js';
 
 const fixtureBook: RagBook = {
   book: { id: 'book-1', title: '测试书', format: 'epub', sourceHash: 'hash-1' },
@@ -73,10 +73,6 @@ async function setupIndex(book?: RagBook): Promise<Setup> {
   const setup = await indexFixture(book);
   setups.push(setup);
   return setup;
-}
-
-function texts(hits: ReadonlyArray<SearchHit>): string[] {
-  return hits.map((hit) => hit.chunk.text);
 }
 
 describe('SQLite RAG 索引（迁移/FTS5/向量/混合检索）', () => {

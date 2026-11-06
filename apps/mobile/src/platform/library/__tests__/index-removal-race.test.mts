@@ -19,9 +19,9 @@ vi.mock('expo-file-system', () => {
   return { File, Directory: File, Paths: { document: { uri: 'file:///documents' } } };
 });
 vi.mock('../progress', () => ({ ensureProgressTable: async () => state.layer, loadAllBookProgress: async () => new Map() }));
-vi.mock('../conversations', () => ({ loadConversationSummaries: async () => [], markConversationsDeleted: () => () => {}, cancelConversationRun: () => {} }));
+vi.mock('../conversations', () => ({ listConversationIdsForBook: async () => [], markConversationsDeleted: () => () => {}, cancelConversationRun: () => {} }));
 vi.mock('../bookCovers', () => ({ loadBookCover: async () => undefined, saveBookCover: async () => undefined }));
-import { createLocalBookSource } from '../../ai/bookIndex';
+import { BOOK_INDEX_FORMAT_VERSION, createLocalBookSource } from '../../ai/bookIndex';
 import { deleteShelfBook, removeShelfBook } from '../import';
 import { saveBookFileIntent } from '../bookFileOperations';
 
@@ -36,6 +36,7 @@ beforeEach(async () => {
   const embedding = { dimension: 1, modelId: 'test', embed: async () => [new Float32Array([1])] };
   await new SqliteSearchIndex(driver, embedding).indexBook(ragBook, chunks, chunks.map(() => new Float32Array([1])));
   await driver.run('INSERT INTO book_index_state VALUES (?, ?, ?, ?, ?)', [book.id, 'ready', '就绪', book.sourceHash, 1]);
+  await driver.run('INSERT INTO app_preferences (key, value_json) VALUES (?, ?)', [`book-index-format:${book.id}`, JSON.stringify({ version: BOOK_INDEX_FORMAT_VERSION, sourceHash: book.sourceHash })]);
 });
 afterEach(async () => { await driver.close(); });
 

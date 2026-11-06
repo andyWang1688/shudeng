@@ -26,7 +26,7 @@ describe('native context preparation contract', () => {
   it('uses native reserve/headroom thresholds and only compacts strictly above the limit', async () => {
     expect(nativeContextBudget(128000)).toEqual({ window: 128000, threshold: 102400, retainTokens: 20256 });
     expect(nativeContextBudget(200000)).toEqual({ window: 200000, threshold: 160000, retainTokens: 31776 });
-    expect(nativeContextBudget(10000).threshold).toBe(1000);
+    expect(nativeContextBudget(10000).threshold).toBe(7600);
     const summarize = vi.fn(async () => '摘要');
     const manager = new NativeContextManager({ window: 1000 }, summarize);
     const messages = [new HumanMessage('')];
@@ -45,7 +45,7 @@ describe('native context preparation contract', () => {
     const manager = new NativeContextManager({ window: 20000 }, summarize, truncations);
     const ai = new AIMessage({ content: '', tool_calls: [{ id: 'tool-a', name: 'read', args: {} }] });
     const plan = await manager.prepare(undefined, [new HumanMessage('问题'), ai,
-      new ToolMessage({ content: '中'.repeat(15000), tool_call_id: 'tool-a', name: 'read' })]);
+      new ToolMessage({ content: '中'.repeat(18000), tool_call_id: 'tool-a', name: 'read' })]);
     expect(plan.overBudget).toBe(false);
     expect(plan.estimate).toMatchObject({ action: 'pruned', truncatedToolResults: 1, summarizedMessages: 0, trimmedMessages: 0 });
     expect(plan.messages[1]).toBe(ai);
@@ -85,7 +85,7 @@ describe('native context preparation contract', () => {
     expect(plan.newSummary).toBeUndefined();
     expect(plan.messages).toEqual(messages.slice(-2));
     const huge = await new NativeContextManager({ window: 20000 }, summarize)
-      .prepare(undefined, [new HumanMessage('中'.repeat(14000))]);
+      .prepare(undefined, [new HumanMessage('中'.repeat(18000))]);
     expect(huge.overBudget).toBe(true);
     expect(huge.messages).toHaveLength(1);
   });
@@ -119,7 +119,7 @@ describe('native context preparation contract', () => {
 
   it('fails preflight without invoking the main model when the last question cannot fit', async () => {
     const model = createScriptedModel([{ chunks: [{ text: '{"answer":"不应请求","citations":[]}' }] }]);
-    const session = runBookAgent({ model, source: source(), book, question: '中'.repeat(14000), contextWindowTokens: 20000 });
+    const session = runBookAgent({ model, source: source(), book, question: '中'.repeat(18000), contextWindowTokens: 20000 });
     const events = await collect(session);
     expect((model.langChainModel as ScriptedChatModel).calls).toHaveLength(0);
     expect(events.find(event => event.type === 'failed')).toMatchObject({ code: 'capacity' });
@@ -134,8 +134,8 @@ describe('native context preparation contract', () => {
         { chunks: [{ text: '不会完成', delayMs: 46000 }] },
         { chunks: [{ text: '{"answer":"降级后回答","citations":[]}' }] },
       ]);
-      const session = runBookAgent({ model, source: source(), book, question: '新问题', contextWindowTokens: 2000,
-        history: Array.from({ length: 5 }, () => ({ question: '旧问'.repeat(100), answer: '旧答'.repeat(100) })) });
+      const session = runBookAgent({ model, source: source(), book, question: '新问题', contextWindowTokens: 8192,
+        history: Array.from({ length: 5 }, () => ({ question: '旧问'.repeat(400), answer: '旧答'.repeat(400) })) });
       const pending = collect(session);
       await vi.advanceTimersByTimeAsync(45001);
       const events = await pending;

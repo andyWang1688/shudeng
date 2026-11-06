@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import Module, { createRequire } from 'node:module';
 import { test } from 'node:test';
+import { loader } from '../settings/__tests__/platformHarness.mts';
 
 const require = createRequire(new URL('../../../package.json', import.meta.url));
 const ts = require('typescript');
@@ -177,7 +178,8 @@ test('iOS dispatches once after fade completion and actual Modal dismissal', asy
     { title: '取消', style: 'cancel', onPress: () => calls.push('cancel') },
   ] };
   let tree = ui.render('BookNotice', props);
-  await ofType(tree, 'Modal')[0].props.onShow();
+  ofType(tree, 'Modal')[0].props.onShow();
+  await settle();
   assert.equal(ui.animations[0].config.duration, 350);
   button(tree, '移除').props.onPress();
   button(tree, '移除').props.onPress();
@@ -226,7 +228,8 @@ test('reduce motion removes both fades, including an early press before settings
   ui.native.AccessibilityInfo.isReduceMotionEnabled = async () => true;
   const props = { title: '确认', message: '说明', onAcknowledge() {} };
   const tree = ui.render('BookNotice', props);
-  await ofType(tree, 'Modal')[0].props.onShow();
+  ofType(tree, 'Modal')[0].props.onShow();
+  await settle();
   button(tree, '知道了').props.onPress();
   assert.deepEqual(ui.animations.map((value) => value.config.duration), [0, 0]);
   const early = component(noticeFile);
@@ -258,28 +261,34 @@ async function shelf(removed: boolean, operation?: () => Promise<void>) {
   const fixture = { id: 'selected-book', title: '唯一测试书', format: 'EPUB', author: '作者',
     coverUri: null, progressPercent: null, removed };
   let ui: ReturnType<typeof component>;
+  let nativeSearch: any;
   ui = component(new URL('../ShelfScreen.tsx', import.meta.url), {
     'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
-    'expo-router': { useRouter: () => ({ push() { otherCalls.push('navigate'); } }), useFocusEffect: (callback: any) => ui.hooks.useEffect(callback, [callback]) },
+    'expo-router': { Stack: { Screen: 'StackScreen', Toolbar: Object.assign('StackToolbar', { Button: 'ToolbarButton' }) }, useRouter: () => ({ push() { otherCalls.push('navigate'); } }), useFocusEffect: (callback: any) => ui.hooks.useEffect(callback, [callback]) },
     'expo-symbols': { SymbolView: 'SymbolView' },
     '@expo/ui/community/menu': { MenuView: 'MenuView' },
-    '../platform': { initializeDatabase: async () => ({ ok: true }) },
+    '../platform/db': { initializeDatabase: async () => ({ ok: true }) },
     '../platform/library': {
       migrateLegacyLibraryIfNeeded: async () => ({ failures: 0 }),
-      loadShelfBooks: async () => [fixture], loadAppPreference: async () => null,
-      saveAppPreference: async () => {},
+      loadShelfBooks: async () => [fixture],
       importBookFromPicker: async () => { otherCalls.push('import'); return { status: 'cancelled' }; },
       removeShelfBook: async (id: string) => { calls.push('remove:' + id); await operation?.(); },
       deleteShelfBook: async (id: string) => { calls.push('delete:' + id); await operation?.(); },
     },
+    '../platform/library/pdfImport': {
+      importFailureNotice: (cause: unknown) => ({ title: '导入未完成', message: String(cause) }),
+      requestPdfImportConfirmation() { throw new Error('Unexpected PDF import confirmation'); },
+    },
     './components/BookCover': { BookCover: 'BookCover' },
     './components/BookNotice': { BookNotice: 'BookNotice' },
     './components/EmptyState': { EmptyState: 'EmptyState' },
-    './components/PageHeader': { PageHeader: 'PageHeader' },
-    './components/SearchField': { SearchField: 'SearchField' },
     './components/SectionHeader': { SectionHeader: 'SectionHeader' },
     './components/useHaptics': { useHaptics: () => () => {} },
     './tabInteraction': { useTabInteractionLock() {} },
+    './navigation/useNativeListSearch': { useNativeListSearch: (options: any) => {
+      nativeSearch ??= loader({ react: ui.hooks })('apps/mobile/src/ui/navigation/useNativeListSearch.ts');
+      return nativeSearch.useNativeListSearch(options);
+    } },
   });
   ui.render('ShelfScreen');
   await settle();
@@ -346,7 +355,7 @@ test('Shelf ignores a second removal request while the confirmed operation is ru
   const another = list.props.renderItem({ item: { id: 'another-book', title: '另一书', removed: false } });
   another.props.onLongPress();
   card.props.onPress();
-  ofType(list.props.ListHeaderComponent, 'PageHeader')[0].props.action.onPress();
+  ofType(tree, 'ToolbarButton')[0].props.onPress();
   await settle();
   assert.equal(ofType(ui.render('ShelfScreen'), 'BookNotice').length, 0);
   assert.deepEqual(calls, ['remove:selected-book']);

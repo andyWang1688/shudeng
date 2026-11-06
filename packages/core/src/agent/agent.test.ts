@@ -41,8 +41,8 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
       { chunks: [{ text: '{"answer":"当前回答","citations":[]}' }] },
     ]);
     const history = Array.from({ length: 5 }, (_, index) => ({
-      question: '旧问题' + index + '甲'.repeat(160),
-      answer: '旧回答' + index + '乙'.repeat(160),
+      question: '旧问题' + index + '甲'.repeat(800),
+      answer: '旧回答' + index + '乙'.repeat(800),
     }));
     const session = runBookAgent({
       model,
@@ -50,7 +50,7 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
       book,
       question: '新问题',
       history,
-      contextWindowTokens: 1000,
+      contextWindowTokens: 8192,
     });
     const events = await collect(session);
     expect(events.filter((event) => event.type === 'contextCompacted')).toHaveLength(1);
@@ -144,6 +144,9 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
       'search_book',
       'read_page',
       'read_chapter',
+      'get_book_outline',
+      'read_book_passage',
+      'read_file',
     ]);
     const toolFinished = events.find((event) => event.type === 'toolFinished');
     expect(toolFinished?.type === 'toolFinished' && toolFinished.isError).toBe(false);
@@ -156,7 +159,7 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
     expect(result?.steps).toBeGreaterThanOrEqual(2);
     const scripted = model.langChainModel as ScriptedChatModel;
     expect(scripted.calls.length).toBe(2);
-    expect(scripted.boundTools.length).toBe(3);
+    expect(scripted.boundTools.length).toBe(6);
   });
 
   it('reasoning_content 分片按顺序变成 reasoningDelta，不与答案混淆', async () => {

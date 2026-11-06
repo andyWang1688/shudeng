@@ -180,7 +180,7 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
   readonly modelId: string;
   private readonly session: ort.InferenceSession;
   private readonly tokenizer: Tokenizer;
-  private readonly maxTokens: number;
+  readonly maxInputTokens: number;
   private readonly eosTokenId: number | undefined;
   private readonly metrics: OnnxEmbeddingMetrics = { embeddedTexts: 0, lastEmbedMs: 0, totalEmbedMs: 0 };
 
@@ -195,7 +195,7 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     this.tokenizer = tokenizer;
     this.dimension = manifest.dimension;
     this.modelId = typeof manifest.vector_space === 'string' ? manifest.vector_space : `onnx:${manifest.model}`;
-    this.maxTokens = maxTokens;
+    this.maxInputTokens = maxTokens;
     this.eosTokenId = eosTokenId;
   }
 
@@ -231,6 +231,10 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     return { ids: [...encoding.ids], tokens: [...encoding.tokens] };
   }
 
+  countTokens(text: string): number {
+    return this.tokenizer.encode(text, { add_special_tokens: true }).ids.length;
+  }
+
   metricsSnapshot(): OnnxEmbeddingMetrics {
     return { ...this.metrics };
   }
@@ -251,10 +255,7 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
   private async embedOne(text: string): Promise<Float32Array> {
     const encoding = this.tokenizer.encode(text, { add_special_tokens: true });
     let ids = encoding.ids;
-    if (ids.length > this.maxTokens) {
-      ids = ids.slice(0, this.maxTokens - 1);
-      if (this.eosTokenId !== undefined) ids.push(this.eosTokenId);
-    }
+    if (ids.length > this.maxInputTokens) throw new Error(`文本为 ${ids.length} tokens，超过语义模型 ${this.maxInputTokens} tokens 上限；请先切块`);
     if (ids.length === 0) {
       ids = [this.eosTokenId ?? 0];
     }

@@ -259,7 +259,7 @@ async function main(): Promise<void> {
     const dbMigration = await migrate(driver);
     const db = createDatabase(driver);
     const tInsert = nowMs();
-    await db.transaction(async (tx) => {
+    await db.withTransaction(async (tx) => {
       if (migration.tables.books.length) await tx.insert(booksTable).values([...migration.tables.books]);
       if (migration.tables.anchors.length) await tx.insert(anchorsTable).values([...migration.tables.anchors]);
       if (migration.tables.annotations.length)

@@ -9,14 +9,14 @@
  */
 import * as SQLite from 'expo-sqlite';
 import { createExpoSQLiteDriver, type ExpoSQLiteDatabaseLike } from '@shudeng/core/db';
-import { runDataLayerDevCheck } from './devCheck';
 import { createShudengDataLayer, type ShudengDataLayer } from './engine';
-import type { DatabaseDevCheckResult, DatabaseInitResult } from './types';
+import type { DatabaseInitResult } from './types';
 
 export const DATABASE_NAME = 'shudeng.db';
 
 let database: SQLite.SQLiteDatabase | null = null;
 let layerPromise: Promise<ShudengDataLayer> | null = null;
+let closingPromise: Promise<void> | null = null;
 
 /** 幂等初始化：建立 schema 与数据层单例，返回可用于 UI 展示的状态。 */
 export async function initializeDatabase(): Promise<DatabaseInitResult> {
@@ -43,36 +43,49 @@ export async function initializeDatabase(): Promise<DatabaseInitResult> {
 
 /** 获取数据层单例；失败后重置，允许下次重试。 */
 export function getDataLayer(): Promise<ShudengDataLayer> {
+  if (closingPromise) return closingPromise.then(() => getDataLayer());
   if (!layerPromise) {
-    layerPromise = openDataLayer().catch((error: unknown) => {
-      layerPromise = null;
+    const pending = openDataLayer().catch((error: unknown) => {
+      if (layerPromise === pending) layerPromise = null;
       throw error;
     });
+    layerPromise = pending;
   }
   return layerPromise;
 }
 
 async function openDataLayer(): Promise<ShudengDataLayer> {
   const opened = await SQLite.openDatabaseAsync(DATABASE_NAME);
-  database = opened;
-  await opened.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
-  const driver = createExpoSQLiteDriver(opened as unknown as ExpoSQLiteDatabaseLike);
-  return createShudengDataLayer(driver);
+  try {
+    await opened.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+    const driver = createExpoSQLiteDriver(opened as unknown as ExpoSQLiteDatabaseLike);
+    const layer = await createShudengDataLayer(driver);
+    database = opened;
+    return layer;
+  } catch (error) {
+    try {
+      await opened.closeAsync();
+    } catch (closeError) {
+      throw new AggregateError([error, closeError], '数据库初始化失败，且连接未能关闭');
+    }
+    throw error;
+  }
 }
 
 /** 关闭数据库连接（dev/测试重置用；关闭后下次 getDataLayer 会重新打开）。 */
-export async function closeDatabase(): Promise<void> {
-  layerPromise = null;
-  const opened = database;
-  database = null;
-  if (opened) await opened.closeAsync();
-}
-
-/** dev 验证入口：初始化 + 建表/读写 + LangGraph checkpoint 往返。 */
-export async function runDatabaseDevCheck(): Promise<DatabaseDevCheckResult> {
-  const init = await initializeDatabase();
-  if (!init.ok) return { init, report: null };
-  const layer = await getDataLayer();
-  const report = await runDataLayerDevCheck(layer, 'expo-sqlite');
-  return { init, report };
+export function closeDatabase(): Promise<void> {
+  if (closingPromise) return closingPromise;
+  const pending = layerPromise;
+  const closing = (async () => {
+    // A pending open owns its handle until it either publishes it or closes on failure.
+    await pending?.catch(() => undefined);
+    const opened = database;
+    database = null;
+    layerPromise = null;
+    if (opened) await opened.closeAsync();
+  })().finally(() => {
+    if (closingPromise === closing) closingPromise = null;
+  });
+  closingPromise = closing;
+  return closing;
 }

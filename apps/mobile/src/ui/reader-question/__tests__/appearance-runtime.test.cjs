@@ -73,7 +73,25 @@ test('EPUB keeps its dark reader policy and origin contract while new selection 
   } finally { await h.close(); }
 });
 
-for (const format of ['pdf', 'epub']) test(format + ' actual AssistantTurn menu passes its policy to an already-open materials page', async () => {
+test('the actual ReaderAssistantThread composer keeps its draft through theme, materials and close/reopen', async () => {
+  const h = createRuntime();
+  try {
+    await h.mount(); await h.ask(); const original = h.presentation;
+    await h.editDraft('未发送的多行草稿\n请结合原文解释');
+    assert.equal(original.getSnapshot().draft, '未发送的多行草稿\n请结合原文解释');
+    assert.equal(h.draft(), original.getSnapshot().draft);
+    assert.equal(h.sent.length, 0, 'editing the runtime composer never sends a question');
+    await h.mode('dark'); assert.equal(h.draft(), original.getSnapshot().draft);
+    await h.openMaterials(); await h.back();
+    assert.equal(h.draft(), original.getSnapshot().draft);
+    await h.back(); await h.ask();
+    assert.equal(h.presentation, original);
+    assert.equal(h.draft(), '未发送的多行草稿\n请结合原文解释');
+    assert.equal(h.sent.length, 0);
+  } finally { await h.close(); }
+});
+
+for (const format of ['pdf', 'epub']) test(format + ' actual ReaderAssistantFooter button passes its policy to an already-open materials page', async () => {
   const h = createRuntime({ format });
   try {
     await h.mount(); await h.ask(); const original = h.presentation;

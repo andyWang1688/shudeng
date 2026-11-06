@@ -16,13 +16,11 @@ import type { ReaderAnnotationSeed, ReaderBookmarkContext, ReaderContentsItem, R
 export type ReaderSelection = { readonly quote: string; readonly locator: StoredReaderLocator; readonly rects?: readonly SelectionRect[] };
 type Options = {
   readonly bookId: string;
-  readonly title?: string | undefined;
-  readonly initialLocation?: string | undefined;
   readonly initialAnnotations?: readonly ShelfAnnotation[] | undefined;
   readonly onAnnotationsChanged?: ((annotations: readonly ShelfAnnotation[]) => void) | undefined;
 };
 
-export function useReaderState({ bookId, title, initialLocation, initialAnnotations, onAnnotationsChanged }: Options) {
+export function useReaderState({ bookId, initialAnnotations, onAnnotationsChanged }: Options) {
   const readerRef = useRef<ReaderWebViewHandle>(null);
   const [annotations, setAnnotations] = useState<readonly ShelfAnnotation[]>(initialAnnotations ?? []);
   const [progress, setProgress] = useState(0);

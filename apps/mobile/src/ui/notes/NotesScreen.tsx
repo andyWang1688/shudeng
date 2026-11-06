@@ -9,12 +9,9 @@ import {
   Text,
   View,
   type SectionListRenderItem,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import type { SearchBarCommands } from 'react-native-screens';
 import Swipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { File, Paths } from 'expo-file-system';
 import {
@@ -35,6 +32,7 @@ import { useHaptics } from '../components/useHaptics';
 import { recordTime } from '../format';
 import { SERIF } from '../chat/format';
 import { type as typeScale, usePalette, type Palette } from '../theme';
+import { useNativeListSearch } from '../navigation/useNativeListSearch';
 
 type NoteItem = { book: ShelfBookRecord; annotation: ShelfAnnotation };
 type NoteSection = { book: ShelfBookRecord; count: number; collapsed: boolean; data: NoteItem[] };
@@ -86,7 +84,6 @@ export default function NotesRoute() {
   const palette = usePalette();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const [items, setItems] = useState<readonly NoteItem[]>([]);
-  const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -103,28 +100,16 @@ export default function NotesRoute() {
   const exportInFlight = useRef(false);
   const mounted = useRef(true);
   const list = useRef<SectionList<NoteItem, NoteSection>>(null);
-  const searchBar = useRef<SearchBarCommands>(null);
-  const offset = useRef(0);
-  const beforeSearch = useRef<number | null>(null);
-  const searching = useRef(false);
+  const { query, clear: clearSearch, headerSearchBarOptions, onScroll } = useNativeListSearch({
+    placeholder: '搜索笔记', palette,
+    restoreOffset: y => list.current?.getScrollResponder()?.scrollTo({ y, animated: false }),
+  });
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
   const showNotice = (title: string, message: string) => {
     if (mounted.current) setNotice({ title, message });
-  };
-  const restoreSearchOffset = () => {
-    const y = beforeSearch.current;
-    searching.current = false;
-    beforeSearch.current = null;
-    if (y !== null) requestAnimationFrame(() => {
-      if (mounted.current) list.current?.getScrollResponder()?.scrollTo({ y, animated: false });
-    });
-  };
-  const clearSearch = () => {
-    searchBar.current?.clearText();
-    setQuery('');
   };
   useEffect(() => {
     let active = true;
@@ -387,19 +372,7 @@ export default function NotesRoute() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
-      <Stack.Screen options={{
-        headerSearchBarOptions: {
-          ref: searchBar, placeholder: '搜索笔记', placement: 'stacked',
-          hideWhenScrolling: false, obscureBackground: false, cancelButtonText: '取消',
-          tintColor: palette.lamp, textColor: palette.ink,
-          onFocus: () => {
-            if (!searching.current) beforeSearch.current = offset.current;
-            searching.current = true;
-          },
-          onChangeText: (event) => setQuery(event.nativeEvent.text),
-          onCancelButtonPress: () => { setQuery(''); restoreSearchOffset(); },
-        },
-      }} />
+      <Stack.Screen options={{ headerSearchBarOptions }} />
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
           icon="square.and.arrow.up"
@@ -418,7 +391,7 @@ export default function NotesRoute() {
           ref={list}
           sections={sections}
           contentInsetAdjustmentBehavior="automatic"
-          onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => { offset.current = event.nativeEvent.contentOffset.y; }}
+          onScroll={onScroll}
           scrollEventThrottle={16}
           ListHeaderComponent={error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : undefined}
           keyExtractor={(item) => item.annotation.id}

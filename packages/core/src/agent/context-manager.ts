@@ -16,7 +16,8 @@ export interface ContextBudget {
 export function nativeContextBudget(window: number, outputReserve = 1400): ContextBudget {
   const size = Math.max(2000, Math.floor(window));
   const reserve = Math.max(0, outputReserve);
-  const headroom = Math.min(16000, Math.max(8000, Math.floor(size / 10)));
+  // Fixed 8000-token headroom made an 8192-token model unusable before its first question.
+  const headroom = Math.min(16000, Math.max(256, Math.floor(size / 10)));
   return { window: size, threshold: Math.max(1000, Math.min(Math.floor(size * 0.8), size - reserve - headroom)),
     retainTokens: Math.max(256, Math.floor(Math.max(1000, size - reserve) * 0.16)) };
 }

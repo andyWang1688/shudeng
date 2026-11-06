@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Real hook + runtime + writer; native adapters and React scheduling are isolated.
-const h = vi.hoisted(() => ({ slots: [], cursor: 0, effects: [], append: vi.fn(), start: vi.fn(), load: vi.fn() }));
+const h = vi.hoisted(() => ({ slots: [], cursor: 0, effects: [], append: vi.fn(), start: vi.fn(), load: vi.fn(), config: null, indexAvailable: true }));
 vi.mock('react', () => {
   const equal = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const memo = (factory, deps) => {
@@ -29,8 +29,8 @@ vi.mock('react-native', () => ({ AppState: { addEventListener: () => ({ remove()
 vi.mock('../../../platform/ai', () => ({
   getBookChatAvailability: async () => ({
     book: { id: 'unsaved-book', title: '原书名', format: 'epub', removedAt: null },
-    config: { name: '本机', provider: 'openai', model: 'test', apiKey: 'synthetic' },
-    index: { available: true, detail: '' },
+    config: h.config,
+    index: { available: h.indexAvailable, detail: '' },
   }),
   startBookChatTurn: (...args) => h.start(...args),
 }));
@@ -52,6 +52,8 @@ function unmount() { for (const slot of h.slots) slot.cleanup?.(); h.slots = [];
 
 beforeEach(() => {
   h.slots = []; h.cursor = 0; h.effects = []; h.append.mockReset(); h.start.mockReset();
+  h.config = { name: '本机', provider: 'openai', model: 'test', apiKey: 'synthetic' };
+  h.indexAvailable = true;
   h.load.mockReset(); h.load.mockResolvedValue([]);
   vi.stubGlobal('requestAnimationFrame', callback => setTimeout(callback, 0));
   vi.stubGlobal('cancelAnimationFrame', id => clearTimeout(id));
@@ -63,6 +65,29 @@ beforeEach(() => {
 afterEach(() => { unmount(); discardConversationRun('unsaved-hook'); vi.unstubAllGlobals(); });
 
 describe('unsaved conversation run boundary', () => {
+  it('only prompts for missing model configuration after sending and keeps draft and selection without a request', async () => {
+    h.config = null;
+    h.indexAvailable = false;
+    const presentationState = { draft: '为什么这样说？', selection: { start: 0, end: 0 }, selectionConsumed: false };
+    const presentation = { getSnapshot: () => presentationState, update: patch => Object.assign(presentationState, patch) };
+    let chat = await open({ selectionQuote: '保留这段原文', presentation });
+    expect(chat.configurationNotice).toBeNull();
+    expect(chat.canSend).toBe(true);
+    expect(await chat.send()).toBe(false);
+    chat = render();
+    expect(chat.configurationNotice).toContain('还没有配置 AI 模型');
+    expect(chat.question).toBe('为什么这样说？');
+    expect(presentationState.draft).toBe('为什么这样说？');
+    expect(presentationState.selectionConsumed).toBe(false);
+    expect(chat.selectionPending).toBe(true);
+    expect(chat.running).toBe(false);
+    expect(chat.turns).toEqual([]);
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.append).not.toHaveBeenCalled();
+    chat.dismissConfigurationNotice();
+    expect(render().configurationNotice).toBeNull();
+  });
+
   it('blocks fresh and stale sends and retries before saving, preserving a reopened draft and selection', async () => {
     h.append.mockImplementation(async input => { if (input.details.status === 'done') throw Error('disk full'); });
     let chat = await open();

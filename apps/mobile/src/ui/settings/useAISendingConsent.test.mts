@@ -46,13 +46,14 @@ function harness(kind: "hook" | "editor" | "list", saved: any = null) {
     StyleSheet: { create: (value: any) => value, hairlineWidth: 1 }, Platform: { OS: "ios" },
     Alert: { alert: (...args: any[]) => calls.alerts.push(args) },
   }, { get(target: any, key) { return target[key] ?? String(key); } });
-  const draft = { ...local, provider: local.provider, windowSize: "", key: "fake-only-key", setKey() {} };
+  const draft = { ...local, provider: local.provider, windowSize: "", key: "fake-only-key", setKey() {}, webSearchEnabled: false, setWebSearchEnabled() {} };
   const imports: Record<string, any> = {
     "react": react, "react/jsx-runtime": { jsx, jsxs: jsx }, "react-native": native,
     "expo-router": { useRouter: () => ({ push() {} }), useFocusEffect: (fn: any) => react.useEffect(fn, [fn]) },
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" }, "expo-symbols": { SymbolView: "SymbolView" },
     "../components/BookNotice": { BookNotice: "BookNotice" }, "../theme": { usePalette: () => ({ paper: "paper" }) },
     "./AIServiceDraft": { AI_PRESETS: {}, useAIServiceDraft: () => draft },
+    "@shudeng/core/agent": { resolveWebSearchPolicy: () => ({ state: { status: "unsupported" } }) },
     "../../platform/settings/aiCatalog": { aiConsentScope, validateServiceDraft },
     "../../platform/aiConfig": {
       saveAIService: async (...args: any[]) => calls.save.push(args),
@@ -90,7 +91,7 @@ function harness(kind: "hook" | "editor" | "list", saved: any = null) {
     assert.ok(active);
     cursor = 0;
     result = screen(kind === "editor" ? { service: saved, selected: false, onChanged: () => calls.changed++, onClose: () => calls.closed++ }
-      : { onBack() {}, onEditService() {}, onEditMCP() {}, onSendingDetails() {} });
+      : { onBack() {}, onEditService() {}, onMCPSettings() {}, onSendingDetails() {} });
     while (effects.length) effects.shift()!();
     return result;
   };

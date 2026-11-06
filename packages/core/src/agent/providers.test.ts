@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BookIdentity } from '../domain/types.js';
 import { runBookAgent } from './agent.js';
 import { InMemoryBookSource } from './book-source.js';

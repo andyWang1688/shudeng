@@ -10,18 +10,16 @@ import {
   type ListRenderItemInfo,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect, useRouter } from "expo-router";
+import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { MenuView } from "@expo/ui/community/menu";
-import { initializeDatabase } from "../platform";
+import { initializeDatabase } from "../platform/db";
 import {
   deleteShelfBook,
   importBookFromPicker,
   loadShelfBooks,
-  loadAppPreference,
   migrateLegacyLibraryIfNeeded,
   removeShelfBook,
-  saveAppPreference,
   type BookImportProgress,
   type ShelfBookRecord,
 } from "../platform/library";
@@ -29,11 +27,10 @@ import { BookCover } from "./components/BookCover";
 import { importFailureNotice, requestPdfImportConfirmation, type PdfImportConfirmation, type PdfImportPresentation } from "../platform/library/pdfImport";
 import { BookNotice } from "./components/BookNotice";
 import { EmptyState } from "./components/EmptyState";
-import { PageHeader } from "./components/PageHeader";
-import { SearchField } from "./components/SearchField";
 import { SectionHeader } from "./components/SectionHeader";
 import { useHaptics } from "./components/useHaptics";
 import { useTabInteractionLock } from "./tabInteraction";
+import { useNativeListSearch } from "./navigation/useNativeListSearch";
 import { spacing, type as typeScale, usePalette, type Palette } from "./theme";
 
 interface RemovalRequest {
@@ -49,7 +46,11 @@ export function ShelfScreen() {
   const palette = usePalette();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const [books, setBooks] = useState<readonly ShelfBookRecord[]>([]);
-  const [query, setQuery] = useState("");
+  const list = useRef<FlatList<ShelfBookRecord>>(null);
+  const { query, clear: clearSearch, headerSearchBarOptions, onScroll } = useNativeListSearch({
+    placeholder: "书名或作者", palette,
+    restoreOffset: y => list.current?.getScrollResponder()?.scrollTo({ y, animated: false }),
+  });
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   useTabInteractionLock(importing);
@@ -58,7 +59,6 @@ export function ShelfScreen() {
   const importController = useRef<AbortController | null>(null);
   const mounted = useRef(true);
   const [order, setOrder] = useState<"recent" | "title">("recent");
-  const [preferredBookId, setPreferredBookId] = useState<string | null>(null);
   const [showingRemoved, setShowingRemoved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -81,12 +81,7 @@ export function ShelfScreen() {
       const migration = await migrateLegacyLibraryIfNeeded();
       if (migration.failures > 0)
         setNotice(`旧版书库有 ${migration.failures} 条记录未能迁移`);
-      const [loadedBooks, preferred] = await Promise.all([
-        loadShelfBooks({ onlyRemoved }),
-        loadAppPreference("library:last-read"),
-      ]);
-      setBooks(loadedBooks);
-      setPreferredBookId(typeof preferred === "string" ? preferred : null);
+      setBooks(await loadShelfBooks({ onlyRemoved }));
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setError(
@@ -126,12 +121,6 @@ export function ShelfScreen() {
             a.id.localeCompare(b.id),
         )
       : matches;
-  const continueBook =
-    showingRemoved || needle.length > 0
-      ? null
-      : (filtered.find((book) => book.id === preferredBookId) ??
-        filtered.find((book) => book.progressPercent !== null) ??
-        null);
   const cardWidth = (width - spacing.screen * 2 - 21) / 2;
 
   const handleImport = async () => {
@@ -178,14 +167,6 @@ export function ShelfScreen() {
       return;
     }
     haptics();
-    setPreferredBookId(book.id);
-    void saveAppPreference("library:last-read", book.id).catch(
-      (cause: unknown) => {
-        setError(
-          `无法保存最近阅读：${cause instanceof Error ? cause.message : String(cause)}`,
-        );
-      },
-    );
     router.push({ pathname: "/reader/[id]", params: { id: book.id } });
   };
 
@@ -206,10 +187,6 @@ export function ShelfScreen() {
       })
       .finally(() => { removalInFlight.current = false; if (mounted.current) void load(); });
   };
-
-  const continueDetail = continueBook
-    ? `${continueBook.progressChapter?.split(" · ")[0] || (continueBook.format === "PDF" ? continueBook.progressLabel : "继续上次阅读")} · ${continueBook.progressPercent ?? 0}%`
-    : "";
 
   const renderBook = useCallback(
     ({ item: book }: ListRenderItemInfo<ShelfBookRecord>) => (
@@ -259,22 +236,6 @@ export function ShelfScreen() {
 
   const listHeader = (
     <View>
-      <PageHeader
-        title={showingRemoved ? "已移除的书籍" : "书架"}
-        action={{
-          symbol: "plus",
-          label: "导入书籍",
-          onPress: () => void handleImport(),
-          busy: importing,
-          variant: "solid",
-        }}
-      />
-      <SearchField
-        value={query}
-        onChangeText={setQuery}
-        placeholder="书名或作者"
-        style={styles.search}
-      />
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {importing ? (
@@ -292,65 +253,6 @@ export function ShelfScreen() {
             <Text style={styles.sortText}>取消</Text>
           </Pressable>
         </View>
-      ) : null}
-      {!showingRemoved && continueBook ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`继续阅读${continueBook.title}`}
-          onPress={() => openBook(continueBook)}
-          android_ripple={{ color: palette.line }}
-          style={({ pressed }) => [
-            styles.continueCard,
-            pressed && styles.pressed,
-          ]}
-        >
-          <BookCover
-            title={continueBook.title}
-            author={continueBook.author}
-            format={continueBook.format}
-            coverUri={continueBook.coverUri}
-            width={64}
-            height={90}
-            compact
-            showDot
-          />
-          <View style={styles.continueMeta}>
-            <View>
-              <Text style={styles.continueEyebrow}>继续阅读</Text>
-              <Text style={styles.continueTitle} numberOfLines={1}>
-                {continueBook.title}
-              </Text>
-              <Text style={styles.continueAuthor} numberOfLines={1}>
-                {continueBook.author ?? "作者未知"}
-              </Text>
-            </View>
-            <View>
-              <View style={styles.progressLine}>
-                <View
-                  style={[
-                    styles.progressFill,
-                    {
-                      width: `${Math.max(0, continueBook.progressPercent ?? 0)}%`,
-                    },
-                  ]}
-                />
-              </View>
-              <View style={styles.continueFooter}>
-                <View style={styles.continueAction}>
-                  <Text style={styles.continueLabel}>接着读</Text>
-                  <SymbolView
-                    name="arrow.right"
-                    size={13}
-                    tintColor={palette.lampInk}
-                  />
-                </View>
-                <Text style={styles.continueDetail} numberOfLines={1}>
-                  {continueDetail}
-                </Text>
-              </View>
-            </View>
-          </View>
-        </Pressable>
       ) : null}
       {books.length > 0 || showingRemoved ? (
         <SectionHeader
@@ -406,8 +308,25 @@ export function ShelfScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
+    <SafeAreaView style={styles.safeArea} edges={["left", "right"]}>
+      <Stack.Screen options={{
+        title: showingRemoved ? "已移除的书籍" : "书架",
+        headerSearchBarOptions,
+      }} />
+      <Stack.Toolbar placement="right">
+        <Stack.Toolbar.Button
+          icon="plus"
+          accessibilityLabel="导入书籍"
+          disabled={importing}
+          tintColor={palette.ink2}
+          onPress={() => void handleImport()}
+        />
+      </Stack.Toolbar>
       <FlatList
+        ref={list}
+        contentInsetAdjustmentBehavior="automatic"
+        scrollEventThrottle={16}
+        onScroll={onScroll}
         data={loading ? [] : filtered}
         keyExtractor={(book) => book.id}
         renderItem={renderBook}
@@ -437,6 +356,8 @@ export function ShelfScreen() {
                 variant="shelf"
                 title="没有找到这本书"
                 description="试试书名中的其他字，或作者名字。"
+                actionLabel="清除搜索"
+                onAction={clearSearch}
               />
             )}
           </View>
@@ -501,11 +422,10 @@ function createStyles(palette: Palette) {
     safeArea: { flex: 1, backgroundColor: palette.paper },
     content: {
       paddingHorizontal: spacing.screen,
-      paddingTop: 6,
+      paddingTop: 12,
       paddingBottom: 32,
     },
-    section: { marginTop: 24 },
-    search: { marginTop: 22, marginHorizontal: 8 },
+    section: { marginTop: 0 },
     notice: { marginTop: 8, fontSize: typeScale.caption, color: palette.ink2 },
     error: { marginTop: 8, fontSize: typeScale.caption, color: palette.error },
     importStatus: {
@@ -538,52 +458,6 @@ function createStyles(palette: Palette) {
     },
     bookProgressOn: { color: palette.lampInk },
     pressed: { opacity: 0.72 },
-    continueCard: {
-      flexDirection: "row",
-      marginTop: 26,
-      padding: 12,
-      minHeight: 114,
-      borderRadius: 14,
-      backgroundColor: palette.paperDeep,
-    },
-    continueMeta: { flex: 1, marginLeft: 12, justifyContent: "space-between" },
-    continueEyebrow: {
-      fontSize: 10.5,
-      fontWeight: "500",
-      color: palette.lampInk,
-    },
-    continueTitle: {
-      marginTop: 5,
-      fontFamily: "Songti SC",
-      fontSize: 22,
-      fontWeight: "600",
-      color: palette.ink,
-    },
-    continueAuthor: {
-      marginTop: 2,
-      fontSize: typeScale.caption,
-      color: palette.ink3,
-    },
-    progressLine: {
-      height: 2,
-      backgroundColor: palette.line,
-      marginTop: 8,
-      overflow: "hidden",
-    },
-    progressFill: { height: 2, backgroundColor: palette.lamp },
-    continueFooter: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      marginTop: 6,
-    },
-    continueAction: { flexDirection: "row", alignItems: "center", gap: 4 },
-    continueLabel: { fontSize: 13, fontWeight: "500", color: palette.lampInk },
-    continueDetail: {
-      marginLeft: 8,
-      fontSize: typeScale.captionSmall,
-      color: palette.ink3,
-    },
     sortControl: {
       width: 100,
       height: 44,

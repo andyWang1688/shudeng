@@ -4,6 +4,7 @@ import { InMemoryBookSource } from './book-source.js';
 import type { AgentEvent, AgentRunSession } from './events.js';
 import { createScriptedModel, ScriptedChatModel } from './testing.js';
 import { contentText, estimateRequestContext, estimateTextTokens, requestMaterials } from './request-context.js';
+import { nativeContextBudget } from './context-manager.js';
 
 const book = { id: 'context-book', title: '材料书', format: 'epub' as const, sourceHash: 'context-hash' };
 const source = () => new InMemoryBookSource({ book, chapters: [
@@ -62,7 +63,7 @@ describe('actual request context projection', () => {
     expect(result.sentMaterials).toEqual([{ id: 'remote-1', kind: 'external-tool', name: 'external_lookup', content: '真实外部结果' }]);
     expect(result.contextUsage?.inputTokens).toBe(900);
     expect(result.contextEstimate?.estimatedTokens).not.toBe(900);
-    expect(result.contextEstimate?.thresholdTokens).toBe(1000);
+    expect(result.contextEstimate?.thresholdTokens).toBe(nativeContextBudget(10000).threshold);
     expect(requestMaterials((model.langChainModel as ScriptedChatModel).calls[0]!, new Set(), '没有发送的选文')).toEqual([]);
   });
 
@@ -86,22 +87,25 @@ describe('actual request context projection', () => {
       { chunks: [{ text: '较早对话摘要。' }] },
       { chunks: [{ text: '{"answer":"新回答","citations":[]}' }] },
     ]);
-    const session = runBookAgent({ model, book, source: source(), question: '新问题', contextWindowTokens: 1000,
-      history: Array.from({ length: 5 }, () => ({ question: '旧问'.repeat(100), answer: '旧答'.repeat(100) })),
+    const session = runBookAgent({ model, book, source: source(), question: '新问题', contextWindowTokens: 8192,
+      history: Array.from({ length: 5 }, () => ({ question: '旧问'.repeat(400), answer: '旧答'.repeat(400) })),
     });
     const events = await collect(session);
     expect(events.filter(event => event.type === 'requestContext')).toHaveLength(1);
     const estimate = (await session.result)!.contextEstimate!;
     const calls = (model.langChainModel as ScriptedChatModel).calls;
+    expect(calls).toHaveLength(2);
     const prepared = calls.at(-1)!;
     expect(estimate.action).toBe('compacted');
     expect(estimate.summarizedMessages).toBeGreaterThan(0);
     expect(estimate.summaryTokens).toBeGreaterThan(0);
     expect(estimate).toEqual(estimateRequestContext(
       prepared[0], prepared.slice(1),
-      { window: 2000, threshold: 1000, compacted: true, summarizedMessages: estimate.summarizedMessages,
+      { window: 8192, threshold: nativeContextBudget(8192).threshold, compacted: true, summarizedMessages: estimate.summarizedMessages,
         trimmedMessages: 0, truncatedToolResults: 0 },
     ));
+    expect(estimate.estimatedTokens).toBeLessThanOrEqual(nativeContextBudget(8192).threshold);
+    expect(contentText(prepared.at(-1)!.content)).toBe('新问题');
   });
 
   it('does not mark a produced tool result as sent when cancelled before the next request', async () => {

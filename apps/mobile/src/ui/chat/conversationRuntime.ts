@@ -29,6 +29,8 @@ function readonlyTurn(turn: ChatTurn): RuntimeTurn {
   return Object.freeze({ ...turn,
     tools: Object.freeze(turn.tools.map(tool => Object.freeze({ ...tool }))),
     citations: Object.freeze(turn.citations.map(citation => Object.freeze({ ...citation }))),
+    ...(turn.webSources ? { webSources: Object.freeze(turn.webSources.map(source => Object.freeze({ ...source }))) } : {}),
+    ...(turn.webSearchStatus ? { webSearchStatus: Object.freeze({ ...turn.webSearchStatus }) } : {}),
     warnings: Object.freeze([...turn.warnings]),
     ...(turn.contextUsage ? { contextUsage: Object.freeze({ ...turn.contextUsage }) } : {}),
     ...(turn.contextEstimate ? { contextEstimate: Object.freeze({ ...turn.contextEstimate }) } : {}),

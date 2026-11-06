@@ -4,11 +4,12 @@ import Module, { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { parseQuestionOrigin } from '../../platform/library/questionOrigin.ts';
+import { parseWebSources, parseWebSearchPresentation } from '../../platform/library/assistantSources.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
 const file = new URL('../../platform/library/conversations.ts', import.meta.url);
-function library(legacy: any[] = []) {
+function library(legacy: any[] | (() => unknown) = []) {
   const db = new DatabaseSync(':memory:');
   db.exec([
     "CREATE TABLE books(id TEXT PRIMARY KEY,title TEXT,format TEXT DEFAULT 'epub')",
@@ -18,8 +19,9 @@ function library(legacy: any[] = []) {
     'CREATE TABLE conversation_turn_details(message_id TEXT PRIMARY KEY,details_json TEXT)',
     'CREATE TABLE citations(id TEXT,conversation_id TEXT,message_id TEXT,evidence_id TEXT,quote TEXT,locator_json TEXT,chapter TEXT,page INTEGER,created_at INTEGER)',
   ].join(';'));
+  const reads = { legacy: 0, bodies: 0, queries: [] as string[] };
   const driver: any = {
-    all: async (sql: string, args: any[] = []) => db.prepare(sql).all(...args),
+    all: async (sql: string, args: any[] = []) => { reads.queries.push(sql); return db.prepare(sql).all(...args); },
     run: async (sql: string, args: any[] = []) => db.prepare(sql).run(...args),
     transaction: async (operation: any) => {
       db.exec('BEGIN');
@@ -29,8 +31,11 @@ function library(legacy: any[] = []) {
   };
   const store = {
     getBook: async (id: string) => db.prepare('SELECT * FROM books WHERE id=?').get(id),
-    listMessages: async (id: string) => db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at,id').all(id)
-      .map((row: any) => ({ ...row, createdAt: row.created_at, reasoningContent: row.reasoning_content })),
+    listMessages: async (id: string) => {
+      reads.bodies++;
+      return db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at,id').all(id)
+        .map((row: any) => ({ ...row, createdAt: row.created_at, reasoningContent: row.reasoning_content }));
+    },
     listCitations: async () => [],
   };
   const compiled: any = new Module(file.pathname);
@@ -40,14 +45,15 @@ function library(legacy: any[] = []) {
     '../db': { getDataLayer: async () => ({ driver, store }) },
     './pure': { isRecord: (value: any) => value !== null && typeof value === 'object' && !Array.isArray(value), cleanLegacyAssistantContent: (value: string) => value,
       citationHref: (raw: string | null) => raw ? /"href"\s*:\s*"([^"]+)"/.exec(raw)?.[1] ?? null : null },
-    './legacyMigration': { parseLegacyJSON: () => legacy },
+    './legacyMigration': { parseLegacyJSON: () => { reads.legacy++; return typeof legacy === 'function' ? legacy() : legacy; } },
     './questionOrigin': { parseQuestionOrigin },
+    './assistantSources': { parseWebSources, parseWebSearchPresentation },
   };
   compiled.require = (id: string) => { if (!(id in mocks)) throw Error('Unmocked ' + id); return mocks[id]; };
   compiled._compile(ts.transpileModule(readFileSync(file, 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText, file.pathname);
-  return { db, api: compiled.exports, insert(id: string, updated: number, details: any = {}) {
+  return { db, reads, api: compiled.exports, insert(id: string, updated: number, details: any = {}) {
     db.prepare('INSERT INTO conversations VALUES(?,?,NULL,?,?)').run(id, 'book', updated, updated);
     db.prepare('INSERT INTO messages VALUES(?,?,?,?,NULL,0,?)').run(id + ':user', id, 'user', '问题-' + id, updated);
     db.prepare('INSERT INTO messages VALUES(?,?,?,?,NULL,0,?)').run(id + ':assistant', id, 'assistant', '答案-' + id, updated + 1);
@@ -221,5 +227,59 @@ test('optional request estimates and sent materials are strictly projected witho
       assert.equal(turn.details.sentMaterials, undefined);
       assert.equal(turn.details.bookTitle, undefined);
     }
+  } finally { h.db.close(); }
+});
+
+test('new conversation save, read, list, rename and book identity lookup do not read a corrupt legacy file', async () => {
+  const h = library(() => { throw SyntaxError('broken legacy JSON'); });
+  try {
+    h.db.prepare('INSERT INTO books(id,title) VALUES(?,?)').run('book', '现在的书');
+    await h.api.appendBookChatTurn({ bookId: 'book', conversationId: 'new-thread', assistantId: 'answer', question: '新问题', answer: '新回答' });
+    assert.equal((await h.api.loadBookConversation('new-thread'))[1].text, '新回答');
+    assert.equal((await h.api.loadConversationSummaries())[0].bookTitle, '现在的书');
+    await h.api.renameBookConversation('new-thread', '新会话名');
+    assert.deepEqual(await h.api.listConversationIdsForBook('book'), ['book:book', 'new-thread']);
+    assert.equal(h.reads.legacy, 0);
+  } finally { h.db.close(); }
+});
+
+test('loading a migrated legacy conversation still reports corrupt legacy metadata', async () => {
+  const h = library(() => { throw SyntaxError('broken legacy JSON'); });
+  try {
+    legacyThread(h, '引文', null, 1);
+    await assert.rejects(h.api.loadBookConversation('thread'), /broken legacy JSON/);
+    await assert.rejects(h.api.loadConversationSummaries(), /broken legacy JSON/);
+    await assert.rejects(h.api.appendBookChatTurn({ bookId: 'book', conversationId: 'thread', question: '追问', answer: '回答' }), /broken legacy JSON/);
+  } finally { h.db.close(); }
+});
+
+test('narrow book conversation lookup includes direct, old book-prefixed, UUID and follow-up identities without reading bodies', async () => {
+  const h = library([{ id: 'native', conversationID: 'native-uuid', bookID: 'B', followUps: [{ id: 'followup-uuid' }] }]);
+  try {
+    h.db.exec("INSERT INTO books VALUES('A','Book A','pdf'),('B','Book B','pdf')");
+    h.db.exec("INSERT INTO anchors VALUES('A','shared',NULL,1,'{}'),('B','shared',NULL,1,'{}'),('B','uniqueB',NULL,2,'{}')");
+    h.db.prepare('INSERT INTO conversations VALUES(?,?,NULL,1,1)').run('modern-B', 'B');
+    const insert = h.db.prepare('INSERT INTO messages VALUES(?,?,?,?,NULL,0,?)');
+    for (const [id, thread] of [['book-B-user', 'book:B'], ['legacy-q:native:user', 'native-uuid'], ['legacy-q:follow:user', 'followup-uuid'], ['legacy-q:unique:user', 'unique-uuid'], ['legacy-q:ambiguous:user', 'ambiguous-uuid'], ['legacy-q:explicit-other:user', 'book:A']]) {
+      insert.run(id, thread, 'user', '完整问题正文', 1);
+    }
+    const cite = h.db.prepare('INSERT INTO citations VALUES(?,?,?,?,?,?,?,?,?)');
+    cite.run('unique', 'unique-uuid', 'legacy-q:unique:user', 'E1', 'uniqueB', '{"kind":"pdf"}', null, 2, 1);
+    cite.run('ambiguous', 'ambiguous-uuid', 'legacy-q:ambiguous:user', 'E2', 'shared', '{"kind":"pdf"}', null, 1, 1);
+    cite.run('other', 'book:A', 'legacy-q:explicit-other:user', 'E3', 'uniqueB', '{"kind":"pdf"}', null, 2, 1);
+    assert.deepEqual(new Set(await h.api.listConversationIdsForBook('B')), new Set(['book:B', 'modern-B', 'native-uuid', 'followup-uuid', 'unique-uuid']));
+    assert.equal(h.reads.bodies, 0);
+    assert.ok(h.reads.queries.every(sql => !sql.includes('details_json') && !/SELECT\s+(?:m\.)?content\b/i.test(sql)));
+    assert.equal(h.db.prepare('SELECT COUNT(*) AS count FROM conversations').get().count, 1);
+  } finally { h.db.close(); }
+});
+
+test('renaming a modern thread reads only its identity even when another legacy thread is damaged', async () => {
+  const h = library(() => { throw SyntaxError('broken legacy JSON'); });
+  try {
+    h.insert('modern', 1); legacyThread(h, '引文', null, 1);
+    await h.api.renameBookConversation('modern', '新名称');
+    assert.equal(h.db.prepare('SELECT title FROM conversations WHERE id=?').get('modern').title, '新名称');
+    assert.equal(h.reads.bodies, 0); assert.equal(h.reads.legacy, 0);
   } finally { h.db.close(); }
 });

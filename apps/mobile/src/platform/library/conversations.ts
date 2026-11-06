@@ -10,6 +10,8 @@ import { citationHref, cleanLegacyAssistantContent, isRecord } from './pure';
 import { parseLegacyJSON } from './legacyMigration';
 import type { ConversationSummary } from './types';
 import { parseQuestionOrigin, type QuestionOriginSnapshot } from './questionOrigin';
+import { parseWebSources, parseWebSearchPresentation, type WebSearchPresentation } from './assistantSources';
+import type { WebSource } from '@shudeng/core';
 
 export { cleanLegacyAssistantContent } from './pure';
 
@@ -71,6 +73,8 @@ export interface ConversationTurnDetails {
   readonly bookTitle?: string;
   readonly contextEstimate?: AgentContextEstimate;
   readonly sentMaterials?: readonly AgentSentMaterial[];
+  readonly webSources?: readonly WebSource[];
+  readonly webSearchStatus?: WebSearchPresentation;
   readonly legacyNative?: LegacyNativeSnapshot;
 }
 
@@ -101,6 +105,14 @@ async function firstBookTitle(layer: ShudengDataLayer, conversationId: string): 
   return typeof row?.book_title === 'string' ? row.book_title : undefined;
 }
 
+async function hasLegacyMessages(layer: ShudengDataLayer, conversationId: string): Promise<boolean> {
+  const rows = await layer.driver.all<{ id: string }>(
+    "SELECT id FROM messages WHERE conversation_id=? AND id GLOB 'legacy-q:*' LIMIT 1",
+    [conversationId],
+  );
+  return rows.length > 0;
+}
+
 /** A question and its answer/citations are committed together, including interrupted runs. */
 export async function appendBookChatTurn(input: {
   readonly bookId: string;
@@ -125,7 +137,8 @@ export async function appendBookChatTurn(input: {
   // Freeze the first real book-name snapshot in existing turn details. Source
   // removal and later partial/final writes must not replace that name.
   const priorTitle = await firstBookTitle(layer, conversationId);
-  const legacyTitle = priorTitle === undefined ? legacyConversationMetadata().get(conversationId)?.bookTitle : undefined;
+  const legacyTitle = priorTitle === undefined && await hasLegacyMessages(layer, conversationId)
+    ? legacyConversationMetadata().get(conversationId)?.bookTitle : undefined;
   const bookTitle = priorTitle ?? legacyTitle ?? input.details?.bookTitle ?? (await layer.store.getBook(input.bookId))?.title;
   const details = { ...(input.details ?? { status: 'done' as const }) };
   if (!validModelSteps(details.modelSteps)) delete details.modelSteps;
@@ -323,6 +336,8 @@ function parseTurnDetails(raw: string | undefined): ConversationTurnDetails {
         : undefined;
     const estimate = parseContextEstimate(value.contextEstimate);
     const materials = parseSentMaterials(value.sentMaterials);
+    const webSources = parseWebSources(value.webSources);
+    const webSearchStatus = parseWebSearchPresentation(value.webSearchStatus);
     return {
       status,
       tools,
@@ -333,6 +348,12 @@ function parseTurnDetails(raw: string | undefined): ConversationTurnDetails {
       ...(typeof value.bookTitle === 'string' ? { bookTitle: value.bookTitle } : {}),
       ...(estimate ? { contextEstimate: estimate } : {}),
       ...(materials ? { sentMaterials: materials } : {}),
+      ...(webSources.length ? { webSources } : {}),
+      ...(webSearchStatus ? { webSearchStatus: webSearchStatus.status === 'searching'
+        ? status === 'done' && webSources.length > 0
+          ? { status: 'complete' as const }
+          : { status: 'failed' as const, message: '上次联网搜索未完成，可重试。' }
+        : webSearchStatus } : {}),
       ...(Array.isArray(value.warnings)
         ? { warnings: value.warnings.filter((warning): warning is string => typeof warning === 'string') }
         : {}),
@@ -365,7 +386,8 @@ export async function loadBookConversation(conversationId: string): Promise<Stor
     ),
   ]);
   const detailById = new Map(details.map((row) => [row.message_id, row.details_json]));
-  const firstLegacyUser = legacyConversationMetadata().get(conversationId)?.firstQuestionId;
+  const firstLegacyUser = messages.some(message => message.id.startsWith('legacy-q:'))
+    ? legacyConversationMetadata().get(conversationId)?.firstQuestionId : undefined;
   const firstLegacyAssistant = firstLegacyUser ? firstLegacyUser.slice(0, -4) + 'assistant' : undefined;
   return messages.flatMap((message) => {
     if (message.role !== 'user' && message.role !== 'assistant') return [];
@@ -397,11 +419,19 @@ export async function renameBookConversation(conversationId: string, title: stri
   const trimmed = title.trim();
   if (!trimmed) throw new Error('对话名称不能为空');
   const layer = await getDataLayer();
-  const existing = (await loadConversationSummaries()).find((item) => item.conversationId === conversationId);
+  const [existing] = await layer.driver.all<{ book_id: string | null; updated_at: number; has_legacy: number }>(
+    `SELECT c.book_id, MAX(MAX(COALESCE(c.updated_at,0),m.created_at)) AS updated_at,
+       MAX(CASE WHEN m.id GLOB 'legacy-q:*' THEN 1 ELSE 0 END) AS has_legacy
+     FROM messages m LEFT JOIN conversations c ON c.id=m.conversation_id
+     WHERE m.conversation_id=? AND m.role IN ('user','assistant') GROUP BY m.conversation_id`,
+    [conversationId],
+  );
   if (!existing) throw new Error('对话不存在或已删除');
+  const bookId = existing.book_id || (conversationId.startsWith(CONVERSATION_PREFIX) ? conversationId.slice(CONVERSATION_PREFIX.length) : '')
+    || await inferLegacyConversationBookId(layer, conversationId, existing.has_legacy ? legacyQuestionBookIds().get(conversationId) : undefined) || '';
   await layer.driver.run(
     'INSERT INTO conversations (id,book_id,title,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,updated_at=excluded.updated_at',
-    [conversationId, existing.bookId, trimmed, existing.updatedAt, Date.now()],
+    [conversationId, bookId, trimmed, existing.updated_at, Date.now()],
   );
 }
 
@@ -475,8 +505,8 @@ function legacyQuestionBookIds(): Map<string, string> {
 async function inferLegacyConversationBookId(
   layer: ShudengDataLayer,
   conversationId: string,
+  knownBookId?: string,
 ): Promise<string | null> {
-  const knownBookId = legacyQuestionBookIds().get(conversationId);
   if (knownBookId) return knownBookId;
   const citations = await layer.driver.all<Record<string, SQLiteValue>>(
     'SELECT quote, locator_json, chapter, page FROM citations WHERE conversation_id = ? LIMIT 12',
@@ -536,12 +566,37 @@ async function inferLegacyConversationBookId(
   return hasIdentityEvidence && matchingBooks?.size === 1 ? [...matchingBooks][0]! : null;
 }
 
+/** Book removal only needs identities; never load full message bodies or build summaries. */
+export async function listConversationIdsForBook(bookId: string): Promise<readonly string[]> {
+  const layer = await getDataLayer();
+  const direct = await layer.driver.all<{ id: string }>('SELECT id FROM conversations WHERE book_id=?', [bookId]);
+  const ids = new Set([CONVERSATION_PREFIX + bookId, ...direct.map(row => row.id)]);
+  const unresolved = await layer.driver.all<{ conversation_id: string; has_legacy: number }>(
+    `SELECT m.conversation_id, MAX(CASE WHEN m.id GLOB 'legacy-q:*' THEN 1 ELSE 0 END) AS has_legacy
+     FROM messages m LEFT JOIN conversations c ON c.id=m.conversation_id
+     WHERE (c.book_id IS NULL OR c.book_id='') AND m.role IN ('user','assistant') GROUP BY m.conversation_id`,
+  );
+  let legacyBooks: Map<string, string> | undefined;
+  for (const row of unresolved) {
+    if (ids.has(row.conversation_id)) continue;
+    if (row.conversation_id.startsWith(CONVERSATION_PREFIX)) {
+      // The explicit old book:<id> relation takes precedence over citation matches.
+      continue;
+    }
+    if (row.has_legacy) legacyBooks ??= legacyQuestionBookIds();
+    const inferred = await inferLegacyConversationBookId(layer, row.conversation_id, row.has_legacy ? legacyBooks?.get(row.conversation_id) : undefined);
+    if (inferred === bookId) ids.add(row.conversation_id);
+  }
+  return [...ids];
+}
+
 export async function loadConversationSummaries(): Promise<
   readonly (ConversationSummary & { title?: string; searchText?: string })[]
 > {
   const layer = await getDataLayer();
   const rows = await layer.driver.all<Record<string, SQLiteValue>>(
-    `SELECT m.conversation_id, COUNT(*) AS turns, MAX(MAX(COALESCE(c.updated_at,0),m.created_at)) AS updated_at
+    `SELECT m.conversation_id, COUNT(*) AS turns, MAX(MAX(COALESCE(c.updated_at,0),m.created_at)) AS updated_at,
+       MAX(CASE WHEN m.id GLOB 'legacy-q:*' THEN 1 ELSE 0 END) AS has_legacy
      FROM messages m LEFT JOIN conversations c ON c.id=m.conversation_id
      WHERE m.role IN ('user','assistant') GROUP BY m.conversation_id ORDER BY updated_at DESC`,
   );
@@ -549,13 +604,13 @@ export async function loadConversationSummaries(): Promise<
     'SELECT id,book_id,title FROM conversations',
   );
   const byId = new Map(metadata.map((row) => [row.id, row]));
-  const legacy = legacyConversationMetadata();
+  const legacy = rows.some(row => row.has_legacy === 1) ? legacyConversationMetadata() : new Map<string, LegacyConversationMetadata>();
   const summaries: Array<ConversationSummary & { title?: string; searchText?: string }> = [];
   for (const row of rows) {
     if (typeof row.conversation_id !== 'string') continue;
     const conversationId = row.conversation_id;
     const messages = await layer.store.listMessages(conversationId);
-    const original = legacy.get(conversationId);
+    const original = row.has_legacy === 1 ? legacy.get(conversationId) : undefined;
     const firstQuestion = original && messages.find(message => message.id === original.firstQuestionId);
     const question = firstQuestion?.content ?? messages.find((message) => message.role === 'user')?.content ?? '';
     const assistants = messages.filter(message => message.role === 'assistant');
@@ -567,15 +622,15 @@ export async function loadConversationSummaries(): Promise<
       ? assistants.find(message => message.id === 'legacy-q:' + original!.latestTurnId + ':assistant')?.content ?? ''
       : assistants[assistants.length - 1]?.content ?? '');
     const answer = cleanLegacyAssistantContent(rawAnswer);
-    const bookTitle = (await firstBookTitle(layer, conversationId)) ?? legacy.get(conversationId)?.bookTitle;
-    const title = byId.get(conversationId)?.title ?? legacy.get(conversationId)?.title;
+    const bookTitle = (await firstBookTitle(layer, conversationId)) ?? original?.bookTitle;
+    const title = byId.get(conversationId)?.title ?? original?.title;
     let bookId =
       byId.get(conversationId)?.book_id ??
       (conversationId.startsWith(CONVERSATION_PREFIX)
         ? conversationId.slice(CONVERSATION_PREFIX.length)
         : '');
     if (!bookId) {
-      bookId = (await inferLegacyConversationBookId(layer, conversationId)) ?? '';
+      bookId = (await inferLegacyConversationBookId(layer, conversationId, row.has_legacy === 1 ? legacyQuestionBookIds().get(conversationId) : undefined)) ?? '';
     }
     summaries.push({
       conversationId,
@@ -586,7 +641,7 @@ export async function loadConversationSummaries(): Promise<
       answer,
       searchText: messages.map((message) => cleanLegacyAssistantContent(message.content)).join(' '),
       turns: typeof row.turns === 'number' ? row.turns : messages.length,
-      submittedCount: messages.filter(message => message.role === 'user' && !legacy.get(conversationId)?.draftMessageIds.has(message.id)).length,
+      submittedCount: messages.filter(message => message.role === 'user' && !original?.draftMessageIds.has(message.id)).length,
       assistantIds: messages.filter(message => message.role === 'assistant').map(message => message.id),
       updatedAt: typeof row.updated_at === 'number' ? row.updated_at : 0,
     });

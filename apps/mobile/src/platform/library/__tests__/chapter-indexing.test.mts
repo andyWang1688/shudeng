@@ -28,7 +28,7 @@ vi.mock('../../epubArchive', () => ({ openEpubArchive: async (): Promise<EpubRes
   return { entries: Object.entries(resources).map(([path, text]) => ({ path, resourceID: path, size: text.length })), getSize: path => resources[path]?.length ?? 0, async readText(path, options) { if (options?.signal?.aborted) throw new Error('cancelled'); state.reads.push(path); return resources[path] ?? null; }, async materialize() { throw new Error('not needed'); }, async close() { state.closes += 1; } };
 } }));
 vi.mock('../progress', () => ({ ensureProgressTable: async () => state.layer, loadAllBookProgress: async () => new Map() }));
-vi.mock('../conversations', () => ({ loadConversationSummaries: async () => [], markConversationsDeleted: () => () => {}, cancelConversationRun: () => {} }));
+vi.mock('../conversations', () => ({ listConversationIdsForBook: async () => [], markConversationsDeleted: () => () => {}, cancelConversationRun: () => {} }));
 vi.mock('../bookCovers', () => ({ loadBookCover: async () => undefined }));
 import { cancelBookIndexing, getLocalBookIndexStatus, indexImportedBook, rebuildBookIndex, resumeAvailableBookIndexes } from '../../ai/bookIndex';
 import { importBookAsset, deleteShelfBook } from '../import';

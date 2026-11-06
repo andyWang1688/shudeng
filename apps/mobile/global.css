@@ -1,0 +1,58 @@
+/* Claude web example palette adapted to the native reader thread:
+ * https://www.assistant-ui.com/examples/claude
+ */
+@import "tailwindcss";
+@import "uniwind";
+
+@theme {
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --radius-3xl: 24px;
+}
+
+@layer theme {
+  :root {
+    @variant light {
+      --color-background: #f0ece0;
+      --color-foreground: #1a1a18;
+      --color-card: #ffffff;
+      --color-card-foreground: #1a1a18;
+      --color-primary: #c96442;
+      --color-primary-foreground: #ffffff;
+      --color-secondary: #e5e0d6;
+      --color-secondary-foreground: #1a1a18;
+      --color-muted: #e5e0d6;
+      --color-muted-foreground: #5b5950;
+      --color-accent: #e5e0d6;
+      --color-accent-foreground: #1a1a18;
+      --color-destructive: #b94733;
+      --color-border: #e5e0d6;
+      --color-input: #e5e0d6;
+      --color-ring: #c96442;
+      --color-link: #a14e36;
+    }
+
+    @variant dark {
+      --color-background: #2b2a27;
+      --color-foreground: #eeeeee;
+      --color-card: #1f1e1b;
+      --color-card-foreground: #eeeeee;
+      --color-primary: #c96442;
+      --color-primary-foreground: #ffffff;
+      --color-secondary: #393937;
+      --color-secondary-foreground: #eeeeee;
+      --color-muted: #393937;
+      --color-muted-foreground: #a3a098;
+      --color-accent: #393937;
+      --color-accent-foreground: #eeeeee;
+      --color-destructive: #ef9a88;
+      --color-border: #3d3a35;
+      --color-input: #3d3a35;
+      --color-ring: #c96442;
+      --color-link: #eea186;
+    }
+  }
+}

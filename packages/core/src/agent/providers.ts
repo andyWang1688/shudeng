@@ -13,7 +13,7 @@
  *   所以在 DeepSeek 适配器里通过自定义 fetch 在请求体上补回（纯函数 injectReasoningContent，单测覆盖）。
  */
 import { ChatAnthropic } from '@langchain/anthropic';
-import { ChatOpenAICompletions } from '@langchain/openai';
+import { ChatOpenAICompletions, ChatOpenAIResponses } from '@langchain/openai';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
@@ -22,6 +22,7 @@ import { resolveProviderEndpoint } from './provider-endpoint.js';
 import { createProviderFetch, type ProviderFetch } from './provider-transport.js';
 import { ProviderAsyncCaller } from './provider-retry.js';
 import { observeResponseActivity } from './response-activity.js';
+import { resolveWebSearchPolicy, type AgentWebSearchConfig, type WebSearchPolicy } from './web-search.js';
 
 export type AgentProvider = 'openai' | 'anthropic' | 'deepseek';
 
@@ -38,6 +39,7 @@ export interface AgentModelConfig {
   /** DeepSeek 原生思考开关（默认开启；其它 provider 忽略）。 */
   thinking?: boolean;
   reasoningEffort?: 'low' | 'high' | 'max';
+  webSearch?: AgentWebSearchConfig;
 }
 
 /**
@@ -51,6 +53,17 @@ export interface AgentModelHandle {
   readonly langChainModel: unknown;
   /** @internal Raw response bytes include SSE comments/pings hidden by SDK parsers. */
   readonly subscribeActivity?: (listener: () => void) => () => void;
+  /** @internal Candidate protocol support; each run owns its budget and sources. */
+  readonly webSearch?: WebSearchPolicy;
+}
+
+class BudgetedOpenAIResponses extends ChatOpenAIResponses {
+  override invocationParams(options?: this['ParsedCallOptions']): ReturnType<ChatOpenAIResponses['invocationParams']> {
+    const params = super.invocationParams(options);
+    const budget = (options as Record<string, unknown> | undefined)?.shudengWebSearchBudget;
+    if (typeof budget === 'number' && budget > 0) params.max_tool_calls = Math.floor(budget);
+    return params;
+  }
 }
 
 /** DeepSeek 思考模式的请求参数（纯函数，便于单测与文档对齐）。 */
@@ -104,12 +117,6 @@ export function injectReasoningContent(
     }
     return copy;
   });
-}
-
-function langchainReasoningDebug(messages: ReadonlyArray<BaseMessage>): string[] {
-  return messages
-    .filter((message) => message.getType() === 'ai')
-    .map((message) => String((message.additional_kwargs as Record<string, unknown>).reasoning_content ?? ''));
 }
 
 interface DeepSeekReasoningState {
@@ -181,7 +188,13 @@ function requireApiKey(config: AgentModelConfig): string {
 export function createChatModel(config: AgentModelConfig): AgentModelHandle {
   const apiKey = requireApiKey(config);
   const maxTokens = config.maxTokens ?? 8_192;
-  const endpoint = resolveProviderEndpoint(config.provider, config.baseUrl);
+  const webSearch = resolveWebSearchPolicy(config.provider, config.baseUrl, config.webSearch);
+  const address = webSearch.provider === 'openai' ? config.baseUrl?.replace(/\/responses\/?$/, '') : config.baseUrl;
+  const textEndpoint = resolveProviderEndpoint(config.provider, address);
+  const endpoint = webSearch.provider === 'openai' ? { ...textEndpoint,
+    endpoint: textEndpoint.endpoint.replace(/\/chat\/completions$/, '/responses'),
+    sdkEndpoint: textEndpoint.sdkEndpoint.replace(/\/chat\/completions$/, '/responses'),
+  } : textEndpoint;
   const nativeFetch = createProviderFetch(endpoint, config.fetch);
   const activity = new Set<() => void>();
   const fetch: ProviderFetch = async (input, init) => {
@@ -197,6 +210,16 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
   const subscribeActivity = (listener: () => void) => { activity.add(listener); return () => { activity.delete(listener); }; };
   switch (config.provider) {
     case 'openai': {
+      if (webSearch.provider === 'openai') {
+        const model = new BudgetedOpenAIResponses({
+          apiKey, model: config.model, streaming: true, maxTokens,
+          ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
+          modelKwargs: { store: false },
+          configuration: { baseURL: endpoint.sdkBaseURL, fetch },
+        });
+        model.caller = new ProviderAsyncCaller({});
+        return { provider: 'openai', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch };
+      }
       // The native address contract is Chat Completions for every configured model name.
       // The generic ChatOpenAI facade otherwise switches some model names to /responses.
       const model = new ChatOpenAICompletions({
@@ -208,7 +231,7 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
         configuration: { baseURL: endpoint.sdkBaseURL, fetch },
       });
       model.caller = new ProviderAsyncCaller({});
-      return { provider: 'openai', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity };
+      return { provider: 'openai', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch };
     }
     case 'anthropic': {
       const model = new ChatAnthropic({
@@ -220,7 +243,7 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
         clientOptions: { baseURL: endpoint.sdkBaseURL, fetch },
       });
       model.caller = new ProviderAsyncCaller({});
-      return { provider: 'anthropic', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity };
+      return { provider: 'anthropic', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch };
     }
     case 'deepseek': {
       const thinking = config.thinking ?? true;
@@ -242,7 +265,7 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
         state,
       );
       model.caller = new ProviderAsyncCaller({});
-      return { provider: 'deepseek', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity };
+      return { provider: 'deepseek', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch };
     }
     default: {
       const exhaustive: never = config.provider;

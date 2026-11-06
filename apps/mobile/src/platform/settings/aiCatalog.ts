@@ -7,6 +7,7 @@ export interface AIService {
   readonly baseUrl: string;
   readonly model: string;
   readonly contextWindowTokens?: number;
+  readonly webSearchEnabled?: boolean;
   readonly secretId: string;
   readonly consentScope?: string;
 }
@@ -14,6 +15,8 @@ export interface AICatalog {
   readonly version: 2;
   readonly selectedId: string | null;
   readonly services: readonly AIService[];
+  /** One-time migration of the historical app-wide preference has completed. */
+  readonly webSearchMigrated?: true;
 }
 export interface AIServiceDraft {
   readonly id?: string;
@@ -22,6 +25,7 @@ export interface AIServiceDraft {
   readonly baseUrl: string;
   readonly model: string;
   readonly contextWindowTokens?: number;
+  readonly webSearchEnabled?: boolean;
 }
 export const EMPTY_CATALOG: AICatalog = {
   version: 2,
@@ -55,6 +59,11 @@ export function validateServiceDraft(draft: AIServiceDraft): AIServiceDraft {
   if (!["deepseek", "openai", "anthropic"].includes(draft.provider))
     throw new Error("接口格式无效。");
   if (
+    draft.webSearchEnabled !== undefined &&
+    typeof draft.webSearchEnabled !== "boolean"
+  )
+    throw new Error("联网搜索设置无效。");
+  if (
     typeof draft.name !== "string" ||
     typeof draft.model !== "string" ||
     typeof draft.baseUrl !== "string" ||
@@ -76,6 +85,9 @@ export function validateServiceDraft(draft: AIServiceDraft): AIServiceDraft {
     name: draft.name.trim(),
     model: draft.model.trim(),
     baseUrl: normalizeAIAddress(draft.baseUrl),
+    ...(draft.webSearchEnabled !== undefined
+      ? { webSearchEnabled: draft.webSearchEnabled }
+      : {}),
     ...(draft.contextWindowTokens !== undefined
       ? { contextWindowTokens: draft.contextWindowTokens }
       : {}),
@@ -100,7 +112,10 @@ export function aiConsentScope(
     version: 2,
     provider: value.provider === "deepseek" ? "deepSeek" : "custom",
     // Foundation .whitespacesAndNewlines also trims U+200B and keeps a BOM.
-    name: value.name.replace(/^[\t\p{Zs}\u200B\n\r\v\f\u0085\u2028\u2029]+|[\t\p{Zs}\u200B\n\r\v\f\u0085\u2028\u2029]+$/gu, ""),
+    name: value.name.replace(
+      /^[\t\p{Zs}\u200B\n\r\v\f\u0085\u2028\u2029]+|[\t\p{Zs}\u200B\n\r\v\f\u0085\u2028\u2029]+$/gu,
+      "",
+    ),
     format,
     endpoint: url.toString(),
   });
@@ -117,6 +132,8 @@ export function parseAICatalog(raw: string): AICatalog {
     !("selectedId" in parsed)
   )
     throw new Error("AI 服务配置读取失败，已有配置未覆盖。");
+  if ("webSearchMigrated" in parsed && parsed.webSearchMigrated !== true)
+    throw new Error("联网搜索迁移记录无效，已有配置未覆盖。");
   const services = parsed.services.map((value: unknown): AIService => {
     if (
       !value ||
@@ -150,5 +167,10 @@ export function parseAICatalog(raw: string): AICatalog {
     throw new Error("当前 AI 服务引用无效，已有配置未覆盖。");
   if (new Set(services.map((item) => item.id)).size !== services.length)
     throw new Error("AI 服务标识重复，已有配置未覆盖。");
-  return { version: 2, selectedId, services };
+  return {
+    version: 2,
+    selectedId,
+    services,
+    ...("webSearchMigrated" in parsed ? { webSearchMigrated: true } : {}),
+  };
 }

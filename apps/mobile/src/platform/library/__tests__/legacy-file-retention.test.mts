@@ -30,7 +30,7 @@ vi.mock('expo-file-system', () => {
 });
 vi.mock('../../ai/bookIndex', () => ({ cancelBookIndexing: async () => {}, readBookContent: async () => ({}), startBookPreparation: () => {}, resumeAvailableBookIndexes: async () => {} }));
 vi.mock('../bookCovers', () => ({ loadBookCover: async () => undefined, saveBookCover: async () => undefined }));
-vi.mock('../conversations', () => ({ loadConversationSummaries: async () => [], markConversationsDeleted: () => () => {}, cancelConversationRun: () => {} }));
+vi.mock('../conversations', () => ({ listConversationIdsForBook: async () => [], markConversationsDeleted: () => () => {}, cancelConversationRun: () => {} }));
 import { migrateLegacyLibraryIfNeeded } from '../legacyMigration';
 import { deleteShelfBook } from '../import';
 import { loadReaderPreferences } from '../readerPreferences';

@@ -39,11 +39,6 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function expect(condition: boolean, detail: string): Promise<string> {
-  if (!condition) throw new Error(detail);
-  return detail;
-}
-
 export async function runDataLayerDevCheck(
   layer: ShudengDataLayer,
   engine: string,

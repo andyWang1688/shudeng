@@ -9,9 +9,3 @@ export interface DatabaseInitResult {
   /** 本次迁移实际应用的迁移 id（幂等重跑为空）。 */
   readonly appliedMigrations?: readonly string[];
 }
-
-export interface DatabaseDevCheckResult {
-  readonly init: DatabaseInitResult;
-  /** Web stub 或初始化失败时为 null。 */
-  readonly report: import('./devCheck').DevCheckReport | null;
-}

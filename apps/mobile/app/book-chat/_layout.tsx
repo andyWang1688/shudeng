@@ -14,6 +14,8 @@ export default function BookChatLayout() {
         animation: "slide_from_right",
         contentStyle: { backgroundColor: palette.paper },
       }}
-    />
+    >
+      <Stack.Screen name="index" options={{ contentStyle: { backgroundColor: "transparent" } }} />
+    </Stack>
   );
 }

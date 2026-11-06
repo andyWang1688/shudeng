@@ -30,6 +30,7 @@ test("profile and book-chat push details inside their own stack and back returns
     if (id === "./AISettingsScreen") return { AISettingsScreen: "AISettingsScreen" };
     if (id === "./MCPSettingsScreen") return { MCPSettingsScreen: "MCPSettingsScreen" };
     if (id === "./AISendingDetailsScreen") return { AISendingDetailsScreen: "AISendingDetailsScreen" };
+    if (id === "./AssistantSettingsScreen") return { AssistantSettingsScreen: "AssistantSettingsScreen" };
     throw new Error(id);
   };
   compiled._compile(code, routeFile);

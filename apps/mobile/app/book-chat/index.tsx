@@ -1,15 +1,13 @@
-import { useEffect, useSyncExternalStore } from "react";
-import { View } from "react-native";
+import { useEffect, type ReactNode } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { ScopedTheme } from "uniwind";
 import { useAppearance } from "../../src/ui/appearance";
 import {
-  ChatComposer,
-  ChatList,
-  ChatLoadingState,
   ChatSheet,
   useBookChat,
 } from "../../src/ui/chat";
+import { ReaderAssistantThread } from "../../src/ui/chat/ReaderAssistantThread";
 import { darkColors, lightColors, type Palette } from "../../src/ui/theme";
 import { useOpenQuestionCitation, useQuestionPresentation } from "../../src/ui/reader-question/ReaderQuestionProvider";
 import { questionAppearanceFromParams, resolveQuestionAppearance } from "../../src/ui/reader-question/session";
@@ -56,7 +54,6 @@ export default function BookChatRoute() {
     origin: originLocator(paramValue(params.locator)), theme: resolveQuestionAppearance(appearance, resolvedMode), appearance,
   });
   const palette: Palette = resolveQuestionAppearance(presentation.appearance, resolvedMode) === 'dark' ? darkColors : lightColors;
-  const view = useSyncExternalStore(presentation.subscribe, presentation.getSnapshot, presentation.getSnapshot);
   const openCitation = useOpenQuestionCitation(presentation);
   useEffect(() => {
     if (paramValue(params.questionPresentationId) !== presentation.id) router.setParams({ questionPresentationId: presentation.id });
@@ -71,56 +68,24 @@ export default function BookChatRoute() {
     presentation,
   });
 
-  return (
+  const renderSheet = ({ content, composer }: { content: ReactNode; composer?: ReactNode }) => (
     <ChatSheet
       palette={palette}
+      topInset={insets.top}
       bottomInset={insets.bottom}
+      initialDetent={presentation.getSnapshot().sheetDetent}
+      onDetentChange={index => presentation.update({ sheetDetent: index }, false)}
       onClose={() => router.back()}
+      footer={composer}
     >
-      {chat.loading ? (
-        <ChatLoadingState palette={palette} />
-      ) : (
-        <View style={{ flex: 1 }}>
-          <ChatList
-            turns={chat.turns}
-            bookId={bookId}
-            bookTitle={chat.title}
-            format={chat.format}
-            sourceAvailable={Boolean(
-              chat.availability?.book &&
-                chat.availability.book.removedAt === null,
-            )}
-            indexMissing={chat.indexMissing}
-            loadError={chat.loadError}
-            indexDetail={chat.indexDetail}
-            onRetry={chat.retry}
-            palette={palette}
-            presentation={presentation}
-            onOpenCitation={openCitation}
-          />
-          <ChatComposer
-            question={chat.question}
-            onChangeQuestion={chat.setQuestion}
-            selection={view.selection}
-            onSelectionChange={selection => presentation.update({ selection })}
-            placeholder={chat.placeholder}
-            running={chat.running}
-            canSend={chat.canSend}
-            inputEnabled={Boolean(chat.availability?.book)}
-            configMissing={chat.configMissing}
-            selectionPending={chat.selectionPending}
-            service={chat.service}
-            turnsCount={chat.turns.length}
-            contextUsage={chat.contextUsage}
-            contextEstimate={chat.contextEstimate}
-            hasExternalMaterials={chat.hasExternalMaterials}
-            onSend={() => void chat.send()}
-            onCancel={chat.cancel}
-            onOpenSettings={() => router.push("/book-chat/ai-settings")}
-            palette={palette}
-          />
-        </View>
-      )}
+      {content}
     </ChatSheet>
+  );
+  return (
+    <ScopedTheme theme={resolveQuestionAppearance(presentation.appearance, resolvedMode)}>
+      <ReaderAssistantThread chat={chat} palette={palette} presentation={presentation}
+          renderContainer={renderSheet}
+          onOpenCitation={openCitation} onOpenSettings={() => router.push("/book-chat/ai-settings")} />
+    </ScopedTheme>
   );
 }

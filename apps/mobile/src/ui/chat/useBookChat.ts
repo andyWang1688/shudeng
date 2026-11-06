@@ -48,6 +48,7 @@ export function useBookChat(options: UseBookChatOptions) {
   const [conversationId] = useState(() => options.conversationId ?? createBookConversationId());
   const [availability, setAvailability] = useState<BookChatAvailability | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [configurationNotice, setConfigurationNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [question, setLocalQuestion] = useState(options.presentation?.getSnapshot().draft ?? initialQuestion ?? '');
   const setQuestion = useCallback((value: string) => {
@@ -73,6 +74,10 @@ export function useBookChat(options: UseBookChatOptions) {
   const initialSent = useRef(options.presentation?.getSnapshot().initialQuestionConsumed ?? false);
   const mounted = useRef(true);
   const latestSnapshot = useRef<ConversationRunSnapshot | undefined>(undefined);
+  const dismissConfigurationNotice = useCallback(() => setConfigurationNotice(null), []);
+  useEffect(() => {
+    if (availability?.config) setConfigurationNotice(null);
+  }, [availability?.config]);
 
   useEffect(
     () =>
@@ -129,6 +134,8 @@ export function useBookChat(options: UseBookChatOptions) {
             tools: [...(message.details.tools ?? [])],
             ...(message.details.toolSummary !== undefined ? { toolSummary: message.details.toolSummary } : {}),
             citations: message.citations,
+            ...(message.details.webSources ? { webSources: message.details.webSources } : {}),
+            ...(message.details.webSearchStatus ? { webSearchStatus: message.details.webSearchStatus } : {}),
             warnings: [...(message.details.warnings ?? [])],
             status: message.role === 'user' ? 'done' : message.details.status,
             ...(message.details.error ? { error: message.details.error } : {}),
@@ -227,6 +234,8 @@ export function useBookChat(options: UseBookChatOptions) {
           tools: turn.tools,
           ...(turn.toolSummary !== undefined ? { toolSummary: turn.toolSummary } : {}),
           warnings: turn.warnings,
+          ...(turn.webSources ? { webSources: turn.webSources } : {}),
+          ...(turn.webSearchStatus ? { webSearchStatus: turn.webSearchStatus } : {}),
           ...(turn.agentQuestion ? { agentQuestion: turn.agentQuestion } : {}),
           ...(turn.selectionQuote !== undefined ? { selectionQuote: turn.selectionQuote } : {}),
           ...(turn.selectionContextQuote !== undefined ? { selectionContextQuote: turn.selectionContextQuote } : {}),
@@ -396,6 +405,15 @@ export function useBookChat(options: UseBookChatOptions) {
               current = { ...current, contextUsage: event.usage };
               if (mounted.current) setContextUsage(event.usage);
               break;
+            case 'webSource':
+              current = { ...current, webSources: [
+                ...(current.webSources ?? []).filter(source => source.id !== event.source.id), event.source,
+              ] };
+              break;
+            case 'webSearchStatus':
+              current = { ...current, webSearchStatus: { status: event.status,
+                ...(event.message ? { message: event.message } : {}) } };
+              break;
             case 'requestContext':
               current = { ...current, contextEstimate: event.estimate, sentMaterials: event.materials };
               if (mounted.current) setContextEstimate(event.estimate);
@@ -410,6 +428,7 @@ export function useBookChat(options: UseBookChatOptions) {
                 ...current,
                 text: event.result.answer,
                 citations: event.result.citations,
+                ...(event.result.webSources ? { webSources: event.result.webSources } : {}),
                 warnings: event.result.warnings,
                 status: 'done',
                 ...(Number.isSafeInteger(event.result.steps) && event.result.steps >= 0 ? { modelSteps: event.result.steps } : {}),
@@ -451,6 +470,11 @@ export function useBookChat(options: UseBookChatOptions) {
       } finally {
         appState.remove();
         if (frame !== null) cancelAnimationFrame(frame);
+        if (current.webSearchStatus?.status === 'searching') {
+          current = { ...current, webSearchStatus: current.status === 'done' && current.webSources?.length
+            ? { status: 'complete' }
+            : { status: 'failed', message: current.status === 'cancelled' ? '联网搜索已停止。' : '联网搜索未完成，可重试。' } };
+        }
         try {
           await writer.flush(current);
           const { saveError: _, ...saved } = current;
@@ -476,7 +500,13 @@ export function useBookChat(options: UseBookChatOptions) {
     async (override?: string) => {
       const text = (override ?? question).trim();
       if (!text || runningRef.current || hasUnsavedConversationTurn(conversationId, turns) ||
-        !availability?.book || !availability.config || !availability.index.available) return;
+        !availability?.book) return false;
+      if (!availability.config) {
+        setConfigurationNotice('还没有配置 AI 模型，设置后即可发送。');
+        return false;
+      }
+      if (!availability.index.available) return false;
+      setConfigurationNotice(null);
       const selected = conversationSelection.current;
       const origin = options.readingPosition !== undefined
         ? captureQuestionOrigin({ bookId, format: availability.book.format, readingPosition: options.readingPosition }) ?? null
@@ -491,6 +521,7 @@ export function useBookChat(options: UseBookChatOptions) {
         ...(selected ? { selection: selected } : {}),
         ...(origin !== undefined ? { questionOrigin: origin } : {}),
       });
+      return true;
     },
     [availability, bookId, conversationId, options.presentation, options.readingPosition, question, run, setQuestion, turns],
   );
@@ -555,12 +586,13 @@ export function useBookChat(options: UseBookChatOptions) {
     title: availability?.book?.title ?? bookTitleParam ?? '书内问答',
     format: availability?.book?.format ?? 'epub',
     configMissing: availability !== null && availability.config === null,
+    configurationNotice,
+    dismissConfigurationNotice,
     indexMissing: availability !== null && !availability.index.available,
     canSend: Boolean(
       !loading &&
         availability?.book &&
-        availability.config &&
-        availability.index.available &&
+        (!availability.config || availability.index.available) &&
         !hasUnsavedConversationTurn(conversationId, turns) &&
         !running &&
         question.trim(),

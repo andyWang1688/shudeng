@@ -1,0 +1,96 @@
+{
+  "registry": "https://r.assistant-ui.com/native/",
+  "downloadedAt": "2026-11-05T08:41:43.911Z",
+  "files": [
+    {
+      "url": "https://r.assistant-ui.com/native/thread.json",
+      "path": "components/assistant-ui/elements/thread.aui.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/thread.aui.tsx",
+      "sha256": "a53e5ff36c0f457cd8d4d165b3ad57105302f8d1a99f100cc776e909880618f3"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/attachment.json",
+      "path": "components/assistant-ui/elements/attachment.aui.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/attachment.aui.tsx",
+      "sha256": "38cb8a12cec2810c3242ee594b24020e60081a0cd0923a9dad976935be1ef636"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/file.json",
+      "path": "components/assistant-ui/elements/file.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/file.tsx",
+      "sha256": "fa45a1f1d7f6b77bd0ae6ce4228b36aa951e3fea9bb4aa2ffa5683ef509cd8d6"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/image.json",
+      "path": "components/assistant-ui/elements/image.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/image.tsx",
+      "sha256": "6ae908740c29f19a243078ef1743f3f3b6e5ff781baa20fc9966de0221c12516"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/elements-typing-indicator.json",
+      "path": "components/assistant-ui/elements/typing-indicator.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/typing-indicator.tsx",
+      "sha256": "bb5e5adae8655d4c03023a094e00acc8486f9107b95a57e82dbede74e15910a9"
+    },
+    {
+      "url": "https://r.assistant-ui.com/utils.json",
+      "path": "lib/utils.ts",
+      "sourcePath": "packages/ui/src/lib/utils.ts",
+      "sha256": "55bbdc94cef3e0c8a8bba386e94f97228dd2c967fe61466fc565378890550c08"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/icon.json",
+      "path": "components/ui/icon.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/ui/icon.tsx",
+      "sha256": "9345c83ee2a952e6d273df8bc2812143ae8a723b64bcb913bd25ff11acb94fce"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/elements-surfaces.json",
+      "path": "components/assistant-ui/elements/surfaces.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/surfaces.tsx",
+      "sha256": "c754ed5b1124d0dce1c4296895ea79143b8c89238392ef5f30e15aed128aa9ba"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/reasoning.json",
+      "path": "components/assistant-ui/elements/reasoning.aui.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/reasoning.aui.tsx",
+      "sha256": "fed9ffef221465a2d36de898fab42b73a5642e0fceb7947e8332f9f0dc515c21"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/elements-icon-button.json",
+      "path": "components/assistant-ui/elements/icon-button.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/icon-button.tsx",
+      "sha256": "1ccb540572bbec94a440bb34d6e1c5df2f46a85d226a8a8a7f53e6e75f1875ad"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/markdown-text.json",
+      "path": "components/assistant-ui/elements/markdown-text.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/markdown-text.tsx",
+      "sha256": "8d716fffcdc3b3bfedfecf7eb483711b29f49a37ac5ac7443f4150ae682cf69d"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/elements-tool-fallback.json",
+      "path": "components/assistant-ui/elements/tool-fallback.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/tool-fallback.tsx",
+      "sha256": "ca5ed7256c64829a7fb1d05bf964ea5b362354abce6aef9241e3a0196476fbf8"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/elements-reasoning.json",
+      "path": "components/assistant-ui/elements/reasoning.tsx",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/elements/reasoning.tsx",
+      "sha256": "bc9bb6ba4bd9ced032753eb4b27709be63c7c468b27d3b68d37b142267d8eb73"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/elements-task.json",
+      "path": "components/assistant-ui/utils/task.ts",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/utils/task.ts",
+      "sha256": "9be52b498643beebfe852248773a372bb189056857308a1cb37c946c96c10c31"
+    },
+    {
+      "url": "https://r.assistant-ui.com/native/elements-task.json",
+      "path": "components/assistant-ui/utils/useIsomorphicLayoutEffect.ts",
+      "sourcePath": "packages/ui/src/components/react-native/assistant-ui/utils/useIsomorphicLayoutEffect.ts",
+      "sha256": "8db117d730e640655e5099e086af4e00d545c283839d9ef5885ca93419d51893"
+    }
+  ]
+}

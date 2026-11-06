@@ -12,7 +12,6 @@ export type ReaderChromeProps = {
   readonly progressText: string;
   readonly referenceMode?: boolean;
   readonly visible: boolean;
-  readonly annotationCount?: number;
   readonly onBack: () => void;
   readonly onAnnotations?: () => void;
   /** Swift 阅读器右上「更多」：书签等次要操作放入该菜单。 */
@@ -57,7 +56,6 @@ function ReaderChromeFallback({
   referenceMode = false,
   visible,
   controlsEnabled = true,
-  annotationCount = 0,
   onBack,
   onAnnotations,
   onMore,

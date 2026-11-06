@@ -14,10 +14,7 @@ import type { NewAnchorRow, NewAnnotationRow, NewBookRow, NewCitationRow, NewMes
 import { appleDateToUnixMs, convertLegacyLocator } from './legacy-locator.js';
 import { projectLegacyNativeTurn } from './legacy-native-agent.js';
 import type {
-  LegacyBookmark,
-  LegacyBook,
   LegacyBookNote,
-  LegacyQuestionEvidence,
   LegacyReadingQuestion,
   LegacyPdfNormRect,
   LegacyReadingSettings,
@@ -29,7 +26,6 @@ import type {
   MigrationResult,
   MigrationStats,
   MigrationTables,
-  MigrationUnmapped,
   MigrationWarning,
   MigrationWarningCode,
   PreservedBookSettings,
@@ -37,7 +33,6 @@ import type {
 
 const LEGACY_COLORS = new Set(['yellow', 'green', 'blue', 'rose']);
 const REMOVAL_VALUES = new Set(['removed', 'removing', 'deleting']);
-const APPLE_EPOCH_MAX_SECONDS = 4_102_444_800; // 2100-01-01，用于识别异常日期
 
 interface BookIndexEntry {
   readonly bookId: string;

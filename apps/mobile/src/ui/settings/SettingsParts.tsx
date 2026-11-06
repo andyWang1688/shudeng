@@ -177,6 +177,7 @@ export function SettingsRow({
   leading,
   compact = false,
   muted = false,
+  disabled = false,
 }: {
   readonly title: string;
   readonly detail?: string;
@@ -189,6 +190,7 @@ export function SettingsRow({
   readonly leading?: ReactNode;
   readonly compact?: boolean;
   readonly muted?: boolean;
+  readonly disabled?: boolean;
 }) {
   const p = usePalette();
   const content = (
@@ -231,12 +233,13 @@ export function SettingsRow({
       accessibilityRole="button"
       accessibilityLabel={title}
       {...(accessibilityValue !== undefined ? { accessibilityValue: { text: accessibilityValue } } : {})}
-      accessibilityState={{ selected }}
+      accessibilityState={{ selected, disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
         detail ? styles.subtitleRow : undefined,
-        { borderBottomColor: p.line, opacity: pressed ? 0.7 : 1 },
+        { borderBottomColor: p.line, opacity: disabled ? 0.45 : pressed ? 0.7 : 1 },
       ]}
     >
       {content}

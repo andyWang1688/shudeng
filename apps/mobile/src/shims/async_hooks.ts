@@ -1,5 +1,4 @@
-/** Hermes/RN 单线程 AsyncLocalStorage 近似实现（仅本 spike 打包/演示用）。 */
-type Store = unknown;
+/** Hermes/RN 的同步上下文兼容层；异步业务上下文由显式参数传递。 */
 
 export class AsyncLocalStorage<T = unknown> {
   private readonly values: T[] = [];

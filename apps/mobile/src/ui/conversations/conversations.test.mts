@@ -200,6 +200,7 @@ test('the real screen uses native stacked search, clears native text explicitly 
     '../chat/format': { SERIF_BOLD: 'serif' }, '../theme': { usePalette: () => palette },
     './ConversationRenamePrompt': { ConversationRenamePrompt: 'RenamePrompt' }, './model': model,
     './useConversationList': { useConversationList: () => state },
+    '../navigation/useNativeListSearch': load('../navigation/useNativeListSearch.ts', { react: react.api }),
   });
   const render = () => react.render(() => screen.default());
   let tree = render(); const search = find(tree, 'StackScreen').props.options.headerSearchBarOptions;

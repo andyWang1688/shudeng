@@ -32,8 +32,6 @@ type ReaderShellProps = {
 export function ReaderShell(props: ReaderShellProps) {
   const reader = useReaderState({
     bookId: props.bookId,
-    ...(props.title === undefined ? {} : { title: props.title }),
-    ...(props.initialLocation === undefined ? {} : { initialLocation: props.initialLocation }),
     ...(props.initialAnnotations === undefined ? {} : { initialAnnotations: props.initialAnnotations }),
     ...(props.onAnnotationsChanged === undefined ? {} : { onAnnotationsChanged: props.onAnnotationsChanged }),
   });

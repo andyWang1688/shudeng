@@ -47,14 +47,6 @@ export function nativeToolPreview(content: string): string {
   return previewPrefix(trimNativeWhitespace(content.replace(/\n/g, ' ').split(' ').filter(Boolean).join(' ')), 160);
 }
 
-/** QuestionController.readerStepPreview cleans the stored preview, then limits it to 80 Characters. */
-export function readerStepPreview(text: string): string {
-  const kept = text.split(/[\n\r\u000B\u000C\u0085\u2028\u2029]/u).map(trimNativeWhitespace).filter(line =>
-    line.length > 0 && !line.includes('引用时必须') && !line.includes('可以换关键词') &&
-    !/^\[E\p{Nd}+\]/u.test(line) && !/^(search_book|book_toc|read_page|read_chapter)/.test(line));
-  return previewPrefix(trimNativeWhitespace(kept.join(' · ').replace(/\[E\p{Nd}+\]/gu, '')), 80);
-}
-
 export function nativeToolSummary(steps: number, citations: number, warnings: readonly string[]): string {
   const base = `查书 ${Math.max(1, steps)} 步`;
   return citations > 0 ? `${base} · 参考 ${citations} 段原文` : warnings.length ? base + ' · 未找到可核查引用' : base;

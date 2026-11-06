@@ -29,7 +29,7 @@ vi.mock('expo-file-system', () => {
 vi.mock('../../embedding', () => ({ embeddingStatus: async () => ({ available: false, reason: '未安装' }) }));
 vi.mock('../../ai/bookIndex', () => ({ cancelBookIndexing: async () => {}, readBookContent: async () => ({}), startBookPreparation: () => {}, resumeAvailableBookIndexes: async () => {} }));
 vi.mock('../progress', () => ({ ensureProgressTable: async () => state.layer, loadAllBookProgress: async () => new Map() }));
-vi.mock('../conversations', () => ({ loadConversationSummaries: async () => [], markConversationsDeleted: () => () => {}, cancelConversationRun: () => {} }));
+vi.mock('../conversations', () => ({ listConversationIdsForBook: async () => [], markConversationsDeleted: () => () => {}, cancelConversationRun: () => {} }));
 vi.mock('../bookCovers', () => ({ loadBookCover: async () => undefined, saveBookCover: async () => undefined }));
 
 const tables = ['fragment_terms', 'embeddings', 'fragments', 'chapters', 'contents', 'preparations', 'embedding_progress'];

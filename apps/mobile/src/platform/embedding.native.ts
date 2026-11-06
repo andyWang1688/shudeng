@@ -44,6 +44,8 @@ type LoadedTokenizer = {
 };
 
 let tokenizerPromise: Promise<LoadedTokenizer> | null = null;
+let loadedTokenizer: Tokenizer | null = null;
+let runtimeFilesPrepared = false;
 type OrtModule = typeof import("onnxruntime-react-native");
 type LoadedSession = {
   readonly session: InferenceSession;
@@ -54,6 +56,12 @@ let sessionPromise: Promise<LoadedSession> | null = null;
 let lastEmbedMs: number | null = null;
 let lastTokenCount: number | null = null;
 let lastNorm: number | null = null;
+
+async function prepareRuntimeFiles(signal?: EmbeddingOptions['signal']): Promise<void> {
+  if (runtimeFilesPrepared) return;
+  await prepareNativeSemanticModel(modelDirectory(), signal);
+  runtimeFilesPrepared = true;
+}
 
 function modelDirectory(): Directory {
   const configured = process.env.EXPO_PUBLIC_SHUDENG_SEMANTIC_MODEL_DIR;
@@ -132,8 +140,9 @@ async function loadTokenizer(): Promise<LoadedTokenizer> {
     const tokenizerConfig = files.tokenizerConfig.exists
       ? (JSON.parse(await files.tokenizerConfig.text()) as object)
       : {};
+    loadedTokenizer = new Tokenizer(tokenizerJson, tokenizerConfig);
     return {
-      tokenizer: new Tokenizer(tokenizerJson, tokenizerConfig),
+      tokenizer: loadedTokenizer,
       loadMs: Date.now() - startedAt,
     };
   })();
@@ -178,18 +187,9 @@ function encode(
 ): { ids: number[]; tokenCount: number } {
   const encoding = tokenizer.encode(text, { add_special_tokens: true });
   if (encoding.ids.length > EMBEDDING_MAX_TOKENS) {
-    // 防 tokenizer 行为变化时静默把内容 token 当 eos：截断前最后一位必须是 </s>。
-    const eosId = tokenizer.token_to_id("</s>");
-    if (
-      eosId === undefined ||
-      encoding.ids[encoding.ids.length - 1] !== eosId
-    ) {
-      throw new Error(
-        `截断前文本未以 eos 结尾（tokenizer 行为变化？最后 id=${String(encoding.ids[encoding.ids.length - 1])}）`,
-      );
-    }
+    throw new Error(`文本为 ${encoding.ids.length} tokens，超过语义模型 ${EMBEDDING_MAX_TOKENS} tokens 上限；请先按实际 tokenizer 切块`);
   }
-  const ids = truncateTokenIds(encoding.ids);
+  const ids = [...encoding.ids];
   lastTokenCount = ids.length;
   return { ids, tokenCount: ids.length };
 }
@@ -207,6 +207,17 @@ export function createExpoEmbeddingProvider(): ExpoEmbeddingProvider {
     runtime: "onnxruntime-react-native",
     modelId: EMBEDDING_MODEL_ID,
     dimension: EMBEDDING_DIMENSION,
+    maxInputTokens: EMBEDDING_MAX_TOKENS,
+    async prepare(): Promise<void> {
+      await withRuntime(async () => {
+        await prepareRuntimeFiles();
+        await loadTokenizer();
+      });
+    },
+    countTokens(text: string): number {
+      if (!loadedTokenizer) throw new Error('切块前必须先准备语义模型 tokenizer');
+      return loadedTokenizer.encode(text, { add_special_tokens: true }).ids.length;
+    },
     async embed(
       texts: ReadonlyArray<string>,
       options?: EmbeddingOptions,
@@ -218,7 +229,7 @@ export function createExpoEmbeddingProvider(): ExpoEmbeddingProvider {
             name: "AbortError",
           });
         if (sessionPromise === null || tokenizerPromise === null)
-          await prepareNativeSemanticModel(modelDirectory(), signal);
+          await prepareRuntimeFiles(signal);
         const [{ tokenizer }, { session, ort }] = await Promise.all([
           loadTokenizer(),
           loadSession(),
@@ -360,6 +371,8 @@ export async function resetEmbeddingRuntime(
     const pending = sessionPromise;
     sessionPromise = null;
     tokenizerPromise = null;
+    loadedTokenizer = null;
+    runtimeFilesPrepared = false;
     provider = null;
     if (pending) {
       const loaded = await pending.catch(() => null);

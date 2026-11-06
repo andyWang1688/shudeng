@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SymbolView } from "expo-symbols";
-import { spacing, type as typeScale, usePalette, type Palette } from "./theme";
+import { type as typeScale, usePalette, type Palette } from "./theme";
 import { useHaptics } from "./components/useHaptics";
 import { useTabInteractionLocked } from "./tabInteraction";
 
@@ -19,7 +19,7 @@ const TAB_META: Record<
   string,
   { label: string; symbol: string; selectedSymbol: string }
 > = {
-  index: {
+  "(shelf)": {
     label: "书架",
     symbol: "books.vertical",
     selectedSymbol: "books.vertical.fill",

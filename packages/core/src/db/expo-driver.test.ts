@@ -4,7 +4,7 @@ import { createDatabase } from './drizzle.js';
 import { createExpoSQLiteDriver, type ExpoSQLiteDatabaseLike } from './drivers/expo.js';
 import { MIGRATIONS, migrate } from './migrations.js';
 import { ShudengStore } from './store.js';
-import type { SQLiteValue } from './driver.js';
+import type { SQLiteDriver, SQLiteValue } from './driver.js';
 import { ChapterIndexBuild } from '../rag/checkpoint-index.js';
 import { ParagraphTextChunker } from '../rag/chunker.js';
 import { SqliteSearchIndex } from '../rag/search-index.js';
@@ -12,8 +12,13 @@ import { SqliteSearchIndex } from '../rag/search-index.js';
 /** 用 node:sqlite 模拟 expo-sqlite 的异步 Database 形状（不 import expo）。 */
 class FakeExpoDatabase implements ExpoSQLiteDatabaseLike {
   private readonly db = new DatabaseSync(':memory:');
+  failCommit = false;
 
   async execAsync(source: string): Promise<void> {
+    if (source === 'COMMIT' && this.failCommit) {
+      this.failCommit = false;
+      throw new Error('native commit rejected');
+    }
     this.db.exec(source);
   }
 
@@ -52,6 +57,20 @@ class FakeExclusiveExpoDatabase extends FakeExpoDatabase implements ExpoSQLiteDa
       throw error;
     }
   }
+}
+
+class FakeTransactionExpoDatabase extends FakeExpoDatabase {
+  async withTransactionAsync(task: () => Promise<void>): Promise<void> {
+    await this.execAsync('BEGIN IMMEDIATE');
+    try { await task(); await this.execAsync('COMMIT'); }
+    catch (error) { await this.execAsync('ROLLBACK'); throw error; }
+  }
+}
+
+function gate(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
 }
 
 const fakes: Array<{ close(): void }> = [];
@@ -96,39 +115,100 @@ describe('expo-sqlite 驱动注入适配（用鸭子类型替身验证，无 exp
     await exercise(new FakeExclusiveExpoDatabase());
   });
 
-  it('returns the callback value only after a void native transaction commits; failures roll back and release the queue', async () => {
-    const commitError = new Error('native commit rejected');
-    class CommitFailureDatabase extends FakeExclusiveExpoDatabase {
-      failCommit = false;
-      override async execAsync(source: string): Promise<void> {
-        if (source === 'COMMIT' && this.failCommit) { this.failCommit = false; throw commitError; }
-        return super.execAsync(source);
-      }
-    }
-    const fake = new CommitFailureDatabase(); fakes.push(fake);
-    const driver = createExpoSQLiteDriver(fake);
-    await driver.exec('CREATE TABLE fixture (value TEXT NOT NULL)');
-    const result = { nextChapter: 3, nextChunk: 16 };
-    expect(await driver.transaction(async tx => {
-      await tx.run('INSERT INTO fixture (value) VALUES (?)', ['committed']);
-      return result;
-    })).toBe(result);
-    const callbackError = new Error('callback rejected');
-    await expect(driver.transaction(async tx => {
-      await tx.run('INSERT INTO fixture (value) VALUES (?)', ['rolled-back-callback']);
-      throw callbackError;
-    })).rejects.toBe(callbackError);
-    fake.failCommit = true;
-    await expect(driver.transaction(async tx => {
-      await tx.run('INSERT INTO fixture (value) VALUES (?)', ['rolled-back-commit']);
-      return result;
-    })).rejects.toBe(commitError);
-    expect(await driver.transaction(async tx => {
-      await tx.run('INSERT INTO fixture (value) VALUES (?)', ['after-rejection']);
-      return null;
-    })).toBeNull();
-    expect(await driver.all('SELECT value FROM fixture ORDER BY rowid')).toEqual([{ value: 'committed' }, { value: 'after-rejection' }]);
-    expect(await driver.transaction(async () => undefined)).toBeUndefined();
+  it('withTransactionAsync 分支：建表/读写/回滚', async () => {
+    await exercise(new FakeTransactionExpoDatabase());
+  });
+
+  describe.each([
+    ['manual', () => new FakeExpoDatabase()],
+    ['exclusive native', () => new FakeExclusiveExpoDatabase()],
+    ['native', () => new FakeTransactionExpoDatabase()],
+  ] as const)('%s transaction', (_name, makeDatabase) => {
+    it('preserves callback values and nested transactions; failures release the queue', async () => {
+      const fake = makeDatabase(); fakes.push(fake);
+      const driver = createExpoSQLiteDriver(fake);
+      await driver.exec('CREATE TABLE fixture (value TEXT NOT NULL)');
+      const result = { nextChapter: 3, nextChunk: 16 };
+      expect(await driver.transaction(async tx => {
+        await tx.run('INSERT INTO fixture (value) VALUES (?)', ['committed']);
+        return tx.transaction(async nested => {
+          expect(nested).toBe(tx);
+          return result;
+        });
+      })).toBe(result);
+      const callbackError = new Error('callback rejected');
+      await expect(driver.transaction(async tx => {
+        await tx.run('INSERT INTO fixture (value) VALUES (?)', ['rolled-back-callback']);
+        throw callbackError;
+      })).rejects.toBe(callbackError);
+      fake.failCommit = true;
+      await expect(driver.transaction(async tx => {
+        await tx.run('INSERT INTO fixture (value) VALUES (?)', ['rolled-back-commit']);
+        return result;
+      })).rejects.toThrow('native commit rejected');
+      expect(await driver.transaction(async tx => {
+        await tx.run('INSERT INTO fixture (value) VALUES (?)', ['after-rejection']);
+        return null;
+      })).toBeNull();
+      expect(await driver.all('SELECT value FROM fixture ORDER BY rowid')).toEqual([{ value: 'committed' }, { value: 'after-rejection' }]);
+      expect(await driver.transaction(async () => undefined)).toBeUndefined();
+    });
+
+    it('keeps concurrent root operations outside the transaction and expires its callback adapter', async () => {
+      const fake = makeDatabase(); fakes.push(fake);
+      const driver = createExpoSQLiteDriver(fake);
+      await driver.exec('CREATE TABLE fixture (value TEXT NOT NULL)');
+      const entered = gate(), resume = gate();
+      let escaped!: SQLiteDriver;
+      const pending = driver.transaction(async tx => {
+        escaped = tx;
+        await tx.run('INSERT INTO fixture VALUES (?)', ['rolled-back']);
+        entered.resolve(); await resume.promise;
+        throw new Error('rollback gated transaction');
+      });
+      await entered.promise;
+      let outsideDone = false;
+      const outside = driver.run('INSERT INTO fixture VALUES (?)', ['outside']).then(() => { outsideDone = true; });
+      const read = driver.all('SELECT value FROM fixture ORDER BY rowid');
+      await Promise.resolve(); await Promise.resolve();
+      expect(outsideDone).toBe(false);
+      resume.resolve();
+      await expect(pending).rejects.toThrow('rollback gated transaction');
+      await outside;
+      expect(await read).toEqual([{ value: 'outside' }]);
+      await expect(escaped.run('INSERT INTO fixture VALUES (?)', ['escaped'])).rejects.toThrow('事务已结束');
+      await expect(escaped.transaction(async () => undefined)).rejects.toThrow('事务已结束');
+    });
+
+    it('keeps unrelated writes out of a failing production conversation deletion', async () => {
+      const fake = makeDatabase(); fakes.push(fake);
+      const driver = createExpoSQLiteDriver(fake); await migrate(driver);
+      const store = new ShudengStore(createDatabase(driver));
+      await driver.exec('CREATE TABLE outside_log (value TEXT NOT NULL)');
+      await store.appendMessage({ conversationId: 'conv-failure', role: 'user', content: '保留的问题' });
+      const entered = gate(), resume = gate();
+      const getAll = fake.getAllAsync.bind(fake), run = fake.runAsync.bind(fake);
+      fake.getAllAsync = async <T>(sql: string, ...params: SQLiteValue[]): Promise<T[]> => {
+        const rows = await getAll<T>(sql, ...params);
+        if (sql.startsWith('select "id" from "messages"')) { entered.resolve(); await resume.promise; }
+        return rows;
+      };
+      fake.runAsync = async (sql: string, ...params: SQLiteValue[]) => {
+        if (sql.startsWith('delete from "citations"')) throw new Error('forced delete failure');
+        return run(sql, ...params);
+      };
+      // Attach the rejection handler before resuming the failed transaction.
+      const deletion = expect(store.deleteConversation('conv-failure')).rejects.toThrow('Failed query');
+      await entered.promise;
+      let outsideDone = false;
+      const outside = driver.run('INSERT INTO outside_log VALUES (?)', ['survive']).then(() => { outsideDone = true; });
+      await Promise.resolve(); await Promise.resolve();
+      expect(outsideDone).toBe(false);
+      resume.resolve();
+      await deletion; await outside;
+      expect(await driver.all('SELECT value FROM outside_log')).toEqual([{ value: 'survive' }]);
+      expect((await store.listMessages('conv-failure')).map(message => message.content)).toEqual(['保留的问题']);
+    });
   });
 
   it('opens, checkpoints, resumes and promotes chapter indexes through the actual void Expo transaction contract', async () => {
