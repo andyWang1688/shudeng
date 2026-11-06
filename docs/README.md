@@ -1,79 +1,29 @@
-# 书灯文档
+# 开发文档导航
 
-书灯是一款以阅读为中心的个人阅读应用：读者遇到不懂的内容，可以直接提问、查看书内依据，并留下能继续讨论的问答记录。
+从本页选择本次任务的阅读路径。导航帮助找到依据，主题正文保留正确开发所需的背景、合同、异常与验证方法；根据任务继续展开，不要求每轮通读所有资料。
 
-**当前版本：v0.4.8。** 下载、安装、更新内容和验证边界见[新版说明](releases/v0.4.8.md)；[首版说明](releases/v0.1.0.md)保留历史证据。当前提供 Apple Silicon 的 iOS 模拟器包；真机已用个人 Apple ID 签名安装启动验证，商店分发尚未验证。
+## 当前范围与阅读路径
 
-## 从这里开始
+书灯处于 RN 重构后的视觉调整阶段：功能冻结，先以独立示例 Demo 确认设计，再接真实业务。产品范围获准、源码已经实现、验收通过和正式发布是不同状态。
 
-| 你想了解什么 | 阅读文档 |
+| 本次任务 | 主要正文 | 按需要继续读取 |
+| --- | --- | --- |
+| 理解或改变产品行为 | [产品范围与行为规范](product-scope.md) | [领域术语](../GLOSSARY.md)、[决策索引](adr/README.md)；有分歧先区分需求与实现现状。 |
+| 业务、数据、迁移或平台接线 | [架构与模块边界](architecture.md) → [开发与验证](agents/development.md) | 所涉模块 README；EPUB 文件通道读[资源合同](architecture/epub-resources.md)。 |
+| 阅读 Agent、RAG、上下文或 AI 配置 | [Agent 开发契约](architecture/reading-agent.md) | 按契约加载项目 LangChain 技能，核对对应的[验收记录](validation/README.md)。 |
+| 页面、组件、交互或视觉 Demo | [跨端界面设计规范](design/ui-development-standard.md) | [Demo 运行与边界](../apps/mobile/src/ui/visual-demo/README.md)，平台官方规则按当前主题查询。 |
+| 构建、清理或发布 | [资源规则](agents/resources.md)，发布再读[发布流程](agents/release.md) | [版本记录](releases/)与 delivery 中对应交付材料。 |
+
+根 [AGENTS.md](../AGENTS.md)是协作入口。[文档维护规范](agents/documentation.md)说明术语、规格、ADR 与历史资料的分工；操作 GitHub 任务读 [Issue 约定](agents/issue-tracker.md)，分诊再读[标签](agents/triage-labels.md)。
+
+## 这些资料分别证明什么
+
+| 资料 | 用途与边界 |
 | --- | --- |
-| 当前已经确定了什么 | [首发已确认决策](first-release-decisions.md) |
-| 书灯是什么，适合谁 | [认识书灯](introduction.md) |
-| AI 怎样结合整本书回答，RAG 和提示词是什么关系 | [阅读问答如何工作](how-reading-ai-works.md) |
-| 首发做什么、不做什么 | [产品范围](product-scope.md) |
-| 界面保留什么、优化什么 | [界面设计方向](interface-review.md) |
-| 下一版界面按什么原则调整 | [阅读优先与渐进披露](adr/0010-reading-first-progressive-disclosure.md) · [#34 设计施工范围](https://github.com/andyWang1688/shudeng/issues/34) · [UIKit 开发规范](design/ui-development-standard.md) |
-| 选文、对话、问答记录分别指什么 | [领域用语](../GLOSSARY.md) |
+| 当前产品、架构、设计和工程规范 | 应当实现的行为、模块合同与执行约束；已确认例外必须完整保留。 |
+| [GLOSSARY](../GLOSSARY.md)与 [ADR](adr/README.md) | 术语定义，以及重要选择的背景、理由与取代关系；不是操作流程全集。 |
+| [validation/](validation/README.md) | 指定版本、平台和环境下的实际结果、失败与未验证项。 |
+| [archive/](archive/README.md) | 旧方案、研究来源、原型与已完成过程。仍有效的约束应在当前正文可找到，历史内容按需追溯。 |
+| [website/doc/](../website/doc/index.md)与 [releases/](releases/) | 已发布版本的用户行为与交付记录，不自动描述开发分支能力。 |
 
-推荐先读“认识书灯”，再读“阅读问答如何工作”；理解产品不需要先理解向量数据库。
-
-## 文档分工
-
-- **用户文档**：`website/doc/`，构建为[文档站](https://andywang1688.github.io/shudeng/)，面向读者，只写已发布行为。
-- **开发文档**：本目录及其子目录，面向维护者，记录设计与原因，不对外发布。
-- 约定见[文档规则](agents/documentation.md)。
-
-
-## 设计与技术
-
-| 文档 | 内容与状态 |
-| --- | --- |
-| [阅读问答设计](reading-ai-design.md) | 当前有效：本地 multilingual MiniLM、本地向量与关键词候选合并、一次最终生成；模型作为离线语义资料按需下载，见 [ADR-0018](adr/0018-lightweight-model-and-large-pdf.md)；[实施与验收 #21](https://github.com/andyWang1688/shudeng/issues/21) |
-| [问答架构与开源项目对照](reading-ai-comparison.md) | 历史研究：当前只借鉴本地混合思路；旧补查等建议不属于首发要求 |
-| [iPhone 本地检索候选](ios-rag-options.md) | 历史研究：模型、存储和中文检索的资料核验，不代表当前选型或验收结果 |
-
-## 调研依据
-
-以下报告基于固定源码快照，不等于运行验证，也不代表对应产品商店版本的能力。调研用于理解设计，没有将旧项目代码、提示词或资源导入书灯。
-
-- [Anx Reader](research-anx-ai.md)：模型按需查目录、读章节和搜索原文。
-- [Readest](research-readest-ai.md)：选文释义与整书聊天的区别，混合检索与可选工具路径。
-- [Librum](research-other-reader-ai.md)：直接解释选文的实现及局限。
-
-## 重要决策
-
-决策记录保留“为什么这样选”，不替代当前产品范围。
-
-| 决策 | 状态 |
-| --- | --- |
-| [独立实现](adr/0001-independent-implementation.md) | 当前有效：不复制旧项目实现，第三方组件分别审核 |
-| [本机保存与完整备份](adr/0002-local-data-and-backup.md) | 已被下一条替代，不再作为首发要求 |
-| [完整备份移后](adr/0003-defer-full-backup.md) | 当前有效：首发保留本机可靠保存，完整备份与云同步移后 |
-| [Readium 与卷页适配](adr/0004-readium-reader.md) | 当前有效：成熟内核加独立适配，接受补丁维护成本 |
-| [整书问答](adr/0005-book-question-answering.md) | 已被 ADR0007 取代，保留历史正文 |
-| [收窄首发后台范围](adr/0006-bounded-background-generation.md) | 当前有效：支持几十秒目标，完整后台路线移后 |
-| [简单本地 RAG](adr/0007-simple-local-rag.md) | 已被 ADR0008 取代，保留纯向量历史正文 |
-| [本地混合检索](adr/0008-local-hybrid-retrieval.md) | 当前有效：本地向量与关键词合并，保持单次生成，不承诺完整概括全书；#21 技术验收通过 |
-| [原生界面设计基准](adr/0009-native-ui-design-baseline.md) | 已被 ADR-0010 取代，保留历史正文和验收记录 |
-| [阅读优先与渐进披露](adr/0010-reading-first-progressive-disclosure.md) | 当前有效：一页一件事、内容优先、长说明渐进披露；阅读控件收起时全屏 |
-| [移除“仅已读”](adr/0011-remove-only-read-scope.md) | 当前有效：所有问答参考当前整本书，不再保存阅读范围元数据 |
-| [AI 发送说明在配置时确认](adr/0012-confirm-ai-send-scope-on-setup.md) | 当前有效：保存或更换服务时提示，普通问答不逐次弹窗 |
-| [固定正文与覆盖式阅读控件](adr/0013-fixed-reading-viewport-overlay-controls.md) | 当前有效：正文始终满屏，控件淡入淡出，点击不重新分页；取代 ADR-0010 的阅读控件显隐方式 |
-| [系统列表组件](adr/0014-system-list-components.md) | 当前有效：笔记、对话历史、设置等使用系统列表与 diffable snapshots；见 v0.3.0 |
-| [iOS 26 导航栏外观](adr/0015-ios26-navigation-bar-appearance.md) | 当前有效：透明 scroll-edge + 延迟滚动修正，修复搜索取消后大标题消失 |
-| [标注信息架构](adr/0016-annotations-information-architecture.md) | 当前有效：高亮与笔记合并为笔记列表；书签留在阅读器 |
-| [PDF 支持](adr/0017-pdf-support.md) | 当前有效：PDF 阅读、页级书签/搜索/标注与页级 AI 引用；扫描版只读 |
-| [轻量化与离线语义资料](adr/0018-lightweight-model-and-large-pdf.md) | 当前有效：Release 不内置模型，改为按需下载；大 PDF 默认单页；Release strip |
-
-
-## 怎样阅读文档里的承诺
-
-- **已确认目标**：确定要解决的问题或首发范围，不表示功能已经完成。
-- **方案建议／待确认**：正在讨论的交互或实现，不表示已批准选型。
-- **源码事实**：在指定项目和提交中查到的行为，不表示运行效果已验证。
-- **待验证**：需要真实书籍、模型或手机测试；在取得证据前不写成“支持”或“通过”。
-
-当前决定汇总见[首发已确认决策](first-release-decisions.md)，功能范围见[产品范围](product-scope.md)；效果以实际验证记录为准。入门文档用于解释，不另行扩大承诺。
-
-历史文档中的 `.scratch/` 路径指本地原始验收证据，不随公开源码或应用包上传；公开结论以关联的 GitHub Issue 及版本说明为准。
+规范与源码冲突时先查明原因，不能因为代码存在就把它视为获准行为；历史证据也不能自动证明新改动。发现正文仍缺少必要合同，先补齐该主题，不以缩短入口替代完整规范。

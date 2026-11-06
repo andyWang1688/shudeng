@@ -9,4 +9,4 @@ date: 2026-10-25
 
 此后所有阅读问答都允许参考当前整本书的相关原文；不再显示“整书／仅已读”选择、已读范围管理或范围说明，不再保存 `onlyRead` 或已读范围元数据，也不再为两种范围维护扫描、校验和回归分支。已有问答正文、引用和原文定位保留并按普通记录继续使用，不因删除范围字段而丢失。
 
-本决策取代 [ADR-0007](0007-simple-local-rag.md)和 [ADR-0008](0008-local-hybrid-retrieval.md)中关于“仅已读”的限制，不改动其余检索、引用、预算、可靠保存和单次生成边界。删减实施见 [#41](https://github.com/andyWang1688/shudeng/issues/41)。
+本决策取代 [ADR-0007](0007-simple-local-rag.md)和 [ADR-0008](0008-local-hybrid-retrieval.md)中关于“仅已读”的限制；后续 Agent 编排由 [ADR-0019](0019-react-native-langchain-architecture.md)管理，不沿用早期单次生成限制。删减实施见 [#41](https://github.com/andyWang1688/shudeng/issues/41)。

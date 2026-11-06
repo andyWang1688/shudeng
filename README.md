@@ -30,10 +30,12 @@
 
 ## 开发
 
-用 Xcode 打开 `ios/Shudeng.xcodeproj` 运行。测试与打包脚本在 `scripts/`，每个版本的说明在 `docs/releases/`。
+当前开发为 RN/Expo + TypeScript 重构，先读[开发导航](docs/README.md)，按任务选择规范与验证入口。功能冻结期间，视觉迭代使用[独立 Demo](apps/mobile/src/ui/visual-demo/README.md)。
+
+`ios/Shudeng.xcodeproj` 是已发布 Swift 版的行为基线与迁移参照；上面的下载说明仍对应 v0.4.8，不代表 RN 分支已发布。构建、清理和发布分别按开发导航中的对应流程执行。
 
 ## 其他
 
 - 下载包目前只面向模拟器；装到 iPhone 需要用自己的 Apple ID 签名（免费账号通常 7 天有效），商店分发尚未验证。
-- 独立实现。产品交互参考过 ReadAny 中的书灯应用，没有使用其代码、提示词或资源。
+- 独立实现。产品交互参考过 ReadAny 中的书灯应用；材料边界与已确认的品牌图标、文案例外见[独立实现决定](docs/adr/0001-independent-implementation.md)。
 - 许可证尚未选定。公开仓库不等于授权使用；第三方组件按各自许可证处理。

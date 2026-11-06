@@ -6,6 +6,8 @@ related: ADR-0014
 
 # iOS 26 导航栏外观与大标题恢复
 
+> 适用范围：Swift/UIKit 特定版本修复，不要求 RN 或其他平台复制 nudge 与导航外观 workaround；对应端按当前源码、系统版本与[跨端规范](../design/ui-development-standard.md)验证。
+
 ## 背景
 
 iOS 26 上出现两个与系统大标题 / 自定义导航栏外观相关的回归：

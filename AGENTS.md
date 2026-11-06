@@ -1,35 +1,46 @@
-## Agent skills
+# 书灯项目协作规范
 
-### Issue tracker
+本文件指导开发 Agent 在书灯仓库中工作。产品阅读助手的人设与 Skills 属于运行时配置，二者分开维护。
 
-任务与规格使用 GitHub Issues：andyWang1688/shudeng。执行相关技能前读取 `docs/agents/issue-tracker.md`。
+## 开始任务
 
-### Triage labels
+1. 从[开发导航](docs/README.md)定位本次任务，确认[产品范围](docs/product-scope.md)及当前阶段；只加载相关主题，复杂任务按需要继续展开。
+2. 涉及产品概念或架构取舍时，阅读 [GLOSSARY](GLOSSARY.md) 与相关[决策记录](docs/adr/README.md)。术语有歧义先澄清；已确认的决定沿用，不重复询问。
+3. 环境、代码与历史行为由 Agent 查证；真正未定的产品或架构选择与用户讨论。发现规范与代码不符时明确指出差异，区分缺陷、未实现与新需求。
+4. 按任务确定输入、操作、预期结果、失败边界与完成证据；执行步骤和检查入口见[开发与验证](docs/agents/development.md)。
 
-使用五个默认分诊标签。分诊前读取 `docs/agents/triage-labels.md`。
+## 当前工程边界
 
-### Domain docs
+- 共享应用层采用 React Native/Expo + TypeScript，阅读 Agent 采用设备内 LangChain/LangGraph；当前 iOS 优先，未来端保留平台适配边界。模块职责与依赖方向见[架构](docs/architecture.md)。
+- 旧 Swift App 是行为基线、回退与数据迁移参照。兼容代码仍有职责时保留；迁移不修改旧 App 原始数据，不把旧代码或原数据按垃圾清理。
+- 阅读、标注、对话与本机保存遵守既有业务合同。界面调整保持原文位置、保存语义与问答生命周期；笔记关闭丢弃未保存内容是明确例外，不能套用聊天草稿规则。
+- 常用交互与 Agent 基础设施优先复用成熟实现；业务特性留在书灯模块，平台差异通过适配层接入。具体边界以对应主题规范为准。
 
-使用单一领域布局：根目录 `GLOSSARY.md` 和 `docs/adr/`。探索或设计前读取 `docs/agents/domain.md`。
+## 设计、实现与验证
 
-### Documentation
+| 任务 | 先读 | 核心交付要求 |
+| --- | --- | --- |
+| 页面、组件、交互或视觉 Demo | [跨端设计规范](docs/design/ui-development-standard.md) | 当前功能冻结阶段用独立示例 Demo 确认视觉；各端遵循本地惯例，设计确认与业务接入分开。 |
+| 阅读 Agent、RAG 或 AI 配置 | [阅读 Agent 契约](docs/architecture/reading-agent.md) | 保留当前书范围、来源身份、上下文与执行预算；按契约加载相应框架技能。 |
+| 存储、迁移或平台接线 | [架构](docs/architecture.md)及所涉模块合同 | 明确数据所有权、失败恢复和兼容边界，检查受影响的消费者。 |
 
-用户文档在 `website/doc/`（发布到 GitHub Pages），开发文档在 `docs/`（不发布）。写或改文档前读取 `docs/agents/documentation.md`。
+验证覆盖本次改变的行为与相应失败路径，使用可核查的输入、操作和结果。类型检查、自动化协议、截图、设备操作、真实模型质量和正式发布分别记录；未执行的项目写“未验证”。结果进入[验收记录](docs/validation/README.md)，不把历史通过数字当当前通过。
 
-### 发布流程
+## 文档与决策
 
-1. 在本地 `main` 完成合并，确认工作区干净、`main` 与 `origin/main` 一致。
-2. 推送 `main`。文档站由 `.github/workflows/docs.yml` 自动构建并部署到 GitHub Pages；App 版本按 `delivery/` 的既有步骤构建安装包，并在 GitHub Releases 发布。
-3. 验证：文档站返回 200，发布页的版本、安装包与说明一致。
-4. 不要用 `git push <分支>:main` 绕过本地 `main`；先本地合并、再推送。
+- 术语表只定义书灯领域概念，行为、步骤与实现细节分别写入产品或工程规范。
+- 只有同时满足“改动成本显著、缺少背景会令人意外、存在真实取舍”的决定才写 ADR；其余规则维护在对应正文，不为每次改动新增 ADR。
+- 新决定写清理由及取代范围，及时更新受影响的当前规范与索引。旧材料仍有有效约束时先提取到当前正文，再归档过程与过时方案。
+- 写或移动文档、维护项目技能索引时遵守[文档维护规范](docs/agents/documentation.md)。当前规范应足以指导开发，不以篇幅短或文件少为目标。
 
+## 构建、数据与临时资源
 
-## 磁盘与临时资源管理
+- iOS 大型构建统一使用 scripts/build-ios-rn.sh [Debug|Release]，固定复用 .build/rn-ios/derived；可用空间不足 **30 GiB** 禁止新增大型构建。
+- 构建配额、失败清理与重复运行验收遵守[资源规则](docs/agents/resources.md)。清理保留书籍、数据库、密钥、恢复资料、未提交工作及其他会话资源。
+- 涉及 Python 时优先项目虚拟环境，其次用户级环境，最后才考虑系统环境。
 
-- **硬门槛：可用空间不足 30 GiB 时禁止新增大型构建**；构建前由 `scripts/build-ios-rn.sh` 检查并拒绝。
-- 构建统一走 `scripts/build-ios-rn.sh [Debug|Release]`：固定复用 `.build/rn-ios/derived`，不把构建产物散落到 `/tmp`。
-- 临时资源由脚本 `trap EXIT/INT/TERM` 回收；失败/中断删除本次临时目录，未完成 artifact 不得晋级。
-- `.build` 总量上限默认 20 GiB，持久 artifact 上限 3 GiB，每个配置只保留最新一份 app；超限自动调用 `scripts/prune-project-artifacts.sh --build-only`。
-- 历史清理统一用 `scripts/prune-project-artifacts.sh`：只删可再生产物与重复应用备份；保留唯一用户数据（书籍、阅读/问答/笔记数据库、密钥）和最新一份 `Shudeng.app` 备份；无法判断的跳过。
-- `/private/tmp` 中属于书灯的派生产物由清理脚本回收；持久依赖不得放在系统临时目录。
-- 涉及构建脚本的改动，验收必须覆盖连续两轮运行及失败清理，确认占用不会随运行次数增长。本次验收：`.build` 5.4→5.2 GiB，可用空间 68→68 GiB；失败模拟后无 `tmp-*` 残留。
+## 任务跟踪与交付
+
+GitHub 任务操作读[Issue 约定](docs/agents/issue-tracker.md)，分诊再读[标签约定](docs/agents/triage-labels.md)。合并与发布遵守[发布流程](docs/agents/release.md)，先本地 main 合并、再推送。
+
+结束任务时说明具体改动、现在能完成的操作、验证范围和剩余限制；清理本任务已无用途的临时资源，保留用户交付物与续作必需资料。

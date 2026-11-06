@@ -3,7 +3,7 @@ import PDFKit
 import ReadiumShared
 
 /// 纸与灯 / Paper & Lamp —— 2026-10-27 确认的视觉系统令牌。
-/// 规范：docs/design/2026-10-27/visual-system/visual-system.md
+/// Swift 历史视觉基准：docs/archive/design/2026-10-27/visual-system/visual-system.md
 enum BookDesign {
     // MARK: 颜色（浅 / 深）
 

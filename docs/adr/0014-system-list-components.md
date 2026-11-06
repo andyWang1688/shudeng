@@ -6,6 +6,8 @@ supersedes: docs/design/ui-development-standard.md 中与系统列表组件冲�
 
 # 列表类页面优先使用系统组件
 
+> 适用范围：以下 UIKit API、筛选与底栏描述是 Swift 阶段的实施记录。标注语义见 [ADR-0016](0016-annotations-information-architecture.md)；成熟组件优先的意图保留，RN 与跨端遵守 [ADR-0019](0019-react-native-langchain-architecture.md)和 [ADR-0020](0020-cross-platform-design-principles.md)。
+
 2026-10-27 用户反馈笔记与对话历史“交互还是不好看”，并明确要求“有现成组件就用，不要手搓”。决定：列表类页面改用 Apple 系统组件的组合，而不是继续维护自定义页头、筛选胶囊、分组头和表格行。
 
 ## 决定
