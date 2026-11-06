@@ -11,6 +11,7 @@
     "export:ios": "expo export --platform ios --output-dir dist-ios",
     "export:android": "expo export --platform android --output-dir dist-android",
     "agent-demo": "expo start",
+    "demo:ios": "bash ../../scripts/run-ui-demo.sh",
     "build:ios:release": "../../scripts/build-ios-rn.sh Release",
     "build:ios:debug": "../../scripts/build-ios-rn.sh Debug"
   },
