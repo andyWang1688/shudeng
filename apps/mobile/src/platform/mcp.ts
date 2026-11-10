@@ -174,7 +174,7 @@ class MCPConnection {
       {
         protocolVersion: this.protocolVersion,
         capabilities: {},
-        clientInfo: { name: "Shudeng", version: "0.4.8" },
+        clientInfo: { name: "Shudeng", version: "0.5.0" },
       },
       signal,
     );

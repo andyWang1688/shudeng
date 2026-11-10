@@ -92,6 +92,7 @@ describe('reading Agent official infrastructure', () => {
     const elsewhere = registry.register({ ...excerpt, locator: 'second', chunkId: 'b', readRef: 'r-b' });
     expect(first.id).toBe(duplicate.id);
     expect(elsewhere.id).not.toBe(first.id);
+    registry.recordTransmitted(elsewhere.id, elsewhere.quote);
     expect(verifyCitations({ answer: '答', citations: [{ id: elsewhere.id, quote: '相同文字' }] }, registry).citations[0]).toMatchObject({ locator: 'second', chunkId: 'b', readRef: 'r-b', sourceVersion: 'v1' });
   });
 

@@ -1,11 +1,6 @@
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import {
-  BookOpen,
-  Bookmark,
-  MessageCircle,
-  UserRound,
-} from "lucide-react-native";
+import { BookOpen, MessageCircle, UserRound } from "lucide-react-native";
 import {
   SafeAreaView,
   useSafeAreaInsets,
@@ -21,7 +16,8 @@ import {
 } from "./readerSamples";
 import { DemoAssistant } from "./DemoAssistant";
 import { DemoShelf } from "./DemoShelf";
-import { DemoNotes, DemoConversations } from "./DemoCollections";
+import { DemoNotes } from "./DemoCollections";
+import { DemoConversations } from "./DemoConversationList";
 import { DemoProfile } from "./DemoProfile";
 import { demoBooks, findDemoBook, type DemoBook } from "./demoBooks";
 import { demoNotes, type DemoNote } from "./collectionFixtures";
@@ -109,7 +105,10 @@ export function VisualDemo() {
             <DemoNotes onOpenBook={openBook} items={notes} />
           </View>
           <View style={[s.page, tab !== "chat" && s.hidden]}>
-            <DemoConversations onOpenChat={ask} />
+            <DemoConversations
+              onOpenChat={ask}
+              active={tab === "chat" && !book}
+            />
           </View>
           <View style={[s.page, tab !== "profile" && s.hidden]}>
             <DemoProfile />
@@ -152,7 +151,6 @@ function DemoTabs({
   const insets = useSafeAreaInsets();
   const tabs: { id: DemoTab; label: string; icon: typeof BookOpen }[] = [
     { id: "shelf", label: "书架", icon: BookOpen },
-    { id: "notes", label: "笔记", icon: Bookmark },
     { id: "chat", label: "对话", icon: MessageCircle },
     { id: "profile", label: "我的", icon: UserRound },
   ];

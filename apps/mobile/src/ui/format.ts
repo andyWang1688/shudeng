@@ -21,12 +21,3 @@ export function recordTime(timestamp: number): string {
   if (isSameDay(date, yesterday)) return `昨天 ${clockFormatter.format(date)}`;
   return padMonthDay(date);
 }
-
-export function conversationTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  const now = new Date();
-  if (isSameDay(date, now)) return `今天 ${clockFormatter.format(date)}`;
-  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  if (isSameDay(date, yesterday)) return `昨天 ${clockFormatter.format(date)}`;
-  return `${padMonthDay(date)} ${clockFormatter.format(date)}`;
-}

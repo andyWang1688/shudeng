@@ -112,6 +112,8 @@ export class ReaderQuestionRegistry {
   private readonly readers = new Map<string, ReaderRegistration>();
   private readonly presentations = new Map<string, QuestionPresentation>();
   private readonly referenceVisits = new Map<string, ReferenceVisit>();
+  private readonly drafts = new Map<string, Pick<QuestionViewState, 'draft' | 'selection'> & { ownerId: string }>();
+  private readonly draftSubscriptions = new Map<string, () => void>();
   constructor(readonly makeId: () => string, private readonly navigation: QuestionNavigation) {}
 
   register(owner: ReaderOwner, port: ReaderReferencePort): void {
@@ -140,6 +142,23 @@ export class ReaderQuestionRegistry {
       ? source.format === 'pdf' ? { kind: 'application' } : { kind: 'reader', theme: input.theme }
       : input.appearance;
     const presentation = new QuestionPresentation(this.makeId(), input.conversationId ?? this.makeId(), input.bookId, input.title ?? '书内问答', input.theme, input.selection?.locator ?? input.origin, source, input.selection?.quote ?? input.selectionQuote, input.initialQuestion, appearance);
+    const draftKey = JSON.stringify([presentation.bookId, presentation.conversationId]);
+    const remembered = this.drafts.get(draftKey);
+    if (!source && input.initialQuestion === undefined && remembered) {
+      presentation.update({ draft: remembered.draft, selection: remembered.selection }, false);
+    }
+    const { draft, selection } = presentation.getSnapshot();
+    this.drafts.set(draftKey, { ownerId: presentation.id, draft, selection });
+    // Observe while mounted too: native exit transitions may retain an old binding
+    // until after the same conversation has already reopened. The newest owner wins.
+    this.draftSubscriptions.set(presentation.id, presentation.subscribe(() => {
+      const current = this.drafts.get(draftKey);
+      if (current?.ownerId !== presentation.id) return;
+      const next = presentation.getSnapshot();
+      if (current.draft !== next.draft || current.selection !== next.selection) {
+        this.drafts.set(draftKey, { ownerId: presentation.id, draft: next.draft, selection: next.selection });
+      }
+    }));
     this.presentations.set(presentation.id, presentation);
     return presentation;
   }
@@ -183,7 +202,14 @@ export class ReaderQuestionRegistry {
   }
   private collect(presentation: QuestionPresentation): void {
     const owner = presentation.source && this.readers.get(presentation.source.id);
-    if (presentation.bindings === 0 && presentation.holds === 0 && presentation.routeKeys.size === 0 && owner?.activeQuestion !== presentation.id) this.presentations.delete(presentation.id);
+    if (presentation.bindings === 0 && presentation.holds === 0 && presentation.routeKeys.size === 0 && owner?.activeQuestion !== presentation.id) {
+      this.presentations.delete(presentation.id);
+      this.draftSubscriptions.get(presentation.id)?.();
+      this.draftSubscriptions.delete(presentation.id);
+      const key = JSON.stringify([presentation.bookId, presentation.conversationId]);
+      const saved = this.drafts.get(key);
+      if (saved?.ownerId === presentation.id && saved.draft.length === 0) this.drafts.delete(key);
+    }
   }
   prune(routeKeys: ReadonlySet<string>, questionRoutes?: ReadonlyMap<string, string>, referenceRoutes?: ReadonlyMap<string, ReferenceRoute>): void {
     // Root observes a push before the question's layout effect can bind. Once its
@@ -227,7 +253,12 @@ export class ReaderQuestionRegistry {
       this.collect(presentation);
     }
   }
-  dispose(): void { for (const id of this.readers.keys()) this.disposeReader(id); this.referenceVisits.clear(); this.presentations.clear(); }
+  dispose(): void {
+    for (const id of this.readers.keys()) this.disposeReader(id);
+    for (const unsubscribe of this.draftSubscriptions.values()) unsubscribe();
+    this.draftSubscriptions.clear(); this.drafts.clear();
+    this.referenceVisits.clear(); this.presentations.clear();
+  }
   private valid(reader: ReaderRegistration, epoch: number): boolean { return this.readers.get(reader.owner.id) === reader && reader.epoch === epoch; }
   private async navigate(reader: ReaderRegistration, command: ReferenceCommand, signal: AbortSignal): Promise<NavigationReceipt> {
     let abort!: () => void;

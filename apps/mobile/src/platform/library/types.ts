@@ -62,6 +62,8 @@ export type ShelfAnnotation = {
   readonly locator: StoredReaderLocator | null;
 };
 
+export type AnnotationUpdate = readonly ShelfAnnotation[] | ((current: readonly ShelfAnnotation[]) => readonly ShelfAnnotation[]);
+
 export type SaveReaderAnnotationInput = {
   readonly kind: ShelfAnnotationKind;
   readonly color?: string | null;

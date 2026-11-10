@@ -13,3 +13,6 @@ export type {
 } from './providers.js';
 export type { AgentWebSearchConfig } from './web-search.js';
 export { resolveWebSearchPolicy } from './web-search.js';
+export { inspectModelContext, resolveModelContextBudget } from './model-context.js';
+export type { ModelContextOptions, ModelContextInfo, ModelContextBudget } from './model-context.js';
+export { parseContextWindowTokens } from './context-window.js';

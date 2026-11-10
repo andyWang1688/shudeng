@@ -306,13 +306,26 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
   };
   const sentMaterials = new Map<string, AgentSentMaterial>();
   const summaryModel = (options.summaryModel ?? options.model).langChainModel as BaseChatModel;
-  const context = options.contextWindowTokens ? new NativeContextManager({
+  const context = options.contextWindowTokens !== undefined ? new NativeContextManager({
     window: options.contextWindowTokens,
     ...(options.outputReserveTokens !== undefined ? { outputReserve: options.outputReserveTokens } : {}),
     ...(options.historySummary ? { summary: options.historySummary } : {}),
   }, async oldMessages => {
     const transcript = summaryTranscript(oldMessages);
     if (!transcript) return '';
+    const summarySystem = new SystemMessage('你是简洁的对话摘要器。');
+    const summaryQuestion = new HumanMessage('把下面的对话历史压缩成不超过 2000 字的中文摘要，保留读者问题、已确认结论、未完成事项与工具调用线索；不要新增事实，不要编造原文，只输出摘要正文。\n\n' + transcript);
+    // Compression cannot send an oversized request before the main request's preflight.
+    // The summary is a one-shot call, so enforce the hard input + output window rather
+    // than the main conversation's earlier compression threshold. Failure is caught
+    // by NativeContextManager and falls back to retaining recent safe message groups.
+    const summaryEstimate = estimateRequestContext(summarySystem, [summaryQuestion], {
+      window: options.contextWindowTokens!,
+      threshold: options.contextWindowTokens! - (options.outputReserveTokens ?? 1400),
+      compacted: false, summarizedMessages: 0,
+    });
+    if (summaryEstimate.estimatedTokens > summaryEstimate.thresholdTokens!)
+      throw new ContextBudgetError(summaryEstimate);
     const summaryController = new AbortController();
     const abort = () => summaryController.abort();
     controller.signal.addEventListener('abort', abort, { once: true });
@@ -322,10 +335,8 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
     const stopActivity = (options.summaryModel ?? options.model).subscribeActivity?.(resetTimeout);
     resetTimeout();
     try {
-      const stream = await summaryModel.stream([
-        new SystemMessage('你是简洁的对话摘要器。'),
-        new HumanMessage('把下面的对话历史压缩成不超过 2000 字的中文摘要，保留读者问题、已确认结论、未完成事项与工具调用线索；不要新增事实，不要编造原文，只输出摘要正文。\n\n' + transcript),
-      ], { signal: summaryController.signal, tags: ['nostream'] });
+      const stream = await summaryModel.stream([summarySystem, summaryQuestion],
+        { signal: summaryController.signal, tags: ['nostream'] });
       let text = '';
       for await (const chunk of stream) { resetTimeout(); text += contentText(chunk.content); }
       return text;
@@ -360,6 +371,7 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
       }
       for (const material of requestMaterials(actualMessages, bookToolNames, options.selectionQuote,
         content => registry.renderedMaterials(content), request.systemMessage)) {
+        if (material.kind === 'book-tool') registry.recordTransmitted(material.id, material.content);
         const key = material.kind + ':' + material.id;
         const previous = sentMaterials.get(key);
         if (!previous || material.content.length > previous.content.length) sentMaterials.set(key, material);

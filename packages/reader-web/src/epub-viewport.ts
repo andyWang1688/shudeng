@@ -1,6 +1,3 @@
-/** Internal build switch for the real-product A/B; no saved preference or UI. */
-export const EPUB_BOUNDED_VIEWPORT_ENABLED = import.meta.env?.VITE_SHUDENG_EPUB_BOUNDED_VIEWPORT === '1'
-
 export interface EpubViewport { left: number; right: number; top: number; bottom: number }
 
 /** Range rects stay in iframe viewport coordinates, including its inner scroll. */
@@ -17,6 +14,24 @@ export function visibleDocumentViewport(doc: Document, host: HTMLElement): EpubV
 }
 
 type AnchorLike = Range | Element | number
+const terminalLayout = new WeakMap<Document, Map<HTMLElement, { previous: string; assigned: string }>>()
+
+function setTerminalHeight(element: HTMLElement, doc: Document, height: number): void {
+  let changes = terminalLayout.get(doc)
+  if (!changes) { changes = new Map(); terminalLayout.set(doc, changes) }
+  const assigned = `${Math.ceil(height)}px`
+  const change = changes.get(element)
+  const previous = change && element.style.minHeight === change.assigned ? change.previous : element.style.minHeight ?? ''
+  changes.set(element, { previous, assigned })
+  element.style.minHeight = assigned
+}
+
+export function restoreTerminalLayout(doc: Document): void {
+  for (const [element, change] of terminalLayout.get(doc) ?? []) {
+    if (element.style.minHeight === change.assigned) element.style.minHeight = change.previous
+  }
+  terminalLayout.delete(doc)
+}
 
 function anchorElement(anchor: Exclude<AnchorLike, number>): Element | null {
   const endpoint = 'endContainer' in anchor ? anchor.endContainer : anchor
@@ -52,7 +67,7 @@ export function stabilizeEmptyAnchorBox(anchor: AnchorLike, doc: Document, fallb
   if (!height || height <= 0) return false
   const styled = element as Element & { style?: CSSStyleDeclaration }
   if (!styled.style) return false
-  styled.style.minHeight = `${Math.ceil(height)}px`
+  setTerminalHeight(styled as HTMLElement, doc, height)
   return true
 }
 
@@ -66,7 +81,7 @@ export function stabilizeEmptyTerminalBlock(doc: Document, fallbackHeight = 0): 
   if (!height || height <= 0) return false
   const styled = element as Element & { style?: CSSStyleDeclaration }
   if (!styled.style) return false
-  styled.style.minHeight = `${Math.ceil(height)}px`
+  setTerminalHeight(styled as HTMLElement, doc, height)
   return true
 }
 

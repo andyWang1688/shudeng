@@ -34,6 +34,7 @@ export function MCPSettingsScreen({
   const mounted = useRef(true);
   const generation = useRef(0);
   const refresh = useCallback(async () => {
+    if (!mounted.current) return;
     const request = ++generation.current;
     setLoading(true);
     setError("");
@@ -101,7 +102,14 @@ export function MCPSettingsScreen({
         }
       />
       <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}
+        contentContainerStyle={{
+          paddingHorizontal: 24,
+          paddingBottom: 40,
+          width: "100%",
+          maxWidth: 760,
+          alignSelf: "center",
+        }}
+        showsVerticalScrollIndicator={false}
       >
         {loading ? (
           <ActivityIndicator color={p.lampInk} style={{ marginTop: 24 }} />

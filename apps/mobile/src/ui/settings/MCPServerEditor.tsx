@@ -46,7 +46,9 @@ export function MCPServerEditor({
   );
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
-  const [commitPhase, setCommitPhase] = useState<"connection" | "tools" | null>(null);
+  const [commitPhase, setCommitPhase] = useState<"connection" | "tools" | null>(
+    null,
+  );
   const [status, setStatus] = useState("");
   const inFlight = useRef(false);
   const task = useRef<AbortController | null>(null);
@@ -95,9 +97,9 @@ export function MCPServerEditor({
     if (!begin()) return;
     try {
       const saved = await saveMCPServer(draft());
+      onChanged();
       if (!active()) return;
       setServer(saved);
-      onChanged();
       if (isNew) close();
       else setStatus("已保存。");
     } catch (error) {
@@ -115,11 +117,13 @@ export function MCPServerEditor({
     try {
       // Reading a disabled draft must not implicitly persist it.
       const candidate = parseMCPServer(draft());
-      if (!candidate.enabled) throw new Error("请先启用这个外部工具，再读取工具。");
+      if (!candidate.enabled)
+        throw new Error("请先启用这个外部工具，再读取工具。");
       discoveryCommit.current = true;
       setCommitPhase("connection");
       setStatus("正在保存连接…");
       const value = await saveMCPServer(candidate);
+      onChanged();
       if (!active()) return;
       setServer(value);
       discoveryCommit.current = false;
@@ -138,6 +142,7 @@ export function MCPServerEditor({
         tools,
         allowedTools: retainedMCPToolPermissions(value, tools),
       });
+      onChanged();
       if (active()) {
         setServer(next);
         const revoked = value.allowedTools.length - next.allowedTools.length;
@@ -153,13 +158,13 @@ export function MCPServerEditor({
                   : "")
             : "这个服务没有提供工具。",
         );
-        onChanged();
       }
     } catch (error) {
       if (discoveryCommit.current || !request.signal.aborted) fail(error);
     } finally {
       if (active()) {
-        if (!discoveryCommit.current && request.signal.aborted) setStatus("连接已取消。");
+        if (!discoveryCommit.current && request.signal.aborted)
+          setStatus("连接已取消。");
         setDiscovering(false);
         setCommitPhase(null);
       }
@@ -178,9 +183,9 @@ export function MCPServerEditor({
           : server.allowedTools.filter((value) => value !== name),
       };
       const saved = await saveMCPServer(next);
+      onChanged();
       if (!active()) return;
       setServer(saved);
-      onChanged();
     } catch (error) {
       fail(error);
     } finally {
@@ -189,7 +194,8 @@ export function MCPServerEditor({
   };
   const chooseTransport = () => {
     if (!editable()) return;
-    showSettingsChoices("传输方式",
+    showSettingsChoices(
+      "传输方式",
       (["http", "sse"] as const).map((transport) => ({
         title: transport === "http" ? "HTTP" : "SSE 流式",
         onPress: () => {
@@ -203,8 +209,8 @@ export function MCPServerEditor({
     if (!begin()) return;
     try {
       await removeMCPServer(server.id);
-      if (!active()) return;
       onChanged();
+      if (!active()) return;
       close();
     } catch (error) {
       fail(error);
@@ -262,7 +268,12 @@ export function MCPServerEditor({
               value={server.endpoint}
               onChangeText={(endpoint) => {
                 if (editable())
-                  setServer({ ...server, endpoint, tools: [], allowedTools: [] });
+                  setServer({
+                    ...server,
+                    endpoint,
+                    tools: [],
+                    allowedTools: [],
+                  });
               }}
               autoCapitalize="none"
               autoCorrect={false}
@@ -315,9 +326,15 @@ export function MCPServerEditor({
           footer="只有打开开关的工具才会交给 AI。首次调用前仍会请求确认。"
         >
           <SettingsRow
-            title={commitPhase === "connection" ? "正在保存连接…"
-              : commitPhase === "tools" ? "正在保存工具…"
-              : discovering ? "正在读取工具…" : "读取可用工具"}
+            title={
+              commitPhase === "connection"
+                ? "正在保存连接…"
+                : commitPhase === "tools"
+                  ? "正在保存工具…"
+                  : discovering
+                    ? "正在读取工具…"
+                    : "读取可用工具"
+            }
             disabled={busy}
             onPress={() => void discover()}
           />
@@ -374,7 +391,13 @@ export function MCPServerEditor({
 function makeStyles(p: ReturnType<typeof usePalette>) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: p.paper },
-    content: { paddingHorizontal: 16, paddingBottom: 32 },
+    content: {
+      paddingHorizontal: 24,
+      paddingBottom: 40,
+      width: "100%",
+      maxWidth: 760,
+      alignSelf: "center",
+    },
     field: {
       minHeight: 52,
       flexDirection: "row",
@@ -382,8 +405,8 @@ function makeStyles(p: ReturnType<typeof usePalette>) {
       paddingHorizontal: 16,
       gap: 12,
     },
-    label: { width: 82, color: p.ink3, fontSize: 12 },
-    input: { minHeight: 52, flex: 1, fontSize: 15, color: p.ink },
+    label: { width: 82, color: p.ink2, fontSize: 13, lineHeight: 20 },
+    input: { minHeight: 52, flex: 1, fontSize: 17, color: p.ink },
     status: { margin: 16, color: p.ink2, fontSize: 13, lineHeight: 20 },
   });
 }

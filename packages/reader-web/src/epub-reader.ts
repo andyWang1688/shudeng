@@ -7,13 +7,13 @@ import { foliateResourceLoader } from './foliate-resource-loader'
 import { securePublication } from './epub-sandbox'
 import { bridge } from './bridge'
 import type { AnnotationPayload, ContentsItem, EpubLocator, NavigationCommand, NavigationReceipt, ProgressPayload, ReaderFlow, ReaderTheme, SearchResult, SelectionPayload } from './protocol'
-import type { FoliateLocation, FoliateView, NavigationTarget, TocEntry } from './foliate-types'
+import type { FoliateContent, FoliateLocation, FoliateView, NavigationTarget, TocEntry } from './foliate-types'
 import { epubChapterTitle, epubTarget, paintedEpubAnchor, publicationStartFraction, samePublicationHref, textRangeForQuote } from './epub-location'
 import { drawNoteWave } from './note-wave'
 import { readiumSelection, rangeFromReadium } from './epub-selection'
 import { visibleBookmark, bookmarkRange, rangeIsVisible } from './epub-bookmarks'
 import { EPUB_GUTTER, epubTypography, prepareTypographyDocument } from './epub-typography'
-import { EPUB_BOUNDED_VIEWPORT_ENABLED, stabilizeEmptyAnchorBox, stabilizeEmptyTerminalBlock, terminalRecoveryForAnchor, visibleDocumentViewport } from './epub-viewport'
+import { restoreTerminalLayout, stabilizeEmptyAnchorBox, stabilizeEmptyTerminalBlock, terminalRecoveryForAnchor, visibleDocumentViewport } from './epub-viewport'
 
 export interface NativePage {
   cfi: string
@@ -69,6 +69,7 @@ export class EpubReader {
   private readonly citationKey = '__question-citation'
   private terminalRecovery: HTMLElement | null = null
   private readonly resize: ResizeObserver
+  private scrollRevision = 0
 
   constructor(private host: HTMLElement, private onProgress: (payload: ProgressPayload) => void) {
     this.view = document.createElement('foliate-view') as FoliateView
@@ -79,9 +80,11 @@ export class EpubReader {
   }
 
   destroy(): void {
+    this.scrollRevision += 1
     this.resize.disconnect()
     this.searchGeneration += 1
     this.clearTerminalRecovery()
+    for (const content of this.view.renderer?.getContents?.() ?? []) restoreTerminalLayout(content.doc)
     const publication = this.view.book
     try { this.view.close() }
     finally {
@@ -165,15 +168,15 @@ export class EpubReader {
 
   private async prepareTargetLayout(target: NavigationTarget): Promise<NavigationTarget> {
     const renderer = this.view.renderer
-    if (!renderer || typeof target.anchor !== 'function') return target
-    const content = renderer.getContents?.().find(item => item.index === target.index)
+    if (this.flow === 'scrolled' || !renderer || typeof target.anchor !== 'function') return target
+    const content = this.targetContent(target)
     if (!content?.doc) return target
     const anchor = target.anchor
     const fallbackHeight = renderer.getBoundingClientRect().height || this.host.getBoundingClientRect().height
     let stabilized = stabilizeEmptyTerminalBlock(content.doc, fallbackHeight)
     const guardedAnchor = (doc: Document) => {
       const value = anchor(doc)
-      stabilized = stabilizeEmptyAnchorBox(value, doc, fallbackHeight) || stabilized
+      if (this.flow !== 'scrolled') stabilized = stabilizeEmptyAnchorBox(value, doc, fallbackHeight) || stabilized
       return value
     }
     guardedAnchor(content.doc)
@@ -202,8 +205,9 @@ export class EpubReader {
   }
 
   private async recoverUnpaintedTarget(target: NavigationTarget): Promise<void> {
-    if (typeof target.anchor !== 'function') return
-    const content = this.view.renderer?.getContents?.().find(item => item.index === target.index)
+    if (this.flow === 'scrolled' || typeof target.anchor !== 'function') return
+    const revision = this.scrollRevision
+    const content = this.targetContent(target)
     if (!content?.doc) return
     await new Promise<void>(resolve => {
       let settled = false
@@ -215,6 +219,7 @@ export class EpubReader {
       requestAnimationFrame(() => requestAnimationFrame(finish))
       setTimeout(finish, 150)
     })
+    if (revision !== this.scrollRevision) return
     let anchor: Range | Element | number
     try {
       anchor = target.anchor(content.doc)
@@ -249,6 +254,7 @@ export class EpubReader {
   }
 
   async goTo(value: string): Promise<void> {
+    this.scrollRevision += 1
     if (!this.view.renderer) throw new Error('阅读器尚未准备好')
     this.clearTerminalRecovery()
     const target = await this.prepareTargetLayout(await this.resolveLocation(value))
@@ -257,6 +263,7 @@ export class EpubReader {
   }
 
   async navigateReference(command: NavigationCommand): Promise<NavigationReceipt> {
+    this.scrollRevision += 1
     try {
       this.clearTerminalRecovery()
       this.clearSelection()
@@ -293,13 +300,14 @@ export class EpubReader {
   private drawCitation(): void {
     for (const content of this.view.renderer?.getContents?.() ?? []) {
       content.overlayer?.remove(this.citationKey)
-      if (!this.citationCfi) continue
-      const target = this.view.resolveCFI(this.citationCfi)
-      if (target.index !== content.index || typeof target.anchor !== 'function') continue
-      const range = target.anchor(content.doc)
-      // Range comes from the publication iframe's realm.
-      if (range && typeof range !== 'number' && 'startContainer' in range) content.overlayer?.add(this.citationKey, range, Overlayer.highlight, { color: this.theme === 'dark' ? '#5A4A2A' : '#F2DBA6' })
     }
+    if (!this.citationCfi) return
+    const target = this.view.resolveCFI(this.citationCfi)
+    const content = this.targetContent(target)
+    if (!content || typeof target.anchor !== 'function') return
+    const range = target.anchor(content.doc)
+    // Range comes from the publication iframe's realm.
+    if (range && typeof range !== 'number' && 'startContainer' in range) content.overlayer?.add(this.citationKey, range, Overlayer.highlight, { color: this.theme === 'dark' ? '#5A4A2A' : '#F2DBA6' })
   }
 
   async next(): Promise<void> {
@@ -315,17 +323,78 @@ export class EpubReader {
   /** Native owns only the curl presentation. Foliate remains the only pagination/locator authority. */
   setNativeCurl(enabled: boolean): void {
     this.nativeCurl = enabled
-    this.applyViewport()
   }
 
   private pageIdentity(): string {
     const renderer = this.view.renderer
-    const index = renderer?.getContents?.()[0]?.index ?? -1
-    return `${index}:${renderer?.page ?? -1}:${renderer?.pages ?? -1}`
+    const key = renderer?.getPageTurnKey?.()
+    if (key) return key
+    const index = this.currentContent()?.index ?? -1
+    const cfi = this.view.lastLocation?.cfi ?? this.currentLocation() ?? ''
+    return `${index}:${renderer?.page ?? -1}:${renderer?.pages ?? -1}:${cfi}`
+  }
+
+  private visibleContents(): FoliateContent[] {
+    return (this.view.renderer?.getContents?.() ?? []).filter(({ doc }) => {
+      const viewport = visibleDocumentViewport(doc, this.host)
+      return !viewport || (viewport.left < viewport.right && viewport.top < viewport.bottom)
+    })
+  }
+
+  private currentContent(): FoliateContent | undefined {
+    const contents = this.visibleContents()
+    const doc = this.view.lastLocation?.range?.startContainer?.ownerDocument
+    const located = contents.find(content => content.doc === doc)
+    if (located) return located
+    const cfi = this.view.lastLocation?.cfi
+    if (cfi) {
+      const content = this.targetContent(this.view.resolveCFI(cfi), contents)
+      if (content) return content
+    }
+    return contents.find(content => content.index === this.view.renderer?.primaryIndex) ?? contents[0]
+  }
+
+  /** A spine can have several live chunks with placeholder copies of its DOM. */
+  private targetContent(target: NavigationTarget, contents = this.view.renderer?.getContents?.() ?? []): FoliateContent | undefined {
+    const candidates = contents.filter(content => content.index === target.index)
+    if (typeof target.anchor !== 'function') return candidates[0]
+    const anchor = target.anchor
+    return candidates.find(({ doc }) => {
+      try {
+        const value = anchor(doc)
+        if (!value || typeof value === 'number') return false
+        const node = 'startContainer' in value ? value.startContainer : value
+        const element = node.nodeType === 1 ? node as Element : node.parentElement
+        return !!element && !element.closest?.('[data-foliate-chunk]')
+      } catch { return false }
+    })
+  }
+
+  private chapterFor(index: number, range?: Range): string {
+    if (this.isChunkedRange(range)) return this.title
+    const label = this.view.getProgressOf?.(index, range).tocItem?.label
+    if (label?.trim()) return epubChapterTitle(this.title, label)
+    if (this.view.lastLocation?.section?.current === index) return this.lastProgress?.chapter ?? this.title
+    const href = this.view.book?.sections?.[index]?.id
+    const find = (items: TocEntry[]): string | undefined => {
+      for (const item of items) {
+        const nested = find(item.subitems ?? [])
+        if (nested) return nested
+        if (href && item.href && samePublicationHref(item.href, href)) return item.label
+      }
+      return undefined
+    }
+    return epubChapterTitle(this.title, find(this.view.book?.toc ?? []))
+  }
+
+  private isChunkedRange(range?: Range): boolean {
+    // Missing fragment IDs in chunk placeholders confuse upstream TOCProgress.
+    // Keep the exact CFI, but never persist an unrelated chapter's title.
+    return !!range?.startContainer?.ownerDocument?.querySelector?.('[data-foliate-chunk]')
   }
 
   private async waitForPaint(): Promise<void> {
-    const contents = this.view.renderer?.getContents?.() ?? []
+    const contents = this.visibleContents()
     const deadline = <T>(operation: Promise<T>, label: string): Promise<T> => new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(label)), 8000)
       operation.then(value => { clearTimeout(timer); resolve(value) }, error => { clearTimeout(timer); reject(error) })
@@ -353,7 +422,7 @@ export class EpubReader {
     const cfi = this.currentLocation()
     if (!cfi || !this.lastProgress) throw new Error('没有可确认的当前页')
     const contents = this.view.renderer?.getContents?.() ?? []
-    if (this.view.resolveCFI(cfi).index !== contents[0]?.index) throw new Error('原文位置尚未到达当前章节，未生成卷页快照')
+    if (this.view.resolveCFI(cfi).index !== this.currentContent()?.index) throw new Error('原文位置尚未到达当前章节，未生成卷页快照')
     const range = this.view.lastLocation?.range
     let signature = range?.toString().replace(/\s+/g, ' ').trim().slice(0, 180) ?? ''
     if (!signature) {
@@ -380,18 +449,12 @@ export class EpubReader {
     if (this.nativePreparing || (this.nativeOriginal && !this.nativeRecoveryPending)) throw new Error('卷页准备尚未结束')
     if ((this.view.renderer?.getContents?.() ?? []).some(({ doc }) => doc.getSelection()?.toString().trim())) throw new Error('选文期间不准备卷页')
     if (this.nativeRecoveryPending) await this.abortNativePreparation()
-    if (!EPUB_BOUNDED_VIEWPORT_ENABLED) {
-      this.nativeOriginal = await this.nativePage()
-      return this.nativeOriginal
-    }
     this.nativePreparing = true
-    this.applyViewport()
     try {
       this.nativeOriginal = await this.nativePage()
       return this.nativeOriginal
     } catch (error) {
       this.nativePreparing = false
-      this.applyViewport()
       throw error
     }
   }
@@ -423,7 +486,6 @@ export class EpubReader {
     const page = await this.nativePage()
     this.nativeOriginal = null
     this.nativePreparing = false
-    this.applyViewport()
     if (commit && this.lastProgress) this.onProgress(this.lastProgress)
     return page
   }
@@ -431,15 +493,8 @@ export class EpubReader {
   /** A real viewport reflow invalidates page numbers, but must keep the original text anchor. */
   async abortNativePreparation(target?: NativePage): Promise<void> {
     const retained = target ?? this.nativeOriginal
-    if (!EPUB_BOUNDED_VIEWPORT_ENABLED) {
-      if (retained) await this.goTo(retained.cfi)
-      await this.waitForPaint()
-      this.nativeOriginal = null
-      return
-    }
     this.nativePreparing = true
     this.nativeOriginal = retained
-    this.applyViewport()
     try {
       if (retained) await this.goTo(retained.cfi)
       await this.waitForPaint()
@@ -452,7 +507,6 @@ export class EpubReader {
       throw error
     } finally {
       this.nativePreparing = false
-      this.applyViewport()
     }
   }
 
@@ -576,7 +630,7 @@ export class EpubReader {
     this.sendAnnotationState()
   }
 
-  bookmarkContext(bookmarks: ReadonlyArray<{ id: string; locator: EpubLocator }>, requestId: number): void {
+  bookmarkContext(bookmarks: ReadonlyArray<{ id: string; locator: EpubLocator }>, requestId: number, captureLocation = true): void {
     const contents = this.view.renderer?.getContents?.() ?? []
     let locator: EpubLocator | null = null
     let quote = ''
@@ -585,10 +639,12 @@ export class EpubReader {
       const href = this.view.book?.sections?.[content.index]?.id ?? ''
       const viewport = visibleDocumentViewport(content.doc, this.host)
       if (viewport && (viewport.left >= viewport.right || viewport.top >= viewport.bottom)) continue
-      const capture = visibleBookmark(content.doc, href, viewport)
-      if (!locator && capture) {
-        locator = { type: 'epub', cfi: this.view.getCFI(content.index, capture.range), href, selection: capture.selection, chapter: this.lastProgress?.chapter ?? this.title, ...(this.lastProgress?.fraction === undefined ? {} : { fraction: this.lastProgress.fraction }) }
-        quote = capture.selection.text?.highlight ?? ''
+      if (captureLocation && !locator) {
+        const capture = visibleBookmark(content.doc, href, viewport)
+        if (capture) {
+          locator = { type: 'epub', cfi: this.view.getCFI(content.index, capture.range), href, selection: capture.selection, chapter: this.chapterFor(content.index, capture.range), ...(this.lastProgress?.fraction === undefined ? {} : { fraction: this.lastProgress.fraction }) }
+          quote = capture.selection.text?.highlight ?? ''
+        }
       }
       for (const bookmark of bookmarks) {
         if (bookmark.locator.href && !samePublicationHref(bookmark.locator.href, href)) continue
@@ -611,7 +667,7 @@ export class EpubReader {
   }
 
   getState(): Record<string, unknown> {
-    const contents = this.view.renderer?.getContents?.() ?? []
+    const contents = this.visibleContents()
     return {
       format: 'epub',
       title: this.title,
@@ -625,7 +681,6 @@ export class EpubReader {
       annotationCount: this.annotations.size,
       visibleDocuments: contents.length,
       totalPages: null,
-      viewportCandidateEnabled: EPUB_BOUNDED_VIEWPORT_ENABLED,
       nativeRecoveryPending: this.nativeRecoveryPending,
       viewport: this.view.renderer?.getViewportState?.() ?? null,
     }
@@ -634,15 +689,21 @@ export class EpubReader {
   /** 自动化验证用：选中当前 iframe 第一段文字，返回选区消息。 */
   selectFirstText(): SelectionPayload | null {
     if (!this.selectionActionsEnabled) return null
-    const contents = this.view.renderer?.getContents?.() ?? []
+    const contents = this.visibleContents()
     for (const content of contents) {
       const doc: Document | undefined = content.doc
       if (!doc) continue
       const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
       const nodes: Text[] = []
+      const viewport = visibleDocumentViewport(doc, this.host)
       let node: Node | null
       while ((node = walker.nextNode())) {
         if (!(node.textContent ?? '').trim()) continue
+        if (node.parentElement?.closest?.('[data-foliate-chunk]')) continue
+        const candidate = doc.createRange()
+        candidate.setStart(node, 0)
+        candidate.setEnd(node, Math.min(node.textContent?.length ?? 0, 60))
+        if (!rangeIsVisible(doc, candidate, viewport)) continue
         nodes.push(node as Text)
       }
       // 优先选一段正文（便于截图/标注），没有长段落才退回第一个文本节点。
@@ -718,6 +779,7 @@ export class EpubReader {
       if (doc.getSelection()?.toString().trim() || (event.target as Element | null)?.closest('a,button,input,textarea')) return
       const content = this.view.renderer?.getContents?.().find(content => content.doc === doc)
       if (content?.overlayer?.hitTest({ x: event.clientX, y: event.clientY })[0]) return
+      if (this.flow === 'scrolled') { bridge.send({ type: 'reader:tap' }); return }
       const viewport = visibleDocumentViewport(doc, this.host)
       const width = viewport ? viewport.right - viewport.left : doc.defaultView?.innerWidth ?? 0
       const x = event.clientX - (viewport?.left ?? 0)
@@ -759,7 +821,7 @@ export class EpubReader {
     const locator: EpubLocator = {
       type: 'epub',
       cfi,
-      chapter: this.lastProgress?.chapter ?? this.title,
+      chapter: this.chapterFor(index, range),
     }
     const href = section?.href ?? section?.id
     if (typeof href === 'string') { locator.href = href; locator.selection = readiumSelection(href, doc, range) }
@@ -775,7 +837,8 @@ export class EpubReader {
   private progressPayload(detail: FoliateLocation): ProgressPayload | null {
     const cfi = detail?.cfi
     if (!cfi) return null
-    const chapter = epubChapterTitle(this.title, detail.tocItem?.label, this.nativeOriginal?.progress.chapter ?? this.lastProgress?.chapter)
+    const chapter = this.isChunkedRange(detail.range) ? this.title
+      : epubChapterTitle(this.title, detail.tocItem?.label, this.nativeOriginal?.progress.chapter ?? this.lastProgress?.chapter)
     return {
       format: 'epub',
       fraction: this.startFraction ?? (typeof detail.fraction === 'number' ? detail.fraction : 0),
@@ -798,33 +861,26 @@ export class EpubReader {
   }
 
   private applyStyles(): void {
+    this.scrollRevision += 1
     const paper = this.theme === 'dark' ? '#1B1A17' : '#FAF7F1'
     const ink = this.theme === 'dark' ? '#F3EEE3' : '#211E18'
     this.view.renderer?.setStyles?.(epubTypography(this.fontSize, this.theme, { language: this.view.book?.metadata?.language, dir: this.view.book?.dir }))
-    // Foliate 1.0.1 clears its inner background on reflow; keep its canvas themed.
+    // Keep the renderer canvas themed through reflow and adjacent loads.
     if (this.view.renderer) this.view.renderer.style.background = paper
     this.host.style.setProperty('--reader-paper', paper)
     this.host.style.setProperty('--reader-ink', ink)
   }
 
   private applyFlow(): void {
+    this.scrollRevision += 1
+    this.clearTerminalRecovery()
+    for (const content of this.view.renderer?.getContents?.() ?? []) restoreTerminalLayout(content.doc)
     const renderer = this.view.renderer
-    const attributes = { flow: this.flow === 'scrolled' ? 'scrolled' : 'paginated', margin: EPUB_GUTTER + 'px', 'max-column-count': '1' }
+    const attributes = { flow: this.flow === 'scrolled' ? 'scrolled' : 'paginated', 'margin-top': EPUB_GUTTER + 'px', 'margin-bottom': EPUB_GUTTER + 'px', 'margin-left': EPUB_GUTTER + 'px', 'margin-right': EPUB_GUTTER + 'px', 'max-column-count': '1' }
     for (const [name, value] of Object.entries(attributes)) {
       if (renderer?.getAttribute(name) !== value) renderer?.setAttribute(name, value)
     }
     this.applyGutter()
-    this.applyViewport()
-  }
-
-  private applyViewport(): void {
-    const renderer = this.view.renderer
-    if (!renderer) return
-    const enabled = EPUB_BOUNDED_VIEWPORT_ENABLED && this.flow === 'paginated'
-      && !this.nativeCurl && !this.nativePreparing && !this.nativeRecoveryPending
-    const attribute = 'bounded-horizontal-viewport'
-    if (enabled && renderer.getAttribute(attribute) === null) renderer.setAttribute(attribute, '')
-    else if (!enabled && renderer.getAttribute(attribute) !== null) renderer.removeAttribute(attribute)
   }
 
   private applyGutter(): void {

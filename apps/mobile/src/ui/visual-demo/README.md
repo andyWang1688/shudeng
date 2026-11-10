@@ -1,6 +1,20 @@
 # 书灯 UI 实验
 
-分支：`codex/ui-design-demo`。用于在模拟器中快速判断视觉，定稿后重新整理为产品组件；这套样稿不直接合入正式版。
+最初制作于 `codex/ui-design-demo`；后续交互提案仍在本目录独立预览。用于在模拟器中判断视觉和操作，定稿后重新整理为产品组件；这套样稿不直接合入正式版。
+
+2026-11-10，获认可的“我的”、系统服务编辑/删除和系统对话列表已另行接入真实产品，在 Small 的“书灯·开发”（dev.shudeng.integration）验收；详见[真实接线记录](../../../../../docs/validation/2026-11-10/settings-integration.md)。以下内存样本与未接线说明仅描述本目录 Demo，不代表开发包现状。发布须等待用户测试后另行决定。
+
+## 当前“我的”页面提案（2026-11-10，已认可大体方向）
+
+运行 `pnpm --filter @shudeng/mobile demo:ios profile`，在 Small 的“书灯·UI → 我的”查看。依据是已确认的[内容分组](../../../../../docs/product-scope.md#我的与设置)，不改变正式设置页面。顶层为书架、对话、我的；首页将 AI 服务、助手指令、离线语义资料放在“AI 与助手”组，关于放在“通用”组，不增加设置中转页或未来报告占位。用户认可大体布局后，当前已移除外部工具和独立 AI 发送说明入口；正式服务配置时的告知与已有 MCP 数据继续保留。
+
+- AI 服务列表沿用内存示例：点选使用、铅笔编辑；保存非当前项不切换服务，删除当前项保持未选择。联网仍在服务详情。具体选择、编辑及保存交互仍是提案。
+- iOS 服务编辑弹层使用 Expo UI 的 NavigationStack / Toolbar：左侧关闭、右侧确认圆钮，保留取消与保存的可访问名称；高级设置仅显示返回。系统处理标题、按钮间距与材质，表单仍由 RN 承载。其他端沿用原 Header 作为预览。关闭脏表单的确认与保存校验保持原逻辑；新工具栏已显示并检查高级设置往返，确认/取消的实际点击与保存尚未完成设备验证，见[记录](../../../../../docs/validation/2026-11-10/profile-demo.md)。
+- 助手指令可以编辑、保存与恢复默认；返回保留本次进程草稿。资料页仅展示未下载状态，下载按钮明确提示未接线。关于页仅为品牌样本，尚未补齐真实版本、政策与许可。
+- 服务、指令和草稿只在内存中，重启复位。Key 栏只输入 demo 等样本；联网支持由样本预设，不能作为能力探测或真实问答结果。下载、索引、MCP 配置授权、真实密钥、连接、持久化与费用未接入。
+- 直接预览子页可使用 EXPO_PUBLIC_UI_DEMO_DETAIL=models / assistant / semantic / about；assistant 现指助手指令。跟踪 [#60](https://github.com/andyWang1688/shudeng/issues/60)，检查边界见[本轮记录](../../../../../docs/validation/2026-11-10/profile-demo.md)。
+
+此前将“我的”改名为“设置”、只保留模型及关于的提案已被否决，原[设备记录](../../../../../docs/validation/2026-11-10/model-settings-demo.md)仅作历史。当前运行命令已展示新提案，不能复现旧首页。下文“本版设计”指原整体视觉基准，不表示本轮“我的”已通过视觉确认。
 
 ## 运行
 
@@ -29,17 +43,25 @@
 - 阅读页通过覆盖正文的工具栏承载目录、书签、阅读设置与阅读专注；问答沿用 Gorhom 两档吸附和悬浮输入，并提供显式全屏按钮。同一示例对话收起后再打开保留输入与消息，切换示例对话重新初始化。
 - 设置使用标准分组，联网搜索放在模型服务详情；字号只在书内调整，并直接反映在当前示例正文。
 
+AI 服务的 iOS 列表复用 Expo UI List / SwipeActions，保留编辑按钮及编辑页删除入口；列表删除与编辑页共用一次确认，取消不隐藏服务，确认后只移除目标配置。确认前不使用系统 destructive role，避免系统先隐藏行而取消后不恢复。默认平台保留显式编辑入口。高级设置使用自动开关与 Token 输入框，支持 1M、200K 和精确正整数，保存时转为完整数字；自动与手动切换保留本轮手填草稿。自动资料尚未接入，不显示虚构识别值。以上只改内存样本，正式版的校验、预算与 LangChain profile 接线另验，见[设置验收](../../../../../docs/validation/2026-11-10/profile-demo.md)。
+
 所有书籍段落、笔记、回答和引用均为布局样本，含意译和示意文字，不能作为真实版本原文或模型质量证据。书封中的固定字号属于封面画面；可操作的书名、作者与界面文本仍随文字缩放。
 
 ## 长内容与动效提案
 
-对话条目只显示最多两行标题，不显示日期和消息数量；左滑提供重新命名、删除，同一时刻只打开一行操作，开始纵向滚动关闭操作。长按及读屏自定义操作提供替代入口。改名仅改变标题，不替换原问题；空白名称不保存，删除先确认。改名与删除不接正式数据库，进程重启恢复样本。
+iOS 对话预览现由 DemoConversationList.ios.tsx 组合已安装的 Expo UI：SwiftUI List 负责滚动与行布局，DisclosureGroup 负责书组展开，SwipeActions 负责系统左滑、按钮呈现与命中。移除该路径的自测高度、裁切动画、手势引用及自绘动作容器；只保留按书分组、搜索、预览数量与改名/删除的示例业务。标题、底色与封面沿用书灯风格；系统决定动作尺寸与转场，不再仿制系统按钮。其他端的旧 RN 预览由同名默认文件保留，未据此声明跨端验收。
+
+用户认可系统组件版的总体观感后，进一步指出子项左侧空隙过大。当前已消除显式边距与系统层级缩进的叠加，使普通列表和搜索结果的对话标题均与书名文字对齐；设备截图见[间距复核](../../../../../docs/validation/2026-11-10/conversation-swipe-actions.md)。
+
+条目只展示最多两行标题；没有长按动作选择菜单。搜索查全量样本并始终展示匹配项，不提供可隐藏结果的展开控件；清空后恢复原书组状态。改名仅改变标题，不替换原问题；空白名称不保存，删除先确认，关闭系统全滑直接执行。改名与删除不接正式数据库，进程重启恢复样本。Native List.ForEach 在这份小样本中使用稳定 ID 和 recycling=false，不把原型当作真实大库回收性能证明。
+
+当前已验证系统分组、原地展开全部、列表可访问滚动、尾部搜索、改名与删除取消。真实指针左滑仍受设备后台窗口限制，不能用可访问操作或截图替代。正式对话页尚未接入这套系统容器；本轮原型与上一版被用户指出重叠的结果均见[验收记录](../../../../../docs/validation/2026-11-10/conversation-swipe-actions.md)。
 
 笔记按用户要求恢复上一版条目：摘录预览两行、想法一行，下方保留位置与日期；高亮保留金色引用线，个人笔记不加引用线。点击条目在原处展开全文并显示“回到原文”，再次点击收起，不再另开详情弹层。限制的是预览高度，原始内容不截断。搜索覆盖全部本地样本，搜索时所有匹配条目直接在书组内展示，不受预览数量限制。
 
 总览用虚拟列表承载书组，组内原地展开本地样本；样本包含同书 12 条对话、8 条旧笔记及阅读器标注、长问题与长选文。当前组内展开不逐行虚拟化，不能据此声称真实大库已完成分页或性能验收。产品接入时需使用可展开分组的逐行虚拟列表，按稳定书籍/记录 ID 分组，对全量索引查询后分页加载，不能仅检索已加载页；笔记仍遵守组内阅读位置排序。
 
-书架、笔记、对话和“我的”只保留原生滚动回弹，页头与搜索保持稳定，不添加假刷新。用户认为上一版标题缩放、布局弹簧与淡入淡出过于显眼，因此已移除。当前书组仅用 Reanimated 在 220ms 内连续改变裁剪容器高度，文字保持原尺寸、不透明度和相对位置，箭头同步转向；初始展示不播入场动画，快速切换从当前位置转向最后状态，遵循系统减少动态效果。依据为 Apple [Lists and tables](https://developer.apple.com/design/human-interface-guidelines/lists-and-tables)、[Disclosure controls](https://developer.apple.com/design/human-interface-guidelines/disclosure-controls)、[Motion](https://developer.apple.com/design/human-interface-guidelines/motion)。这些具体字号、数量和动效参数是书灯的 Demo 提案，不是 Apple 的规定。
+书架、笔记、对话和“我的”保留滚动回弹，页头与搜索保持稳定，不添加假刷新。用户认为上一版标题缩放、布局弹簧与淡入淡出过于显眼，因此已移除。iOS 对话的展开、滚动和左滑现交由上述系统组件；旧 RN 书组仅作为其他端与历史笔记预览，仍用 Reanimated 连续改变裁剪容器高度，不能再当作当前 iOS 对话的实现。依据为 Apple [Lists and tables](https://developer.apple.com/design/human-interface-guidelines/lists-and-tables)、[Disclosure controls](https://developer.apple.com/design/human-interface-guidelines/disclosure-controls)、[Motion](https://developer.apple.com/design/human-interface-guidelines/motion)。具体字号和预览数量是书灯的 Demo 提案，不是 Apple 的规定。
 
 设计依据为[跨端界面规范](../../../../../docs/design/ui-development-standard.md)，以及 Apple 官方 [Design principles](https://developer.apple.com/design/human-interface-guidelines/design-principles)、[Layout](https://developer.apple.com/design/human-interface-guidelines/layout)、[Typography](https://developer.apple.com/design/human-interface-guidelines/typography)、[Sheets](https://developer.apple.com/design/human-interface-guidelines/sheets)。本稿验证 iOS 窄屏的内容层级，不自动形成 Android、Web 或桌面的控件规格。
 

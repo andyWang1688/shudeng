@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { usePalette, type Palette } from '../ui/theme';
@@ -9,7 +9,7 @@ import type { ReaderWebViewHandle, ReaderWebViewProps } from './ReaderWebView';
 export type { ReaderEvent } from './readerProtocol';
 
 /** Web uses the same protocol and persistent annotation identities as the native WebView. */
-export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView({ bookId, initialLocation, openOverride, initialAnnotations, selectionActionsEnabled = true, theme = 'light', fontScale = 1, flow = 'paginated', onEvent, onTap }, ref) {
+export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView({ bookId, initialLocation, openOverride, initialAnnotations, selectionActionsEnabled = true, theme = 'light', fontScale = 1, flow = 'paginated', onEvent, onTap }, ref) {
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -23,7 +23,7 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
     navigate: command => send({ type: 'reader:navigate', payload: command }),
     search: (query, requestId) => send({ type: 'reader:search', payload: { query, requestId } }),
     requestContents: () => send({ type: 'reader:contents' }),
-    captureBookmarkContext: (bookmarks, requestId) => send({ type: 'reader:bookmark-context', payload: { bookmarks, requestId } }),
+    captureBookmarkContext: (bookmarks, requestId, captureLocation) => send({ type: 'reader:bookmark-context', payload: { bookmarks, requestId, ...(captureLocation === undefined ? {} : { captureLocation }) } }),
   }), [onEvent, selectionActionsEnabled, send]);
   const open = useCallback(() => {
     if (openOverride && 'fileUri' in openOverride) {
@@ -76,6 +76,6 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
     send({ type: 'reader:theme', payload: { theme } }); send({ type: 'reader:fontSize', payload: { fontSize: fontScale * 18.5 } }); send({ type: 'reader:flow', payload: { flow } });
   }, [flow, fontScale, ready, send, theme]);
   return <View style={styles.container}><iframe ref={iframeRef} title="书灯阅读器" srcDoc={readerWebHtml} onLoad={open} style={{ ...iframeStyle, backgroundColor: palette.paper }} /></View>;
-});
+}));
 const iframeStyle = { borderWidth: 0, width: '100%', height: '100%' } satisfies CSSProperties;
 function makeStyles(palette: Palette) { return StyleSheet.create({ container: { flex: 1, backgroundColor: palette.paper } }); }

@@ -188,6 +188,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
   private var active = true
   private var disposed = false
   private var wantsCurl = false
+  private var appliedCurl: Bool?
   private var usingCurl = false
   private var selecting = false
   private var working = false
@@ -223,6 +224,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
     source = html
     loaded = false
     ready = false
+    appliedCurl = nil
     clearCache()
     resourceScheme.setReaderHTML(html)
     web.load(URLRequest(url: resourceScheme.pageURL))
@@ -293,6 +295,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
   func submit(_ raw: String) {
     guard !raw.isEmpty, let data = raw.data(using: .utf8),
       let envelopes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+    let previousCommand = lastCommand
     for envelope in envelopes {
       guard let id = envelope["id"] as? Int, id > lastCommand,
         let message = envelope["message"] as? [String: Any] else { continue }
@@ -300,7 +303,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
       pending.append(message)
     }
     emitJSON(["type": "native:ack", "payload": ["id": lastCommand]])
-    schedule()
+    if lastCommand != previousCommand { schedule() }
   }
 
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -328,7 +331,9 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
     if navigationAction.targetFrame?.isMainFrame == true {
       decisionHandler(url == resourceScheme.pageURL ? .allow : .cancel)
     } else {
-      decisionHandler(url.scheme == "blob" || url.absoluteString == "about:blank" ? .allow : .cancel)
+      // Foliate renders sanitized chapters/chunks as srcdoc. Navigation to
+      // other documents is still blocked; publication CSP forbids child frames.
+      decisionHandler(url.scheme == "blob" || ["about:blank", "about:srcdoc"].contains(url.absoluteString) ? .allow : .cancel)
     }
   }
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failure(error) }
@@ -365,6 +370,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
   }
 
   private func attachWeb(to container: UIView) {
+    guard web.superview !== container else { return }
     web.removeFromSuperview()
     web.frame = container.bounds
     web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -461,6 +467,9 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
 
   private func schedule() {
     guard active, loaded, !working, !transitioning else { return }
+    guard !pending.isEmpty || pendingTurn != nil
+      || (!navigationReceipts.isEmpty && !dirty)
+      || (dirty && ready && (!selecting || !wantsCurl || UIAccessibility.isReduceMotionEnabled)) else { return }
     working = true
     setGesturesEnabled(false)
     Task { [weak self] in await self?.drain() }
@@ -490,6 +499,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
       while !pending.isEmpty {
         let message = pending.removeFirst()
         let type = message["type"] as? String ?? ""
+        if type == "reader:open" { appliedCurl = nil }
         if ["reader:open", "reader:theme", "reader:fontSize", "reader:flow", "reader:goTo", "reader:navigate", "reader:annotation:add", "reader:annotation:remove"].contains(type) {
           clearCache()
           // Keep the displayed page in place while the live document repaginates.
@@ -508,12 +518,17 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
         _ = try await web.evaluateJavaScript(script)
       }
       guard ready else { return }
-      if wantsCurl && !UIAccessibility.isReduceMotionEnabled {
-        _ = try await native("setCurl", ["enabled": true])
+      let curlEnabled = wantsCurl && !UIAccessibility.isReduceMotionEnabled
+      if appliedCurl != curlEnabled {
+        _ = try await native("setCurl", ["enabled": curlEnabled])
+        appliedCurl = curlEnabled
+      }
+      if curlEnabled {
         if dirty && !selecting { try await prepare() }
       } else {
-        _ = try await native("setCurl", ["enabled": false])
-        removePager()
+        if usingCurl || pager.parent != nil || current != nil || cover != nil || web.superview !== view {
+          removePager()
+        }
         dirty = false
       }
     } catch {

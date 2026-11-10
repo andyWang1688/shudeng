@@ -10,7 +10,10 @@ import { AppearanceProvider, useAppearance } from "../src/ui/appearance";
 import { usePalette } from "../src/ui/theme";
 import { MCPToolConsentHost } from "../src/ui/settings/MCPToolConsentHost";
 import { mcpToolConsentScreenLayout } from "../src/ui/settings/MCPToolConsentScreenHost";
-import { ReaderQuestionProvider, useQuestionTransitionEnd } from "../src/ui/reader-question/ReaderQuestionProvider";
+import {
+  ReaderQuestionProvider,
+  useQuestionTransitionEnd,
+} from "../src/ui/reader-question/ReaderQuestionProvider";
 
 export const unstable_settings = { anchor: "(tabs)" };
 
@@ -50,8 +53,17 @@ function RootLayoutContent() {
           animation: "slide_from_right",
         }}
       >
-        {/* 根四栏是 Expo Router Tabs；自定义 tabBar 保留各 Tab 状态。 */}
+        {/* 顶层栏目使用 Expo Router Tabs，标注归属于各书。 */}
         <Stack.Screen name="(tabs)" options={{ animation: "none" }} />
+        <Stack.Screen
+          name="book-annotations/[id]"
+          options={{
+            presentation: "transparentModal",
+            animation: "none",
+            gestureEnabled: false,
+            contentStyle: { backgroundColor: "transparent" },
+          }}
+        />
         <Stack.Screen
           name="settings/ai-service"
           options={{ presentation: "modal", animation: "slide_from_bottom" }}

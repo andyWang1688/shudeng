@@ -3,7 +3,7 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage }
 import { NativeContextManager, nativeContextBudget, summaryTranscript, textCharacters, TOOL_TRIMMED_SUFFIX } from './context-manager.js';
 import { EvidenceRegistry } from './evidence.js';
 import { runBookAgent } from './agent.js';
-import { InMemoryBookSource } from './book-source.js';
+import { InMemoryBookSource, type BookSource } from './book-source.js';
 import { createScriptedModel, ScriptedChatModel } from './testing.js';
 import type { AgentEvent, AgentRunSession } from './events.js';
 
@@ -28,7 +28,7 @@ describe('native context preparation contract', () => {
     expect(nativeContextBudget(200000)).toEqual({ window: 200000, threshold: 160000, retainTokens: 31776 });
     expect(nativeContextBudget(10000).threshold).toBe(7600);
     const summarize = vi.fn(async () => '摘要');
-    const manager = new NativeContextManager({ window: 1000 }, summarize);
+    const manager = new NativeContextManager({ window: 2000, outputReserve: 744 }, summarize);
     const messages = [new HumanMessage('')];
     const equal = await manager.prepare(new SystemMessage('中'.repeat(996)), messages);
     expect(equal.estimate.estimatedTokens).toBe(1000);
@@ -115,6 +115,68 @@ describe('native context preparation contract', () => {
     expect(registry.renderedMaterials(prefix + TOOL_TRIMMED_SUFFIX)).toEqual([
       { id: 'E1', name: '章节', content: '已发送前半段' },
     ]);
+  });
+
+  it('rejects a real passage tail trimmed before dispatch while keeping its transmitted prefix citable', async () => {
+    const prefix = '确实发送的原文前缀';
+    const tail = '这是预算裁剪后没有发送的独特尾句';
+    const quote = prefix + '中'.repeat(10500) + tail;
+    const passageSource: BookSource = {
+      search: async () => [], page: async () => null, chapter: async () => null,
+      passage: async () => ({ chapter: '章', reference: 'r1', excerpts: [
+        { context: quote, quote, chapter: '章', locator: 'chapter:1', readRef: 'r1' },
+      ] }),
+    };
+    for (const citation of [tail, prefix]) {
+      const model = createScriptedModel([
+        { chunks: [{ toolCalls: [{ id: 'read-1', name: 'read_book_passage', args: { reference: 'r1' } }] }] },
+        { chunks: [{ text: JSON.stringify({ answer: '回答', citations: [{ id: 'E1', quote: citation }] }) }] },
+      ]);
+      const session = runBookAgent({ model, source: passageSource, book, question: '解释', contextWindowTokens: 12000 });
+      const events = await collect(session);
+      const result = await session.result;
+      const calls = (model.langChainModel as ScriptedChatModel).calls;
+      expect(calls).toHaveLength(2);
+      const transmitted = calls.flatMap(call => call.filter(message => message.getType() === 'tool'));
+      expect(transmitted.some(message => String(message.content).includes(tail))).toBe(false);
+      expect(transmitted.some(message => String(message.content).includes(prefix))).toBe(true);
+      expect(result?.contextEstimate).toMatchObject({ action: 'pruned', truncatedToolResults: 1 });
+      expect(result?.sentMaterials?.some(material => material.content.includes(tail))).toBe(false);
+      expect(result?.citations.map(item => item.quote)).toEqual(citation === tail ? [] : [prefix]);
+      expect(result?.droppedCitationIds).toEqual(citation === tail ? ['E1'] : []);
+      expect(events.filter(event => event.type === 'citation')).toHaveLength(citation === tail ? 0 : 1);
+    }
+  });
+
+  it('keeps a passage tail citable when an earlier request sent it before later compaction', async () => {
+    const tail = '前一轮已发送的独特原文尾句';
+    const quote = '中'.repeat(6500) + tail;
+    const passageSource: BookSource = {
+      search: async () => [2, 3].map(index => ({
+        context: '补'.repeat(900), quote: '补'.repeat(900), chapter: '补充章', locator: 'chapter:' + index,
+      })),
+      page: async () => null, chapter: async () => null,
+      passage: async () => ({ chapter: '章', reference: 'r1', excerpts: [
+        { context: quote, quote, chapter: '章', locator: 'chapter:1', readRef: 'r1' },
+      ] }),
+    };
+    const model = createScriptedModel([
+      { chunks: [{ toolCalls: [{ id: 'read-1', name: 'read_book_passage', args: { reference: 'r1' } }] }] },
+      { chunks: [{ toolCalls: [{ id: 'search-1', name: 'search_book', args: { query: '补充' } }] }] },
+      { chunks: [{ text: JSON.stringify({ answer: '回答', citations: [{ id: 'E1', quote: tail }] }) }] },
+    ]);
+    const session = runBookAgent({ model, source: passageSource, book, question: '解释', contextWindowTokens: 12000 });
+    await collect(session);
+    const result = await session.result;
+    const calls = (model.langChainModel as ScriptedChatModel).calls;
+    expect(calls).toHaveLength(3);
+    const hasTail = (messages: readonly BaseMessage[]) => messages.some(message =>
+      message.getType() === 'tool' && String(message.content).includes(tail));
+    expect(hasTail(calls[1]!)).toBe(true);
+    expect(hasTail(calls[2]!)).toBe(false);
+    expect(result?.contextEstimate).toMatchObject({ action: 'pruned', truncatedToolResults: 1 });
+    expect(result?.citations.map(item => item.quote)).toEqual([tail]);
+    expect(result?.droppedCitationIds).toEqual([]);
   });
 
   it('fails preflight without invoking the main model when the last question cannot fit', async () => {

@@ -113,7 +113,7 @@ public final class EpubResourceScheme: NSObject, WKURLSchemeHandler {
         let response = HTTPURLResponse(url: task.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
             "Content-Type": mime + "; charset=utf-8", "Cache-Control": "no-store",
             // This is the reader shell policy; a product integration must preserve reader's own CSP.
-            "Content-Security-Policy": "default-src 'self' blob: data:; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline' blob:; connect-src 'self'; frame-src blob:;",
+            "Content-Security-Policy": "default-src 'self' blob: data:; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline' blob:; connect-src 'self'; frame-src 'self' blob:;",
         ])!
         task.didReceive(response); task.didReceive(data); task.didFinish()
     }

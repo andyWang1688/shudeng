@@ -1,6 +1,3 @@
-/* Claude web example palette adapted to the native reader thread:
- * https://www.assistant-ui.com/examples/claude
- */
 @import "tailwindcss";
 @import "uniwind";
 
@@ -16,43 +13,43 @@
 @layer theme {
   :root {
     @variant light {
-      --color-background: #f0ece0;
-      --color-foreground: #1a1a18;
+      --color-background: #faf9f6;
+      --color-foreground: #292722;
       --color-card: #ffffff;
-      --color-card-foreground: #1a1a18;
-      --color-primary: #c96442;
+      --color-card-foreground: #292722;
+      --color-primary: #805638;
       --color-primary-foreground: #ffffff;
-      --color-secondary: #e5e0d6;
-      --color-secondary-foreground: #1a1a18;
-      --color-muted: #e5e0d6;
-      --color-muted-foreground: #5b5950;
-      --color-accent: #e5e0d6;
-      --color-accent-foreground: #1a1a18;
+      --color-secondary: #f0ede7;
+      --color-secondary-foreground: #292722;
+      --color-muted: #f0ede7;
+      --color-muted-foreground: #625e56;
+      --color-accent: #ede4d9;
+      --color-accent-foreground: #292722;
       --color-destructive: #b94733;
-      --color-border: #e5e0d6;
-      --color-input: #e5e0d6;
-      --color-ring: #c96442;
-      --color-link: #a14e36;
+      --color-border: #e4e0d8;
+      --color-input: #e4e0d8;
+      --color-ring: #805638;
+      --color-link: #805638;
     }
 
     @variant dark {
-      --color-background: #2b2a27;
-      --color-foreground: #eeeeee;
-      --color-card: #1f1e1b;
-      --color-card-foreground: #eeeeee;
-      --color-primary: #c96442;
-      --color-primary-foreground: #ffffff;
-      --color-secondary: #393937;
-      --color-secondary-foreground: #eeeeee;
-      --color-muted: #393937;
-      --color-muted-foreground: #a3a098;
-      --color-accent: #393937;
-      --color-accent-foreground: #eeeeee;
+      --color-background: #1b1a17;
+      --color-foreground: #f3eee3;
+      --color-card: #2a2723;
+      --color-card-foreground: #f3eee3;
+      --color-primary: #e0ae6a;
+      --color-primary-foreground: #1b1a17;
+      --color-secondary: #24221e;
+      --color-secondary-foreground: #f3eee3;
+      --color-muted: #24221e;
+      --color-muted-foreground: #c3bcae;
+      --color-accent: #3a2f1f;
+      --color-accent-foreground: #f3eee3;
       --color-destructive: #ef9a88;
-      --color-border: #3d3a35;
-      --color-input: #3d3a35;
-      --color-ring: #c96442;
-      --color-link: #eea186;
+      --color-border: #3a362f;
+      --color-input: #3a362f;
+      --color-ring: #e0ae6a;
+      --color-link: #f0c98b;
     }
   }
 }

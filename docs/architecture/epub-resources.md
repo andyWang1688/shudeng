@@ -28,6 +28,10 @@ WK 创建前注册 `EpubResourceScheme(archives: EpubResourceStore.shared.archiv
 
 原生先把资源解压到 lease 并完成字节/CRC 校验，再以 64 KiB 块发送 WK。Foliate 使用 `new EPUB(loader).init()` 后 `view.open(book)`；直接给 view URL 仍会走整档 fetch→Blob→File，不符合本合同。相对 CSS/image 由 Foliate 改写为 Blob URL。WK stop 取消对应任务。真正卸载时先停止 WK，再关闭 Foliate loader，最后 await scheme.close；临时遮盖不销毁 session。scheme 的并发 close 等待同一清理任务；close 是该 handler 的终结状态，后续 activate 不会复活它，重新打开使用新 handler。
 
+连续引擎 adapter 将 descriptor 的 ZIP 路径与大小映射为 `entries[{filename,uncompressedSize}]`，供引擎判断章节与分块；该步骤只读取元数据，不读取整书正文，也不把 opaque resourceID 当路径。多个章节文档可同时存活，定位、选文与书签必须按当前可见文档或实际目标文档处理，不能假定 `getContents()[0]` 就是当前章。
+
+固定 fork 用 `about:srcdoc` 加载章节。App 自有 shell 的 CSP 因而允许同源与 blob frame，native 子 frame 导航白名单精确增加 `about:srcdoc`；章节先经 `securePublication` 净化并注入禁脚本、禁嵌套 frame 的正文 CSP，消息处理仍只接受 main frame。该兼容不放宽任意远程导航或书籍脚本执行。实际 iOS 接线结果见[连续阅读验收](../validation/2026-11-09/continuous-epub.md)。
+
 ## 运行保护与边界
 
 策略集中在 EpubResourceStore：每个独占 session 最多 20,000 条目、8 MiB 实际 metadata 读取、同时存活 native 临时资源 128 MiB；单资源实际解压 64 MiB、解压 30 秒。校验实际输出与 CRC，不只相信 ZIP 头。已处理且 release 的章节不累计计费；压缩包没有 100 MiB 整档限制。reader/import/index 可以并行拥有不同 session，128 MiB 不是跨 session 的全局上限。
@@ -46,4 +50,4 @@ WK 创建前注册 `EpubResourceScheme(archives: EpubResourceStore.shared.archiv
 4. 独立 macOS WK + 真实 foliate：17 sections，前两章的封面图和相对 CSS 成功；24 MiB 活动资源首块后 abort 触发 native WK stop=1，后续读取恢复，关闭无临时资源。可通过 tests/WKProbe/build-probe.mjs 构建使用产品 loader 的 probe，再运行小测试包产出的 EpubWKProbe。
 5. 最终 12 测试连续两轮通过（0.367 / 0.361 秒），构建目录 189,556 → 189,564 KiB，只有 8 KiB 测试元数据变化，无 tmp-*；模拟 Swift 失败退出码 73，trap 仍完成临时目录回收。
 
-未验证：统一 Pod 安装后的 iOS 编译、Hermes→Expo API→WK 端到端、真实大 EPUB 的 App/WK 峰值与首屏、杀进程恢复及删除过程中读取。后续结果写入 rn-native-parity.md，本文不重复总体验收状态。
+上述资源专题最初未覆盖统一 Pod 的 iOS 编译及 Hermes→Expo API→WK 端到端；后续 Small Release 的实际逐资源阅读接线见[连续阅读验收](../validation/2026-11-09/continuous-epub.md)，不能将这里的旧未测状态当作当前状态。真实大 EPUB 的 App/WK 峰值与首屏、杀进程恢复及删除过程中读取仍需对应证据；本文不重复总体验收状态。

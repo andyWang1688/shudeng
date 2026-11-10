@@ -6,13 +6,14 @@ export interface NavigationTarget { index: number; anchor?: number | ((doc: Docu
 export interface FoliateSearchResult { label?: string; cfi?: string; excerpt?: { pre: string; match: string; post: string }; subitems?: FoliateSearchResult[]; progress?: number }
 export interface FoliateView extends HTMLElement {
   book?: { metadata?: { language?: string | readonly string[] }; dir?: string; sections?: FoliateSection[]; toc?: TocEntry[]; resolveHref?: (href: string) => NavigationTarget; destroy?: () => void }
-  renderer?: HTMLElement & { page?: number; pages?: number; atStart?: boolean; atEnd?: boolean; getViewportState?: () => Record<string, unknown> | null; getContents?: () => FoliateContent[]; setStyles?: (styles: string | readonly [string, string]) => void; render?: () => void; goTo: (target: NavigationTarget) => Promise<void> }
+  renderer?: HTMLElement & { primaryIndex?: number; page?: number; pages?: number; start?: number; end?: number; viewSize?: number; scrollProp?: string; atStart?: boolean; atEnd?: boolean; getPageTurnKey?: (delta?: number) => string | null; getViewportState?: () => Record<string, unknown> | null; getContents?: () => FoliateContent[]; setStyles?: (styles: string | readonly [string, string]) => void; render?: () => void; goTo: (target: NavigationTarget) => Promise<void> }
   lastLocation?: FoliateLocation
   open(book: unknown): Promise<void>
   close(): void
   init(options?: { lastLocation?: unknown; showTextStart?: boolean }): Promise<void>
   goTo(target: unknown): Promise<NavigationTarget | undefined>
   getCFI(index: number, range: Range): string
+  getProgressOf?(index: number, range?: Range): { tocItem?: TocEntry }
   resolveCFI(cfi: string): NavigationTarget
   addAnnotation(annotation: { value: string; [key: string]: unknown }, remove?: boolean): Promise<unknown>
   deleteAnnotation(annotation: { value: string; [key: string]: unknown }): Promise<unknown>

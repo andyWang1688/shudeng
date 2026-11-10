@@ -1,0 +1,103 @@
+diff --git a/paginator.js b/paginator.js
+index 350149930ecc0f77e6ec6bc7a8647b5d63d44f96..d60e612e54423f72b59932881f9ce3f9213b2e68 100644
+--- a/paginator.js
++++ b/paginator.js
+@@ -1542,6 +1542,8 @@ export class Paginator extends HTMLElement {
+     #scrollBounds
+     #touchState
+     #touchScrolled
++    #scrolledTouchPending = false
++    #scheduleScrolledRelocate
+     #lastVisibleRange
+     #scrollLocked = false
+     #subpixelOffset = 0
+@@ -1738,14 +1740,26 @@ export class Paginator extends HTMLElement {
+         const scrolledScrollRelocate = () => {
+             // Skip entirely while stabilizing — preserve #justAnchored
+             // so the first post-stabilization fire still sees it.
+-            if (this.#stabilizing) return
+-            if (this.#justAnchored) this.#justAnchored = false
+-            else this.#afterScroll('scroll')
++            if (this.#touchState?.active) return
++            if (this.#stabilizing) {
++                // A fill can settle without another scroll or a final
++                // stabilized event. Keep only this pending report queued.
++                if (this.#scrolledTouchPending) this.#scheduleScrolledRelocate?.()
++                return
++            }
++            const touched = this.#scrolledTouchPending
++            this.#scrolledTouchPending = false
++            if (this.#justAnchored && !touched) this.#justAnchored = false
++            else {
++                this.#justAnchored = false
++                this.#afterScroll('scroll')
++            }
+         }
+         // Start time of the current unbroken run of scroll events, for the
+         // periodic mid-scroll relocate below; null when no run is in progress.
+         let scrollBurstStart = null
+         const debouncedScroll = debounce(() => {
++            if (!this.#scheduleScrolledRelocate) return
+             if (this.#pagePreview) return
+             scrollBurstStart = null
+             if (this.scrolled && !this.#isAnimating) {
+@@ -1759,8 +1773,11 @@ export class Paginator extends HTMLElement {
+                 this.#afterScroll('container-scroll')
+             }
+         }, 250)
++        this.#scheduleScrolledRelocate = debouncedScroll
+         this.#container.addEventListener('scroll', () => {
+             if (this.#pagePreview) return
++            if (this.scrolled && this.#touchState?.active)
++                this.#scrolledTouchPending = true
+             if (!this.#isAnimating) this.dispatchEvent(new Event('scroll'))
+             // Keep the per-view backgrounds glued to the content while a swipe
+             // drag scrolls the container (no animation runs then). During the
+@@ -1831,7 +1848,8 @@ export class Paginator extends HTMLElement {
+             // ends the run. Skipped during a finger drag for the same reason
+             // preloading is: the measurement drops frames mid-swipe, and the
+             // release settles through the debounce anyway (readest#4785).
+-            if (this.scrolled && !this.#isAnimating && !this.#touchScrolled) {
++            if (this.scrolled && !this.#isAnimating && !this.#touchScrolled
++                && !this.#touchState?.active) {
+                 const now = Date.now()
+                 if (scrollBurstStart == null) scrollBurstStart = now
+                 else if (now - scrollBurstStart >= SCROLL_RELOCATE_MAX_WAIT) {
+@@ -1944,6 +1962,7 @@ export class Paginator extends HTMLElement {
+     attributeChangedCallback(name, _, value) {
+         switch (name) {
+             case 'flow':
++                if (value !== 'scrolled') this.#scrolledTouchPending = false
+                 this.render()
+                 break
+             case 'column-gap': {
+@@ -3176,6 +3195,11 @@ export class Paginator extends HTMLElement {
+         this.#bgAnimContext = null
+         const state = this.#touchState
+         if (state) state.active = false
++        // Scrolled touchmove uses native scrolling and never sets
++        // #touchScrolled. Flush after release even if scrolling stopped
++        // before the finger lifted (and no final scroll event will arrive).
++        if (this.scrolled && this.#scrolledTouchPending)
++            this.#scheduleScrolledRelocate?.()
+         if (state?.blocked) {
+             this.#touchScrolled = false
+             return
+@@ -3288,6 +3312,8 @@ export class Paginator extends HTMLElement {
+         this.#bgAnimContext = null
+         const state = this.#touchState
+         if (state) state.active = false
++        if (this.scrolled && this.#scrolledTouchPending)
++            this.#scheduleScrolledRelocate?.()
+         if (state?.blocked) {
+             this.#touchScrolled = false
+             return
+@@ -4423,6 +4449,8 @@ export class Paginator extends HTMLElement {
+         this.#primaryView?.destroyLoupe()
+     }
+     destroy() {
++        this.#scheduleScrolledRelocate = null
++        this.#scrolledTouchPending = false
+         const transition = (this.#vtDrag ?? this.#vtFinishing)?.transition
+             ?? this.#vtProgrammatic?.transition
+         this.#vtDrag = null

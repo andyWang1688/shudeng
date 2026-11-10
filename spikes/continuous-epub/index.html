@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>整书连续滚动 · 引擎验证</title>
+  <style>
+    * { box-sizing: border-box }
+    body { margin: 0; padding: 20px; font: 15px/1.6 system-ui; color: #27241e; background: #f5f1e8 }
+    h1 { font-size: 20px; margin: 0 0 8px }
+    p { margin: 0 0 14px }
+    main { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start }
+    #reader { width: 375px; height: 600px; max-width: 100%; border: 1px solid #b5aa95; background: #fffdf7 }
+    foliate-view { display: block; width: 100%; height: 100% }
+    aside { width: 560px; max-width: 100% }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px }
+    button { padding: 8px 12px; border: 1px solid #b5aa95; border-radius: 6px; background: #fffdf7; font: inherit; cursor: pointer }
+    #state { padding: 12px; background: #fffdf7; border: 1px solid #d9d0be; font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere }
+    #error { color: #963526; white-space: pre-wrap }
+  </style>
+</head>
+<body>
+  <h1>整书连续滚动 · 一次性引擎验证</h1>
+  <p>问题：完整上游引擎能否让相邻章同时可见，并用同一滚动动作跨章？三章示例只保存在内存，不接产品和书库。</p>
+  <main>
+    <section id="reader" aria-label="三章连续阅读示例"></section>
+    <aside>
+      <nav aria-label="验证动作">
+        <button id="seam1">第一章与第二章接缝</button>
+        <button id="seam2">第二章与第三章接缝</button>
+        <button id="beginning">回到书首</button>
+        <button id="flow">切换分页</button>
+        <button id="font">调整字号</button>
+        <button id="highlight">高亮接缝原文</button>
+      </nav>
+      <p>在正文中滚动。接缝按钮只定位到两章交界；观察章节末尾与下一章标题是否同时可见。状态会显示真实 iframe、可见章节和 CFI。</p>
+      <p id="error" role="alert"></p>
+      <pre id="state">正在打开固定提交引擎…</pre>
+    </aside>
+  </main>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

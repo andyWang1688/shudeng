@@ -42,18 +42,32 @@ describe('EPUB annotation identity with real SQLite and the production Expo driv
     expect(await driver.all('SELECT created_at FROM annotations')).toEqual([{ created_at: 10 }]);
     expect(await driver.all('SELECT COUNT(*) AS count FROM anchors')).toEqual([{ count: 1 }]);
   });
-  it('upgrades a highlight to one note, preserving its anchor, color and creation time', async () => {
+  it('refuses implicit highlight-to-note conversion and preserves the complete original record', async () => {
     const { driver } = await setup(); const first = await saveEpubAnnotation(driver, 'book', input());
     await driver.run('UPDATE annotations SET created_at = 12 WHERE id = ?', [first.annotationId]);
+    const before = await driver.all('SELECT * FROM annotations');
+    const anchors = await driver.all('SELECT * FROM anchors');
     const { color: _color, ...note } = input();
-    expect(await saveEpubAnnotation(driver, 'book', { ...note, kind: 'note', body: '  我的笔记  ' })).toEqual(first);
-    expect(await driver.all('SELECT kind, color, body, created_at FROM annotations')).toEqual([{ kind: 'note', color: 'green', body: '  我的笔记  ', created_at: 12 }]);
+    await expect(saveEpubAnnotation(driver, 'book', { ...note, kind: 'note', body: '  我的笔记  ' })).rejects.toThrow('取消高亮');
+    expect(await driver.all('SELECT * FROM annotations')).toEqual(before);
+    expect(await driver.all('SELECT * FROM anchors')).toEqual(anchors);
   });
   it('re-highlighting a note updates color without erasing the note body', async () => {
     const { driver } = await setup(); const first = await saveEpubAnnotation(driver, 'book', { ...input(), kind: 'note', body: '保留正文' });
     expect(await saveEpubAnnotation(driver, 'book', { ...input(), color: 'rose' })).toEqual(first);
     expect(await driver.all('SELECT kind, color, body FROM annotations')).toEqual([{ kind: 'note', color: 'rose', body: '保留正文' }]);
     await expect(saveEpubAnnotation(driver, 'book', { ...input(), kind: 'note', body: ' ' })).rejects.toThrow('不能为空');
+  });
+  it('creates a note in a distinct DOM range and later edits that note without changing the highlight', async () => {
+    const { driver } = await setup(); const highlight = await saveEpubAnnotation(driver, 'book', input(0));
+    const before = await driver.all('SELECT * FROM annotations WHERE id = ?', [highlight.annotationId]);
+    const noteInput = { ...input(8), kind: 'note' as const, body: '另一处的笔记' };
+    const note = await saveEpubAnnotation(driver, 'book', noteInput);
+    expect(note.annotationId).not.toBe(highlight.annotationId);
+    expect(await saveEpubAnnotation(driver, 'book', { ...noteInput, body: '更新正文' })).toEqual(note);
+    expect(await driver.all('SELECT * FROM annotations WHERE id = ?', [highlight.annotationId])).toEqual(before);
+    expect(await driver.all('SELECT kind, body FROM annotations WHERE id = ?', [note.annotationId])).toEqual([{ kind: 'note', body: '更新正文' }]);
+    expect(await driver.all('SELECT COUNT(*) AS count FROM annotations')).toEqual([{ count: 2 }]);
   });
   it('keeps identical text in distinct DOM ranges separate even if an old engine gives the same CFI', async () => {
     const { driver } = await setup();

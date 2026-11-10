@@ -26,6 +26,7 @@ declare module 'foliate-js/overlayer.js' {
 declare module 'foliate-js/epub.js' {
   export class EPUB {
     constructor(loader: {
+      entries: readonly { filename: string; uncompressedSize: number }[]
       loadText(path: string): Promise<string | null>
       loadBlob(path: string, mimeType?: string): Promise<Blob | null>
       getSize(path: string): number

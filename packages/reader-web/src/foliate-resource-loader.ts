@@ -31,6 +31,9 @@ export function foliateResourceLoader(archive: EpubArchiveDescriptor, fetchResou
     } finally { pending.delete(controller); }
   };
   return {
+    // Foliate indexes ZIP metadata without reading each resource. Keep exact
+    // archive names here; native UUIDs remain private to consume().
+    entries: archive.entries.map(entry => ({ filename: entry.path, uncompressedSize: entry.size })),
     loadText: (path: string) => consume(path, async response => {
       const bytes = new Uint8Array(await response.arrayBuffer());
       const little = (bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0x3c && bytes[1] === 0);

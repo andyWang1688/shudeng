@@ -166,6 +166,7 @@ function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat' } = 
     async close() { await act(() => mounted.unmount()); document.body.removeChild(container); },
     async mode(mode) { await act(() => appearance.setMode(mode)); },
     async ask(selection, times = 1) { await act(() => { for (let i = 0; i < times; i++) question.ask(selection); }); },
+    async openHistory(conversationId) { await act(() => router.push({ pathname: '/book-chat', params: { bookId: 'book', conversationId } })); },
     async back() { await act(() => router.back()); },
     async params(patch) { await act(() => router.setParams(patch)); },
     async transition(routeKey, closing = false) { await act(() => transition({ target: routeKey, data: { closing } })); },

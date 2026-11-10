@@ -6,8 +6,6 @@ import { saveEpubAnnotation } from './epubAnnotations';
  */
 import { createDatabase, ShudengStore, type AnchorRow } from '@shudeng/core/db';
 import { getDataLayer } from '../db';
-import { loadShelfBooks } from './import';
-import type { ShelfBookRecord } from './types';
 import {
   anchorJsonForSelection,
   annotationReadingOrder,
@@ -153,17 +151,4 @@ export async function updateReaderAnnotation(annotationId: string, patch: { read
   // The native editor validates trimmed content but stores the entered body verbatim.
   if (patch.body !== undefined) await driver.run('UPDATE annotations SET body = ?, updated_at = ? WHERE id = ?', [patch.body, Date.now(), annotationId]);
   if (patch.color !== undefined) await driver.run('UPDATE annotations SET color = ?, updated_at = ? WHERE id = ?', [patch.color, Date.now(), annotationId]);
-}
-
-export async function loadAllAnnotations(): Promise<ReadonlyArray<{ book: ShelfBookRecord; annotation: ShelfAnnotation }>> {
-  // Match the native notes list: hide removed books without deleting their records.
-  // loadBookAnnotations still exposes the retained records after the source is restored.
-  const books = await loadShelfBooks();
-  const result: Array<{ book: ShelfBookRecord; annotation: ShelfAnnotation }> = [];
-  for (const book of books) {
-    const annotations = await loadBookAnnotations(book.id);
-    for (const annotation of annotations) result.push({ book, annotation });
-  }
-  // Keep the library catalog order for book groups, as NotesController does.
-  return result;
 }

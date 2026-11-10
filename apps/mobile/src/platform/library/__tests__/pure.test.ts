@@ -135,6 +135,12 @@ describe('anchorJsonForSelection', () => {
     expect(annotationReadingOrder({ locations: { progression: 1.1 } })).toEqual({});
     expect(annotationReadingOrder({ locations: { progression: '0.8' } })).toEqual({});
   });
+  it('reads ordering metadata from the current saved EPUB selection shape', () => {
+    const raw = anchorJsonForSelection({ kind: 'note', format: 'EPUB', body: '笔记', locator: {
+      type: 'epub', cfi: 'epubcfi(/6/4)', selection: { href: 'chapter.xhtml', locations: { totalProgression: .6, progression: .4, position: 24 } },
+    } });
+    expect(annotationReadingOrder(raw)).toEqual({ progression: .6, localProgression: .4, position: 24 });
+  });
   it('writes AnchorV3 shapes for pdf / cfi / readium', () => {
     const pdf = JSON.parse(anchorJsonForSelection({
       kind: 'highlight',

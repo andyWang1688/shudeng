@@ -1,8 +1,9 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Image } from "expo-image";
 import {
+  Animated,
+  Easing,
   Pressable,
-  Platform,
   StyleSheet,
   Text,
   View,
@@ -28,6 +29,7 @@ type Props = {
     readonly coverUri?: string | null | undefined;
   };
   readonly expanded?: boolean;
+  readonly transitionDuration?: number;
   readonly onPress?: () => void;
   readonly trailing?: ReactNode;
   readonly style?: StyleProp<ViewStyle>;
@@ -41,6 +43,7 @@ export function SectionHeader({
   variant = "section",
   swatch,
   expanded,
+  transitionDuration = 0,
   onPress,
   trailing,
   style,
@@ -66,7 +69,7 @@ export function SectionHeader({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${title} ${count ?? ""}${countSuffix ?? ""}`}
-      accessibilityState={Platform.OS === 'android' ? { expanded: expanded ?? false } : undefined}
+      accessibilityState={{ expanded: expanded ?? false }}
       accessibilityValue={{ text: expanded ? "已展开" : "已收起" }}
       onPress={onPress}
       android_ripple={{ color: palette.line }}
@@ -105,16 +108,61 @@ export function SectionHeader({
         ) : null}
       </View>
       {onPress ? (
-        <SymbolView
-          name={expanded ? "chevron.down" : "chevron.right"}
-          size={13}
-          weight="semibold"
-          tintColor={palette.lamp}
+        <DisclosureChevron
+          expanded={expanded ?? false}
+          duration={transitionDuration}
+          color={palette.lamp}
         />
       ) : (
         trailing
       )}
     </Pressable>
+  );
+}
+
+function DisclosureChevron({
+  expanded,
+  duration,
+  color,
+}: {
+  readonly expanded: boolean;
+  readonly duration: number;
+  readonly color: string;
+}) {
+  const rotation = useRef(new Animated.Value(expanded ? 1 : 0)).current;
+  useEffect(() => {
+    const animation = Animated.timing(rotation, {
+      toValue: expanded ? 1 : 0,
+      duration,
+      easing: Easing.inOut(Easing.ease),
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [expanded, duration, rotation]);
+  return (
+    <Animated.View
+      accessible={false}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={{
+        transform: [
+          {
+            rotate: rotation.interpolate({
+              inputRange: [0, 1],
+              outputRange: ["0deg", "90deg"],
+            }),
+          },
+        ],
+      }}
+    >
+      <SymbolView
+        name="chevron.right"
+        size={13}
+        weight="semibold"
+        tintColor={color}
+      />
+    </Animated.View>
   );
 }
 
@@ -136,16 +184,16 @@ function createStyles(palette: Palette) {
     },
     sectionCount: { fontSize: typeScale.captionSmall, color: palette.ink3 },
     group: {
-      minHeight: 56,
-      paddingVertical: 11,
+      minHeight: 76,
+      paddingVertical: 12,
       flexDirection: "row",
       alignItems: "center",
-      gap: 16,
+      gap: 12,
     },
     pressed: { opacity: 0.7 },
     swatch: {
-      width: 22,
-      height: 30,
+      width: 30,
+      height: 42,
       borderRadius: 3,
       alignItems: "center",
       justifyContent: "center",
@@ -158,16 +206,15 @@ function createStyles(palette: Palette) {
     },
     groupBody: { flex: 1 },
     groupTitle: {
-      fontSize: 13,
-      lineHeight: 16,
-      fontWeight: "600",
+      fontSize: 23,
+      lineHeight: 31,
+      fontWeight: "700",
       color: palette.ink,
     },
     groupCount: {
-      marginTop: 3,
-      fontSize: 10.5,
-      lineHeight: 13,
-      fontWeight: "500",
+      marginTop: 5,
+      fontSize: 13,
+      lineHeight: 20,
       color: palette.ink3,
     },
   });

@@ -97,7 +97,7 @@ export type HostToReader =
   | { type: 'reader:annotation:remove'; payload: { id: string } }
   | { type: 'reader:selection:clear' }
   | { type: 'reader:selection:actions'; payload: { enabled: boolean } }
-  | { type: 'reader:bookmark-context'; payload: { requestId: number; bookmarks: ReadonlyArray<{ id: string; locator: EpubLocator }> } }
+  | { type: 'reader:bookmark-context'; payload: { requestId: number; bookmarks: ReadonlyArray<{ id: string; locator: EpubLocator }>; captureLocation?: boolean } }
   | { type: 'reader:contents' }
   | { type: 'reader:search'; payload: { query: string; requestId: number } }
 

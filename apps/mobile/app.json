@@ -3,13 +3,13 @@
     "name": "书灯",
     "slug": "shudeng-mobile",
     "scheme": "shudeng",
-    "version": "0.4.8",
+    "version": "0.5.0",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "buildNumber": "12",
+      "buildNumber": "13",
       "bundleIdentifier": "dev.shudeng.mobile",
       "infoPlist": {
         "UISupportedInterfaceOrientations": [

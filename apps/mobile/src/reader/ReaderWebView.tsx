@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { ElementRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
@@ -53,7 +53,7 @@ export type ReaderWebViewHandle = {
   navigate: (command: ReaderNavigationCommand) => void;
   search: (query: string, requestId: number) => void;
   requestContents: () => void;
-  captureBookmarkContext: (bookmarks: readonly { readonly id: string; readonly locator: ReaderLocator }[], requestId: number) => void;
+  captureBookmarkContext: (bookmarks: readonly { readonly id: string; readonly locator: ReaderLocator }[], requestId: number, captureLocation?: boolean) => void;
 };
 
 type SelectionState = {
@@ -67,7 +67,7 @@ type SelectionState = {
  * 通过 reader:open/ready/selection/progress/annotation 协议与网页阅读器双向通信。
  * Expo Web 使用 ReaderWebView.web.tsx 的 iframe 实现；这里只在 iOS/Android 生效。
  */
-export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView(
+export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView(
   { bookId, initialLocation, openOverride, initialAnnotations, selectionBar = true, selectionActionsEnabled = true, theme = 'light', fontScale = 1, flow = 'paginated', onTap, onEvent },
   ref,
 ) {
@@ -80,11 +80,15 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
   const [archive, setArchive] = useState<EpubArchiveDescriptor | null>(null);
   const archiveOwner = useRef<{ archive: EpubArchiveDescriptor; fileUri: string; nativeOwnsClose: boolean } | null>(null);
   const sentAnnotations = useRef(new Map<string, string>());
+  const sentPreferences = useRef<{ theme: 'light' | 'dark'; fontSize: number; flow?: 'paginated' | 'scrolled' } | null>(null);
   const initializedBook = useRef<string | null>(null);
   const nativeCommandId = useRef(0);
+  const nativeAcknowledgedId = useRef(0);
   const [nativeCommands, setNativeCommands] = useState<readonly { readonly id: number; readonly message: object }[]>([]);
+  const nativeCommand = useMemo(() => JSON.stringify(nativeCommands), [nativeCommands]);
   const nativeSurface = (openOverride?.format ?? (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub')) === 'epub' && NativeEpubSurface !== null;
   const engineFlow = flow === 'scrolled' ? 'scrolled' : 'paginated';
+  const fontSize = fontScale * 18.5;
 
   const format = useMemo(() => (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub'), [bookId]);
   const fixture = readerFixtures[format];
@@ -144,9 +148,10 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
     if (fileUri && !archive) return;
     openSent.current = true;
     const payload = openOverride
-      ? { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, ...('dataBase64' in openOverride ? { dataBase64: openOverride.dataBase64 } : { archive }), mimeType: openOverride.mimeType, theme, fontSize: fontScale * 18.5, flow: engineFlow, ...(initialLocation ? { initialLocation } : {}) } }
-      : { ...openPayloadForBook(bookId, fixture, initialLocation), payload: { ...openPayloadForBook(bookId, fixture, initialLocation).payload, theme, fontSize: fontScale * 18.5, flow: engineFlow } };
+      ? { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, ...('dataBase64' in openOverride ? { dataBase64: openOverride.dataBase64 } : { archive }), mimeType: openOverride.mimeType, theme, fontSize, flow: engineFlow, ...(initialLocation ? { initialLocation } : {}) } }
+      : { ...openPayloadForBook(bookId, fixture, initialLocation), payload: { ...openPayloadForBook(bookId, fixture, initialLocation).payload, theme, fontSize, flow: engineFlow } };
     const opening = { ...payload, payload: { ...payload.payload, selectionActionsEnabled } };
+    sentPreferences.current = { theme, fontSize, ...(opening.payload.format === 'epub' ? { flow: engineFlow } : {}) };
     if (nativeSurface) { send(opening); return; }
     const message = JSON.stringify(opening);
     // HTML 的 module 脚本可能晚于 onLoadEnd 执行，注入前轮询等待 __readerHost 就绪。
@@ -161,7 +166,7 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
         deliver();
       })(); true;
     `);
-  }, [archive, bookId, engineFlow, fileUri, fixture, fontScale, initialLocation, nativeSurface, openOverride, selectionActionsEnabled, send, theme]);
+  }, [archive, bookId, engineFlow, fileUri, fixture, fontSize, initialLocation, nativeSurface, openOverride, selectionActionsEnabled, send, theme]);
 
   useImperativeHandle(ref, () => ({
     highlightSelection: (locator: ReaderLocator, quote: string) => { if (selectionActionsEnabled) onEvent({ type: 'annotationAdded', locator, quote }); },
@@ -173,7 +178,7 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
     navigate: command => send({ type: 'reader:navigate', payload: command }),
     search: (query: string, requestId: number) => send({ type: 'reader:search', payload: { query, requestId } }),
     requestContents: () => send({ type: 'reader:contents' }),
-    captureBookmarkContext: (bookmarks, requestId) => send({ type: 'reader:bookmark-context', payload: { bookmarks, requestId } }),
+    captureBookmarkContext: (bookmarks, requestId, captureLocation) => send({ type: 'reader:bookmark-context', payload: { bookmarks, requestId, ...(captureLocation === undefined ? {} : { captureLocation }) } }),
   }), [onEvent, selectionActionsEnabled, send]);
 
   const handleMessage = useCallback((incoming: IncomingMessage) => {
@@ -222,11 +227,13 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
   }, [initialAnnotations, ready, send]);
 
   useEffect(() => {
-    if (!ready) return;
-    send({ type: 'reader:theme', payload: { theme } });
-    send({ type: 'reader:fontSize', payload: { fontSize: fontScale * 18.5 } });
-    send({ type: 'reader:flow', payload: { flow: engineFlow } });
-  }, [engineFlow, fontScale, ready, send, theme]);
+    if (!ready || initializedBook.current !== bookId) return;
+    const previous = sentPreferences.current;
+    if (previous?.theme !== theme) send({ type: 'reader:theme', payload: { theme } });
+    if (previous?.fontSize !== fontSize) send({ type: 'reader:fontSize', payload: { fontSize } });
+    if (previous?.flow !== engineFlow) send({ type: 'reader:flow', payload: { flow: engineFlow } });
+    sentPreferences.current = { theme, fontSize, flow: engineFlow };
+  }, [bookId, engineFlow, fontSize, ready, send, theme]);
 
   const highlightSelection = useCallback(() => {
     if (selectionActionsEnabled && selection) onEvent({ type: 'annotationAdded', locator: selection.locator, quote: selection.quote });
@@ -244,13 +251,14 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
     openSent.current = false;
     setReady(false);
     sentAnnotations.current.clear();
+    sentPreferences.current = null;
   }, [bookId]);
 
   return (
     <View style={styles.container}>
       {nativeSurface && NativeEpubSurface && (!fileUri || archive) ? <NativeEpubSurface
         archiveSessionID={archive?.sessionID ?? ''}
-        html={readerWebHtml} command={JSON.stringify(nativeCommands)} curl={flow === 'curl'} dark={theme === 'dark'} style={styles.webView}
+        html={readerWebHtml} command={nativeCommand} curl={flow === 'curl'} dark={theme === 'dark'} style={styles.webView}
         onEpubEvent={({ nativeEvent }) => {
           const value: unknown = JSON.parse(nativeEvent.message);
           if (typeof value !== 'object' || value === null) return;
@@ -263,7 +271,10 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
           }
           if (native.type === 'native:ack' && typeof native.payload?.id === 'number') {
             const id = native.payload.id;
-            setNativeCommands(commands => commands.filter(command => command.id > id));
+            if (id <= nativeAcknowledgedId.current) return;
+            nativeAcknowledgedId.current = id;
+            // ACK confirms receipt into the native queue, not execution.
+            setNativeCommands(commands => commands.some(command => command.id <= id) ? commands.filter(command => command.id > id) : commands);
             return;
           }
           if (native.type === 'reader:tap') { onTap?.(); return; }
@@ -302,7 +313,7 @@ export const ReaderWebView = forwardRef<ReaderWebViewHandle, ReaderWebViewProps>
       ) : null}
     </View>
   );
-});
+}));
 
 function makeStyles(palette: Palette) {
   return StyleSheet.create({

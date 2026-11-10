@@ -1,23 +1,27 @@
-import { useEffect, useMemo, useRef } from 'react';
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { SymbolView } from 'expo-symbols';
-import { spacing, usePalette, type Palette } from '../ui/theme';
-import { useReduceMotion } from '../ui/chat/useReduceMotion';
-import { NativeEpubChrome, type EpubChromeAction } from './NativeEpubChrome';
+import { useEffect, useMemo, useRef } from "react";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  Bookmark,
+  ChevronLeft,
+  Info,
+  List,
+  Maximize2,
+  MessageCircle,
+  Settings2,
+} from "lucide-react-native";
+import { usePalette, type Palette } from "../ui/theme";
+import { useReduceMotion } from "../ui/chat/useReduceMotion";
 
 export type ReaderChromeProps = {
   readonly title: string;
-  readonly chapter?: string | null;
-  readonly progressText: string;
+  readonly format?: "epub" | "pdf";
   readonly referenceMode?: boolean;
   readonly visible: boolean;
   readonly onBack: () => void;
   readonly onAnnotations?: () => void;
-  /** Swift 阅读器右上「更多」：书签等次要操作放入该菜单。 */
-  readonly onMore?: () => void;
   readonly onSettings?: () => void;
-  readonly onSearch?: () => void;
+  readonly onHelp?: () => void;
   readonly onBookmark?: () => void;
   readonly bookmarked?: boolean;
   readonly onAsk: () => void;
@@ -25,171 +29,250 @@ export type ReaderChromeProps = {
   readonly onToggleChrome?: () => void;
 };
 
-/** The native presentation port shares this RN reader's state and intents. */
-export function ReaderChrome(props: ReaderChromeProps) {
-  const palette = usePalette();
-  if (!NativeEpubChrome) return <ReaderChromeFallback {...props} />;
-  const handleAction = (action: EpubChromeAction) => {
-    switch (action) {
-      case 'back': props.onBack(); break;
-      case 'contents': props.onAnnotations?.(); break;
-      case 'settings': (props.onSettings ?? props.onMore)?.(); break;
-      case 'ask': props.onAsk(); break;
-      case 'bookmark': props.onBookmark?.(); break;
-      case 'toggleChrome': props.onToggleChrome?.(); break;
-    }
-  };
-  return <NativeEpubChrome
-    title={props.title} chapter={props.chapter || props.title} progress={props.progressText}
-    referenceMode={props.referenceMode ?? false} bookmarked={props.bookmarked ?? false}
-    chromeVisible={props.visible} controlsEnabled={props.controlsEnabled ?? true} dark={palette.paper === '#1B1A17'}
-    onChromeAction={event => handleAction(event.nativeEvent.action)}
-    style={[StyleSheet.absoluteFill, { zIndex: 20 }]}
-  />;
-}
-
-/** Portable fallback. iOS uses the UIKit 64pt toolbar and 76pt footer above. */
-function ReaderChromeFallback({
+/** Reading occupies a stable viewport; these surfaces float above it on every platform. */
+export function ReaderChrome({
   title,
-  chapter,
-  progressText,
+  format = "epub",
   referenceMode = false,
   visible,
   controlsEnabled = true,
   onBack,
   onAnnotations,
-  onMore,
   onSettings,
-  onSearch,
+  onHelp,
   onBookmark,
   bookmarked = false,
   onAsk,
+  onToggleChrome,
 }: ReaderChromeProps) {
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
-  const opacity = useRef(new Animated.Value(1)).current;
+  const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const reduceMotion = useReduceMotion();
-
   useEffect(() => {
     Animated.timing(opacity, {
       toValue: visible ? 1 : 0,
-      duration: reduceMotion ? 0 : 200,
+      duration: reduceMotion ? 0 : 180,
       useNativeDriver: true,
     }).start();
   }, [opacity, reduceMotion, visible]);
-
   return (
-    <Animated.View style={[styles.root, { opacity }]} pointerEvents={visible ? 'box-none' : 'none'}>
-      <View style={[styles.toolbar, { paddingTop: insets.top, height: 51 + insets.top }]}>
-        <View style={[styles.toolbarRow, { paddingLeft: Math.max(13, insets.left), paddingRight: Math.max(13, insets.right) }]}>
+    <>
+      {!visible && onToggleChrome ? (
+        <Pressable
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel="显示阅读工具栏"
+          onPress={onToggleChrome}
+          style={styles.accessibleToggle}
+        />
+      ) : null}
+      <Animated.View
+        style={[styles.root, { opacity }]}
+        pointerEvents={visible ? "box-none" : "none"}
+        accessibilityElementsHidden={!visible}
+        importantForAccessibility={visible ? "auto" : "no-hide-descendants"}
+      >
+        {/* PDFKit uses these mounted native bounds to position its selection menu. */}
+        <View
+          testID={format === "pdf" ? "pdf-reader-toolbar" : undefined}
+          collapsable={false}
+          style={[
+            styles.toolbar,
+            {
+              top: insets.top + 8,
+              left: Math.max(12, insets.left),
+              right: Math.max(12, insets.right),
+            },
+          ]}
+        >
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={referenceMode ? '返回问答' : '书架'}
+            accessibilityLabel={referenceMode ? "返回问答" : "返回书架"}
             onPress={onBack}
-            style={styles.backButton}
+            style={styles.iconButton}
           >
-            <SymbolView name="arrow.left" size={20} tintColor={palette.ink2} />
-            {referenceMode ? <Text style={styles.referenceBack}>返回问答</Text> : null}
+            <ChevronLeft size={20} color={palette.ink2} />
           </Pressable>
-          <View style={styles.heading} pointerEvents="none">
-            <Text style={styles.title} numberOfLines={1}>{title}</Text>
-            {chapter ? <Text style={styles.chapter} numberOfLines={1}>{chapter}</Text> : null}
-          </View>
-          <View style={styles.actions}>
-            {onAnnotations ? (
-              <Pressable accessibilityRole="button" accessibilityLabel="目录与书签" onPress={onAnnotations} disabled={!controlsEnabled} style={styles.iconButton}>
-                <SymbolView name="list.bullet" size={19} tintColor={palette.ink2} />
-              </Pressable>
-            ) : null}
-            {onSearch ? <Pressable accessibilityRole="button" accessibilityLabel="书内搜索" onPress={onSearch} style={styles.iconButton}><SymbolView name="magnifyingglass" size={19} tintColor={palette.ink2} /></Pressable> : null}
-            {onSettings || onMore ? (
-              <Pressable accessibilityRole="button" accessibilityLabel="阅读设置" onPress={onSettings ?? onMore} disabled={!controlsEnabled} style={styles.iconButton}>
-                <SymbolView name="ellipsis" size={19} tintColor={palette.ink2} />
-              </Pressable>
-            ) : null}
-          </View>
+          <Text style={styles.title} numberOfLines={1}>
+            {referenceMode ? "返回问答 · " + title : title}
+          </Text>
+          {onHelp ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="关于这份 PDF"
+              onPress={onHelp}
+              style={styles.iconButton}
+            >
+              <Info size={18} color={palette.ink2} />
+            </Pressable>
+          ) : null}
+          {onToggleChrome ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="开启阅读专注模式"
+              onPress={onToggleChrome}
+              style={styles.iconButton}
+            >
+              <Maximize2 size={18} color={palette.ink2} />
+            </Pressable>
+          ) : null}
+          {onBookmark ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                bookmarked ? "取消当前位置书签" : "添加当前位置书签"
+              }
+              accessibilityState={{
+                selected: bookmarked,
+                disabled: !controlsEnabled,
+              }}
+              disabled={!controlsEnabled}
+              onPress={onBookmark}
+              style={[styles.iconButton, !controlsEnabled && styles.disabled]}
+            >
+              <Bookmark
+                size={20}
+                color={bookmarked ? palette.lampInk : palette.ink2}
+                fill={bookmarked ? palette.lampInk : "none"}
+              />
+            </Pressable>
+          ) : null}
         </View>
-      </View>
-
-      {onBookmark && bookmarked ? <Pressable accessibilityRole="button" accessibilityLabel="移除当前页书签" accessibilityState={{ selected: true }} onPress={onBookmark} style={[styles.ribbon, { top: insets.top + 56 }]}><SymbolView name="bookmark.fill" size={22} tintColor={palette.lamp} /></Pressable> : null}
-
-      <View style={[styles.footer, { paddingBottom: insets.bottom, height: 76 + insets.bottom }]}>
-        <Text style={styles.progress}>{progressText}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel="问问书灯" onPress={onAsk} style={styles.askCapsule}>
-          <SymbolView name="lightbulb" size={16} tintColor={palette.ink} />
-          <Text style={styles.askText}>问问书灯</Text>
-        </Pressable>
-        <Text style={styles.chapterRight} numberOfLines={1}>{chapter ?? ''}</Text>
-      </View>
-    </Animated.View>
+        <View
+          testID={format === "pdf" ? "pdf-reader-footer" : undefined}
+          collapsable={false}
+          style={[
+            styles.footer,
+            {
+              bottom: Math.max(insets.bottom, 12),
+              left: Math.max(16, insets.left),
+              right: Math.max(16, insets.right),
+            },
+          ]}
+        >
+          {onAnnotations ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="目录、书签与标注"
+              onPress={onAnnotations}
+              disabled={!controlsEnabled}
+              style={[styles.tool, !controlsEnabled && styles.disabled]}
+            >
+              <List size={20} color={palette.ink2} />
+              <Text style={styles.toolLabel}>目录</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="问问这本书"
+            onPress={onAsk}
+            disabled={!controlsEnabled}
+            style={[styles.ask, !controlsEnabled && styles.disabled]}
+          >
+            <MessageCircle size={18} color={palette.lampInk} />
+            <Text style={styles.askText}>问问这本书</Text>
+          </Pressable>
+          {onSettings ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="阅读设置"
+              onPress={onSettings}
+              disabled={!controlsEnabled}
+              style={[styles.tool, !controlsEnabled && styles.disabled]}
+            >
+              <Settings2 size={20} color={palette.ink2} />
+              <Text style={styles.toolLabel}>阅读设置</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </Animated.View>
+    </>
   );
 }
 
 function makeStyles(palette: Palette) {
   return StyleSheet.create({
-  root: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 20 },
-  toolbar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    backgroundColor: `${palette.paper}F0`,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: palette.line,
-    justifyContent: 'flex-end',
-  },
-  toolbarRow: {
-    height: 51,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  backButton: { minWidth: 88, height: 44, flexDirection: 'row', alignItems: 'center', gap: 4 },
-  referenceBack: { color: palette.ink2, fontSize: 12 },
-  heading: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
-  title: { color: palette.ink, fontSize: 13, fontWeight: '600', lineHeight: 17 },
-  chapter: { color: palette.ink3, fontSize: 10, lineHeight: 14 },
-  actions: { flexDirection: 'row', alignItems: 'center' },
-  iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  ribbon: { position: 'absolute', right: 21, width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
-  badge: { position: 'absolute', top: 7, right: 3, minWidth: 12, textAlign: 'center', fontSize: 9, color: palette.paper, backgroundColor: palette.lamp, borderRadius: 6, overflow: 'hidden' },
-  footer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: `${palette.paper}F0`,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: palette.line,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingTop: 4,
-  },
-  progress: { width: 56, color: palette.ink3, fontSize: 11, paddingBottom: 10 },
-  chapterRight: { flexShrink: 1, maxWidth: '54%', textAlign: 'right', color: palette.ink3, fontSize: 11, paddingBottom: 10 },
-  askCapsule: {
-    position: 'absolute',
-    bottom: 36,
-    alignSelf: 'center',
-    left: '50%',
-    marginLeft: -62,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderRadius: 22,
-    backgroundColor: palette.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.line,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-  },
-  askText: { fontSize: 13, fontWeight: '600', color: palette.ink },
+    root: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      zIndex: 20,
+    },
+    accessibleToggle: {
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: 1,
+      height: 1,
+    },
+    toolbar: {
+      position: "absolute",
+      minHeight: 52,
+      paddingHorizontal: 4,
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: palette.paper + "F5",
+      borderRadius: 26,
+      borderCurve: "continuous",
+      shadowColor: "#000",
+      shadowOpacity: 0.08,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 2 },
+    },
+    title: {
+      flex: 1,
+      paddingHorizontal: 4,
+      fontSize: 15,
+      lineHeight: 22,
+      fontWeight: "600",
+      color: palette.ink,
+    },
+    iconButton: {
+      width: 44,
+      minHeight: 44,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    footer: {
+      position: "absolute",
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 8,
+      backgroundColor: palette.paper + "F5",
+      borderRadius: 31,
+      borderCurve: "continuous",
+      shadowColor: "#000",
+      shadowOpacity: 0.1,
+      shadowRadius: 16,
+      shadowOffset: { width: 0, height: 4 },
+    },
+    tool: {
+      minWidth: 58,
+      minHeight: 50,
+      gap: 3,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    toolLabel: { color: palette.ink2, fontSize: 11, lineHeight: 17 },
+    ask: {
+      minHeight: 44,
+      flexShrink: 1,
+      paddingHorizontal: 18,
+      gap: 7,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: palette.lampWash,
+      borderRadius: 24,
+    },
+    askText: { color: palette.lampInk, fontSize: 15, lineHeight: 23 },
+    disabled: { opacity: 0.35 },
   });
 }

@@ -63,7 +63,13 @@ test("context capacity is optional and a changed destination invalidates sending
       .contextWindowTokens,
     128000,
   );
-  for (const size of [999, 1000001, 1.5, NaN])
+  for (const size of [1_000_000, 1_047_576, 2_000_000, Number.MAX_SAFE_INTEGER]) {
+    assert.equal(validateServiceDraft({ ...draft, contextWindowTokens: size }).contextWindowTokens, size);
+    const saved = parseAICatalog(JSON.stringify({ version: 2, selectedId: service.id,
+      services: [{ ...service, contextWindowTokens: size }] }));
+    assert.equal(saved.services[0]?.contextWindowTokens, size);
+  }
+  for (const size of [999, 1.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1])
     assert.throws(() =>
       validateServiceDraft({ ...draft, contextWindowTokens: size }),
     );

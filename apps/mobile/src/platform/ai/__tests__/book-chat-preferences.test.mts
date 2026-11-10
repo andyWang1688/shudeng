@@ -15,7 +15,8 @@ const state = vi.hoisted(() => ({
   models: [] as Array<Record<string, unknown>>,
   runs: [] as Array<Record<string, unknown>>,
 }));
-vi.mock("@shudeng/core", () => ({
+vi.mock("@shudeng/core/agent", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@shudeng/core/agent")>(),
   createChatModel: (config: Record<string, unknown>) => {
     state.models.push(config);
     return config;
@@ -141,4 +142,39 @@ describe("product agent preference snapshots", () => {
     expect(state.models).toEqual([]);
     expect(state.runs).toEqual([]);
   });
+
+  it("uses bundled input metadata automatically rather than a provider-wide default", async () => {
+    await startBookChatTurn({ bookId: "book", question: "问题" });
+    expect(state.runs[0]!.contextWindowTokens).toBe(1_047_576);
+  });
+
+  it.each([1_000_000, 1_047_576, 2_000_000, Number.MAX_SAFE_INTEGER])(
+    "keeps saved manual window %i in the real agent budget", async (size) => {
+      Object.assign(state.config, { contextWindowTokens: size });
+      await startBookChatTurn({ bookId: "book", question: "问题" });
+      expect(state.runs[0]!.contextWindowTokens).toBe(size);
+    },
+  );
+
+  it("gives the per-turn override precedence and fits output to a small window", async () => {
+    Object.assign(state.config, { contextWindowTokens: 1_047_576 });
+    await startBookChatTurn({ bookId: "book", question: "问题", contextWindowTokens: 1000 });
+    expect(state.runs[0]).toMatchObject({ contextWindowTokens: 1000, outputReserveTokens: 500 });
+    expect(state.models.map(model => model.maxTokens)).toEqual([500, 500]);
+  });
+
+  it("uses explicit fallback for an unknown custom DeepSeek model with matching thinking output reserve", async () => {
+    Object.assign(state.config, { model: "deepseek-private", baseUrl: "https://gateway.example/v1" });
+    await startBookChatTurn({ bookId: "book", question: "问题" });
+    expect(state.runs[0]).toMatchObject({ contextWindowTokens: 32768, outputReserveTokens: 16384 });
+    expect(state.models[0]!.maxTokens).toBe(16384);
+  });
+
+  it.each([NaN, Infinity, 999, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid per-turn window %s before creating models or dispatching", async (size) => {
+      await expect(startBookChatTurn({ bookId: "book", question: "问题", contextWindowTokens: size })).rejects.toThrow("安全整数");
+      expect(state.models).toEqual([]);
+      expect(state.runs).toEqual([]);
+    },
+  );
 });

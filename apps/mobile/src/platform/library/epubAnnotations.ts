@@ -19,6 +19,8 @@ export async function saveEpubAnnotation(driver: SQLiteDriver, bookId: string, i
       [bookId, input.kind === 'bookmark' ? 1 : 0],
     );
     const existing = candidates.find(candidate => (input.kind === 'bookmark' ? sameEpubBookmark : sameEpubSelection)(candidate.locator_json, input.locator));
+    // Validate against the durable record, including calls from an older UI snapshot.
+    if (input.kind === 'note' && existing?.kind === 'highlight') throw new Error('请先取消高亮，再添加笔记');
     const anchorId = existing?.anchor_id ?? createLocalId('anchor');
     const annotationId = existing?.id ?? createLocalId('annotation');
     const now = Date.now();

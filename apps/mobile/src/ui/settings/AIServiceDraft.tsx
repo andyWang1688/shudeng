@@ -10,10 +10,14 @@ export const AI_PRESETS: Record<
     model: "deepseek-flash",
     baseUrl: "https://api.deepseek.com",
   },
-  openai: { name: "自定义服务", model: "", baseUrl: "" },
+  openai: {
+    name: "OpenAI",
+    model: "gpt-4.1",
+    baseUrl: "https://api.openai.com/v1",
+  },
   anthropic: {
-    name: "自定义服务",
-    model: "",
+    name: "Anthropic",
+    model: "claude-sonnet-4-5",
     baseUrl: "https://api.anthropic.com",
   },
 };
@@ -31,6 +35,8 @@ function useDraftState(service: AIService | null, selected: boolean) {
   const [windowSize, setWindowSize] = useState(
     service?.contextWindowTokens?.toString() ?? "",
   );
+  const [manualWindowSize, setManualWindowSize] = useState(windowSize);
+  const [windowAutomatic, setWindowAutomatic] = useState(windowSize === "");
   const [key, setKey] = useState("");
   const [webSearchEnabled, setWebSearchEnabled] = useState(
     service?.webSearchEnabled ?? false,
@@ -39,7 +45,9 @@ function useDraftState(service: AIService | null, selected: boolean) {
     service,
     selected,
     provider,
-    setProvider,
+    setProvider: (value: AIProvider) => {
+      if (!service) setProvider(value);
+    },
     name,
     setName,
     model,
@@ -48,6 +56,10 @@ function useDraftState(service: AIService | null, selected: boolean) {
     setBaseUrl,
     windowSize,
     setWindowSize,
+    manualWindowSize,
+    setManualWindowSize,
+    windowAutomatic,
+    setWindowAutomatic,
     key,
     setKey,
     webSearchEnabled,

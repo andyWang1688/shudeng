@@ -1,9 +1,11 @@
 import { defineConfig } from 'vite'
+import { foliateEpubOnly } from './foliate-build.ts'
 
 // 单文件构建：内联 JS/CSS/worker，供 RN WebView 的 source={{ html }} 使用。
 export default defineConfig({
   base: './',
   plugins: [
+    foliateEpubOnly(),
     {
       name: 'reader-inline-entry',
       enforce: 'pre',

@@ -282,7 +282,7 @@ test('the first EPUB layout uses the requested typography and flow exactly once'
   const initial = log.find(item => item[0] === 'first-layout')[1]
   assert.equal(host.dataset.theme, 'dark')
   assert.equal(initial.attributes.flow, 'scrolled')
-  assert.equal(initial.attributes.margin, '28px')
+  for (const edge of ['top', 'right', 'bottom', 'left']) assert.equal(initial.attributes['margin-' + edge], '28px')
   assert.match(initial.styles[1], /font-size: 27\.428571428571427px/)
   assert.match(initial.styles[1], /#1B1A17/)
   assert.equal(log.filter(item => item[0] === 'styles').length, 1)
@@ -295,7 +295,7 @@ test('the first EPUB layout uses the requested typography and flow exactly once'
   assert.equal(log.length, afterClamp, 'equal effective clamped size must not restore CFI')
   await reader.setFlow('paginated')
   assert.equal(log.filter(item => item[0] === 'goTo').length, 2, 'each real font/flow change restores the current CFI once')
-  assert.equal(log.filter(item => item[0] === 'attribute' && item[1] === 'margin').length, 1)
+  for (const edge of ['top', 'right', 'bottom', 'left']) assert.equal(log.filter(item => item[0] === 'attribute' && item[1] === 'margin-' + edge).length, 1)
   assert.equal(log.filter(item => item[0] === 'attribute' && item[1] === 'max-column-count').length, 1)
 })
 
@@ -305,5 +305,20 @@ test('app opening passes initial configuration without replaying three setters',
   assert.deepEqual(calls, [
     ['open', { sessionID: 'test' }, 'Fixture', { theme: 'dark', fontSize: 24, flow: 'scrolled' }],
     ['goTo', 'epubcfi(/6/2)'],
+  ])
+})
+
+test('app dispatch preserves visibility-only and full bookmark capture commands', async () => {
+  const { calls, open, dispatch } = appHarness()
+  await open({ format: 'epub', archive: { sessionID: 'test' }, title: 'Fixture', url: 'inline://epub' })
+  calls.length = 0
+  const bookmarks = [{ id: 'bookmark-a', locator: { type: 'epub', cfi: 'epubcfi(/6/2)' } }]
+  for (const [requestId, captureLocation] of [[41, false], [42, true], [43, undefined]]) {
+    await dispatch({ type: 'reader:bookmark-context', payload: { bookmarks, requestId, ...(captureLocation === undefined ? {} : { captureLocation }) } })
+  }
+  assert.deepEqual(calls, [
+    ['bookmarkContext', bookmarks, 41, false],
+    ['bookmarkContext', bookmarks, 42, true],
+    ['bookmarkContext', bookmarks, 43, undefined],
   ])
 })

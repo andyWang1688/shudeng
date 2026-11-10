@@ -25,7 +25,6 @@ import {
 } from "@/components/assistant-ui/elements/surfaces";
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback";
 import { TypingIndicator } from "@/components/assistant-ui/elements/typing-indicator";
-import { readingFontFamily } from "@/components/assistant-ui/elements/typography";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import {
@@ -58,7 +57,6 @@ import {
   MicIcon,
   PhoneIcon,
   RefreshCwIcon,
-  SparklesIcon,
 } from "lucide-react-native";
 import {
   type ComponentRef,
@@ -147,7 +145,10 @@ export type ThreadProps = {
   hostListRef?: RefObject<FlatList<ThreadMessage> | null>;
   hostViewportRef?: RefObject<ComponentRef<typeof View> | null>;
   onViewportLayout?: (() => void) | undefined;
-  listProps?: Omit<ThreadPrimitive.MessagesFlatListProps, "children" | "components">;
+  listProps?: Omit<
+    ThreadPrimitive.MessagesFlatListProps,
+    "children" | "components"
+  >;
 };
 
 export type ThreadViewportSnapshot = {
@@ -414,7 +415,10 @@ export const Thread: FC<ThreadProps> = ({
             keyboardVerticalOffset={viewportTop - insets.bottom}
           >
             <View
-              ref={node => { viewportRef.current = node; if (hostViewportRef) hostViewportRef.current = node; }}
+              ref={(node) => {
+                viewportRef.current = node;
+                if (hostViewportRef) hostViewportRef.current = node;
+              }}
               onLayout={measureViewport}
               className="aui-thread-viewport mx-auto w-full max-w-[44rem] flex-1"
             >
@@ -428,7 +432,9 @@ export const Thread: FC<ThreadProps> = ({
                 <AuiIf condition={(s) => s.thread.messages.length > 0}>
                   <AuiIf
                     condition={(s) =>
-                      history ? history.isLoadingMore : s.thread.isLoadingEarlier
+                      history
+                        ? history.isLoadingMore
+                        : s.thread.isLoadingEarlier
                     }
                   >
                     <HistoryEdge />
@@ -436,10 +442,13 @@ export const Thread: FC<ThreadProps> = ({
                   <ThreadPrimitive.MessagesFlatList
                     // Viewability props cannot change once a FlatList is mounted.
                     key={Rail ? "tracked" : "plain"}
-                    ref={node => { listRef.current = node; if (hostListRef) hostListRef.current = node; }}
+                    ref={(node) => {
+                      listRef.current = node;
+                      if (hostListRef) hostListRef.current = node;
+                    }}
                     className="aui-message-group flex-1"
                     contentContainerClassName={cn(
-                      "gap-6 px-4 pt-4 pb-6",
+                      "gap-7 px-6 pt-2 pb-6",
                       Rail && "pl-10",
                     )}
                     showsVerticalScrollIndicator={false}
@@ -466,7 +475,12 @@ export const Thread: FC<ThreadProps> = ({
                   </ThreadPrimitive.MessagesFlatList>
                 </AuiIf>
               </View>
-              {!composerExternal && <ThreadComposer components={components} {...(bottomInset !== undefined ? { bottomInset } : {})} />}
+              {!composerExternal && (
+                <ThreadComposer
+                  components={components}
+                  {...(bottomInset !== undefined ? { bottomInset } : {})}
+                />
+              )}
               {Rail && (
                 <View
                   pointerEvents="box-none"
@@ -484,22 +498,27 @@ export const Thread: FC<ThreadProps> = ({
 };
 
 /** Shares the native composer and business slots with an optional host footer. */
-export const ThreadComposer: FC<{ components?: ThreadComponents; bottomInset?: number }> = ({
-  components = EMPTY_COMPONENTS,
-  bottomInset,
-}) => {
+export const ThreadComposer: FC<{
+  components?: ThreadComponents;
+  bottomInset?: number;
+}> = ({ components = EMPTY_COMPONENTS, bottomInset }) => {
   const insets = useSafeAreaInsets();
   const { ComposerFooter } = components;
-  return <ThreadComponentsContext.Provider value={components}>
-    <View pointerEvents="box-none" className="aui-thread-viewport-footer gap-2 px-4 pt-2"
-      style={{ paddingBottom: (bottomInset ?? insets.bottom) + 8 }}>
-      <Composer />
-      {ComposerFooter && <ComposerFooter />}
-      <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
-        <ThreadSuggestions />
-      </AuiIf>
-    </View>
-  </ThreadComponentsContext.Provider>;
+  return (
+    <ThreadComponentsContext.Provider value={components}>
+      <View
+        pointerEvents="box-none"
+        className="aui-thread-viewport-footer gap-2 px-4 pt-2.5"
+        style={{ paddingBottom: bottomInset ?? Math.max(insets.bottom, 12) }}
+      >
+        <Composer />
+        {ComposerFooter && <ComposerFooter />}
+        <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
+          <ThreadSuggestions />
+        </AuiIf>
+      </View>
+    </ThreadComponentsContext.Provider>
+  );
 };
 
 const WelcomeSlot: FC = () => {
@@ -509,7 +528,13 @@ const WelcomeSlot: FC = () => {
 
 const ThreadMessage: FC = () => {
   const { MessageWrapper } = useContext(ThreadComponentsContext);
-  return MessageWrapper ? <MessageWrapper><ThreadMessageContent /></MessageWrapper> : <ThreadMessageContent />;
+  return MessageWrapper ? (
+    <MessageWrapper>
+      <ThreadMessageContent />
+    </MessageWrapper>
+  ) : (
+    <ThreadMessageContent />
+  );
 };
 
 const ThreadMessageContent: FC = () => {
@@ -571,9 +596,7 @@ const SpokenMessage: FC = () => {
       {opensExchange && (
         <View className="aui-spoken-exchange-header mb-1.5 flex-row items-center gap-1.5">
           <Icon as={PhoneIcon} className="text-muted-foreground size-3" />
-          <Text className="text-muted-foreground text-xs">
-            语音对话
-          </Text>
+          <Text className="text-muted-foreground text-xs">语音对话</Text>
         </View>
       )}
       <View className="aui-spoken-message-content flex-row items-start gap-2">
@@ -670,13 +693,10 @@ const ThreadHistorySkeleton: FC = () => (
 );
 
 export const ThreadWelcome: FC = () => (
-  <View className="aui-thread-welcome-root min-h-0 flex-1 items-center justify-center gap-3 px-6">
-    <Icon as={SparklesIcon} className="text-primary size-8" />
-    <Text className="aui-thread-welcome-message text-foreground text-center text-2xl leading-9"
-      style={{ fontFamily: readingFontFamily }}>
+  <View className="aui-thread-welcome-root min-h-0 flex-1 items-center justify-center px-6">
+    <Text className="aui-thread-welcome-message text-foreground text-center text-xl leading-7 font-medium">
       想聊聊书里的什么？
     </Text>
-    <Text className="text-muted-foreground text-center text-sm leading-6">选一段文字，或直接提问</Text>
   </View>
 );
 
@@ -710,10 +730,18 @@ const DefaultComposerInput: FC = () => {
   return (
     <ComposerPrimitive.Input
       placeholder="问问这本书…"
-      {...(hydrated ? { placeholderTextColorClassName: "accent-muted-foreground" } : {})}
+      {...(hydrated
+        ? { placeholderTextColorClassName: "accent-muted-foreground" }
+        : {})}
       className="aui-composer-input text-foreground web:resize-none web:outline-none max-h-36 min-h-11 px-2 py-2 text-base leading-6"
-      style={{ textAlignVertical: "top", includeFontPadding: false, ...(Platform.OS !== "web" ? { height } : {}) }}
-      onContentSizeChange={(event) => setContentHeight(Math.ceil(event.nativeEvent.contentSize.height))}
+      style={{
+        textAlignVertical: "top",
+        includeFontPadding: false,
+        ...(Platform.OS !== "web" ? { height } : {}),
+      }}
+      onContentSizeChange={(event) =>
+        setContentHeight(Math.ceil(event.nativeEvent.contentSize.height))
+      }
       scrollEnabled={contentHeight > 144}
       submitMode="none"
       multiline
@@ -723,22 +751,34 @@ const DefaultComposerInput: FC = () => {
 };
 
 const Composer: FC = () => {
-  const { ComposerInput = DefaultComposerInput, ComposerBefore, ComposerTools } = useContext(
-    ThreadComponentsContext,
-  );
+  const {
+    ComposerInput = DefaultComposerInput,
+    ComposerBefore,
+    ComposerTools,
+  } = useContext(ThreadComponentsContext);
 
   return (
     <ComposerPrimitive.Root className="aui-composer-root w-full">
-      <View className="aui-composer-shell border-input bg-card gap-1 rounded-2xl border p-1.5"
-        style={{ shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 }}>
+      <View
+        className="aui-composer-shell border-input bg-card gap-1 rounded-[23px] border px-3 pt-2 pb-2.5"
+        style={{
+          shadowColor: "#292722",
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.08,
+          shadowRadius: 18,
+          elevation: 8,
+        }}
+      >
         {ComposerBefore && <ComposerBefore />}
         <ComposerAttachments />
-        <View className="flex-row items-end gap-1">
+        <ComposerInput />
+        <View className="flex-row items-center justify-between gap-2">
           <View className="flex-row items-center">
-            <AuiIf condition={s => s.thread.capabilities.attachments}><ComposerAddAttachment /></AuiIf>
+            <AuiIf condition={(s) => s.thread.capabilities.attachments}>
+              <ComposerAddAttachment />
+            </AuiIf>
             {ComposerTools && <ComposerTools />}
           </View>
-          <View className="min-w-0 flex-1"><ComposerInput /></View>
           <ComposerAction />
         </View>
       </View>
@@ -763,7 +803,7 @@ const ComposerAction: FC = () => {
         }
       >
         <ComposerPrimitive.Send
-          className="aui-composer-send bg-primary active:bg-primary/90 size-11 items-center justify-center rounded-xl disabled:opacity-40"
+          className="aui-composer-send bg-primary active:bg-primary/90 size-11 items-center justify-center rounded-full disabled:opacity-40"
           accessibilityLabel="发送问题"
         >
           <Icon
@@ -779,7 +819,7 @@ const ComposerAction: FC = () => {
         }
       >
         <ComposerPrimitive.Cancel
-          className="aui-composer-cancel bg-primary active:bg-primary/90 size-11 items-center justify-center rounded-xl"
+          className="aui-composer-cancel bg-primary active:bg-primary/90 size-11 items-center justify-center rounded-full"
           accessibilityLabel={isSending ? "取消发送" : "停止回答"}
         >
           <View className="aui-composer-cancel-icon bg-primary-foreground size-3 rounded-[2px]" />
@@ -800,8 +840,7 @@ const MessageError: FC = () => (
 
 const UserText: TextMessagePartComponent = ({ text }) => (
   <Text
-    className="aui-user-message-text text-foreground text-base leading-6"
-    style={{ fontFamily: readingFontFamily }}
+    className="aui-user-message-text text-foreground text-[17px] leading-[27px]"
     selectable
   >
     {text}
@@ -853,8 +892,11 @@ const taskAwareGroupBy = (
 };
 
 const AssistantMessage: FC = () => {
-  const { ToolFallback: CustomToolFallback, TaskGroup: TaskGroupComponent, AssistantFooter } =
-    useContext(ThreadComponentsContext);
+  const {
+    ToolFallback: CustomToolFallback,
+    TaskGroup: TaskGroupComponent,
+    AssistantFooter,
+  } = useContext(ThreadComponentsContext);
   const ToolFallbackComponent = CustomToolFallback ?? ToolFallback;
   const groupBy = TaskGroupComponent ? taskAwareGroupBy : messageGroupBy;
 
@@ -935,14 +977,14 @@ const AssistantActionBar: FC = () => (
           />
         )}
       </ActionBarPrimitive.Copy>
-      <AuiIf condition={s => s.thread.capabilities.reload}>
-      <ActionBarPrimitive.Reload
-        className={iconButtonClassName}
-        hitSlop={groupedIconButtonHitSlop}
-        accessibilityLabel="重新回答"
-      >
-        <Icon as={RefreshCwIcon} className="text-muted-foreground size-4" />
-      </ActionBarPrimitive.Reload>
+      <AuiIf condition={(s) => s.thread.capabilities.reload}>
+        <ActionBarPrimitive.Reload
+          className={iconButtonClassName}
+          hitSlop={groupedIconButtonHitSlop}
+          accessibilityLabel="重新回答"
+        >
+          <Icon as={RefreshCwIcon} className="text-muted-foreground size-4" />
+        </ActionBarPrimitive.Reload>
       </AuiIf>
     </View>
   </AuiIf>
@@ -951,20 +993,22 @@ const AssistantActionBar: FC = () => (
 const UserMessage: FC = () => {
   const { UserHeader } = useContext(ThreadComponentsContext);
   return (
-  <MessagePrimitive.Root className="aui-user-message-root items-end gap-y-2">
-    <UserMessageAttachments />
-    <AuiIf condition={(s) => s.message.parts.length > 0}>
-      <View className="aui-user-message-content bg-muted max-w-[88%] rounded-2xl px-4 py-3">
-        {UserHeader && <UserHeader />}
-        <MessagePrimitive.Parts components={{ Text: UserText, Image, File }} />
+    <MessagePrimitive.Root className="aui-user-message-root items-end gap-y-2">
+      <UserMessageAttachments />
+      <AuiIf condition={(s) => s.message.parts.length > 0}>
+        <View className="aui-user-message-content bg-muted max-w-[90%] rounded-[18px] px-[17px] py-[13px]">
+          {UserHeader && <UserHeader />}
+          <MessagePrimitive.Parts
+            components={{ Text: UserText, Image, File }}
+          />
+        </View>
+      </AuiIf>
+      <View className="aui-user-message-footer -me-1 flex-row items-center justify-end">
+        <BranchPicker />
+        <UserActionBar />
       </View>
-    </AuiIf>
-    <View className="aui-user-message-footer -me-1 flex-row items-center justify-end">
-      <BranchPicker />
-      <UserActionBar />
-    </View>
-  </MessagePrimitive.Root>
-);
+    </MessagePrimitive.Root>
+  );
 };
 
 const UserActionBar: FC = () => (

@@ -176,7 +176,7 @@ export function AssistantSettingsScreen({
             </SettingsSection>
           ) : null}
           <SettingsSection
-            title="助手指令 · Markdown"
+            title="助手指令"
             first
             footer="设置人设、语气、语言与回答详略。留空表示不添加个人指令。"
           >
@@ -219,21 +219,27 @@ function makeStyles(p: ReturnType<typeof usePalette>) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: p.paper },
     body: { flex: 1 },
-    content: { paddingHorizontal: 16, paddingBottom: 36 },
+    content: {
+      paddingHorizontal: 24,
+      paddingBottom: 40,
+      width: "100%",
+      maxWidth: 760,
+      alignSelf: "center",
+    },
     spinner: { marginTop: 16 },
     status: {
-      marginHorizontal: 12,
+      marginHorizontal: 4,
       marginTop: 12,
       color: p.ink3,
-      fontSize: 12,
-      lineHeight: 18,
+      fontSize: 13,
+      lineHeight: 21,
     },
     instructions: {
       minHeight: 300,
       padding: 16,
       color: p.ink,
-      fontSize: 15,
-      lineHeight: 23,
+      fontSize: 17,
+      lineHeight: 28,
     },
     count: {
       color: p.ink3,

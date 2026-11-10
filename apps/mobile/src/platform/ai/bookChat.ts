@@ -1,11 +1,13 @@
 /** Product chat: SecureStore config and the current book's local source, with read-only Swift compatibility. */
 import {
   createChatModel,
+  inspectModelContext,
+  resolveModelContextBudget,
   runBookAgent,
   type AgentRunSession,
-  type BookIdentity,
   type BookSource,
-} from '@shudeng/core';
+} from '@shudeng/core/agent';
+import type { BookIdentity } from '@shudeng/core/domain';
 import type { BookRow } from '@shudeng/core/db';
 import { loadAIConfig, type AIConfig } from '../aiConfig';
 import { fetch as expoFetch } from 'expo/fetch';
@@ -116,12 +118,18 @@ export async function startBookChatTurn(options: StartBookChatTurnOptions): Prom
     thinking: deepSeekThinking,
     reasoningEffort: 'high' as const,
   };
-  const model = createChatModel({ ...modelConfig, maxTokens: deepSeekThinking ? 16384 : 4096,
+  const configuredWindow = options.contextWindowTokens ?? config.contextWindowTokens;
+  const contextInfo = inspectModelContext({
+    provider: modelConfig.provider, model: config.model, baseUrl: config.baseUrl,
+    ...(configuredWindow !== undefined ? { contextWindowTokens: configuredWindow } : {}),
+  });
+  const { contextWindowTokens, outputReserveTokens } = resolveModelContextBudget(
+    contextInfo, deepSeekThinking ? 16384 : 4096,
+  );
+  const summaryOutput = resolveModelContextBudget(contextInfo, deepSeekThinking ? 16384 : 2000).outputReserveTokens;
+  const model = createChatModel({ ...modelConfig, maxTokens: outputReserveTokens,
     webSearch: { enabled: config.webSearchEnabled ?? false, maxUses: 3 } });
-  const summaryModel = createChatModel({ ...modelConfig, maxTokens: deepSeekThinking ? 16384 : 2000 });
-  const configuredWindow = options.contextWindowTokens ?? config.contextWindowTokens ??
-    (config.provider === 'anthropic' ? 200000 : 128000);
-  const contextWindowTokens = Math.max(2000, Math.min(1000000, Math.floor(configuredWindow)));
+  const summaryModel = createChatModel({ ...modelConfig, maxTokens: summaryOutput });
   const extraTools = await loadMCPAgentTools();
   const session = runBookAgent({
     assistantInstructions: preferences.instructions,
@@ -130,7 +138,7 @@ export async function startBookChatTurn(options: StartBookChatTurnOptions): Prom
     summaryIdleTimeoutMs: deepSeekThinking ? 180000 : 45000,
     modelIdleTimeoutMs: deepSeekThinking ? 180000 : 90000,
     runTimeoutMs: deepSeekThinking ? 300000 : 240000,
-    outputReserveTokens: deepSeekThinking ? 16384 : 4096,
+    outputReserveTokens,
     source,
     book: identity,
     question: options.question,

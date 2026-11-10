@@ -4,14 +4,14 @@
 
 ## 当前范围与阅读路径
 
-书灯已完成独立示例 Demo 的整体视觉确认，进入产品 UI 与既有业务接线阶段；功能范围保持冻结。以 [Demo](../apps/mobile/src/ui/visual-demo/README.md)为展示基准，保留现有阅读、保存与执行合同。产品范围获准、源码已经实现、验收通过和正式发布是不同状态。
+书灯已完成独立示例 Demo 的整体视觉确认，进入产品 UI 与既有业务接线阶段。以 [Demo](../apps/mobile/src/ui/visual-demo/README.md)为展示基准，2026-11-07 批准的[书内标注](adr/0021-book-owned-annotations.md)取代全局笔记栏目，其他功能范围保持冻结；保留现有阅读、保存与执行合同。产品范围获准、源码已经实现、验收通过和正式发布是不同状态。
 
 | 本次任务 | 主要正文 | 按需要继续读取 |
 | --- | --- | --- |
-| 理解或改变产品行为 | [产品范围与行为规范](product-scope.md) | [领域术语](../GLOSSARY.md)、[决策索引](adr/README.md)；有分歧先区分需求与实现现状。 |
-| 业务、数据、迁移或平台接线 | [架构与模块边界](architecture.md) → [开发与验证](agents/development.md) | 所涉模块 README；EPUB 文件通道读[资源合同](architecture/epub-resources.md)。 |
+| 理解或改变产品行为 | [产品范围与行为规范](product-scope.md) | [聊天决定与验收基准](product-baseline.md)、[领域术语](../GLOSSARY.md)、[决策索引](adr/README.md)；有分歧先区分需求与实现现状。 |
+| 业务、数据、迁移或平台接线 | [架构与模块边界](architecture.md) → [开发与验证](agents/development.md) | 所涉模块 README；EPUB 文件通道读[资源合同](architecture/epub-resources.md)，连续跨章引擎与多文档接线读 [reader-web](../packages/reader-web/README.md)，选择背景读[研究](archive/research/2026-11-09-continuous-epub-scroll.md)。 |
 | 阅读 Agent、RAG、上下文或 AI 配置 | [Agent 开发契约](architecture/reading-agent.md) | 按契约加载项目 LangChain 技能，核对对应的[验收记录](validation/README.md)。 |
-| 页面、组件、交互或视觉 Demo | [跨端界面设计规范](design/ui-development-standard.md) | [Demo 运行与边界](../apps/mobile/src/ui/visual-demo/README.md)，平台官方规则按当前主题查询。 |
+| 页面、组件、交互或视觉 Demo | [跨端界面设计规范](design/ui-development-standard.md) | [Demo 运行与边界](../apps/mobile/src/ui/visual-demo/README.md)、[组件复用盘点](archive/research/2026-11-09-component-reuse-audit.md)，平台官方规则按当前主题查询。 |
 | 构建、清理或发布 | [资源规则](agents/resources.md)，发布再读[发布流程](agents/release.md) | [版本记录](releases/)与 delivery 中对应交付材料。 |
 
 根 [AGENTS.md](../AGENTS.md)是协作入口。[文档维护规范](agents/documentation.md)说明术语、规格、ADR 与历史资料的分工；操作 GitHub 任务读 [Issue 约定](agents/issue-tracker.md)，分诊再读[标签](agents/triage-labels.md)。

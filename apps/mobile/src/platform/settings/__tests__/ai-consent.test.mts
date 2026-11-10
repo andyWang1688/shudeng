@@ -100,6 +100,20 @@ test("explicit reconfirmation upgrades only that service scope and preserves ind
   assert.deepEqual(h.deletes, []);
 });
 
+test("saved service protocols cannot change or touch credentials even with renewed consent", async () => {
+  const h = harness([{ ...a, consentScope: rules.aiConsentScope(a) }]);
+  const before = new Map(h.entries);
+  await assert.rejects(h.api.saveAIService({ ...a, provider: "anthropic" }, "replacement", true), /接口格式.*不能更改/);
+  assert.deepEqual(h.entries, before);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(h.deletes, []);
+  assert.ok(!h.reads.includes(a.secretId));
+  await h.api.saveAIService({ ...a, model: "new-model" }, "", true);
+  const saved = await h.api.loadAIServiceCatalog();
+  assert.equal(saved.services[0].provider, "openai");
+  assert.equal(saved.services[0].model, "new-model");
+});
+
 test("a model-only save needs no new consent while rename is blocked until confirmed", async () => {
   const h = harness([{ ...a, consentScope: rules.aiConsentScope(a) }, { ...b, consentScope: rules.aiConsentScope(b) }]);
   await h.api.saveAIService({ ...a, model: "another-model" }, "", false);

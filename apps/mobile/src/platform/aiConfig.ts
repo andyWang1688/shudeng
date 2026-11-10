@@ -141,6 +141,8 @@ export function saveAIService(
       ? next.services.find((item) => item.id === draft.id)
       : undefined;
     if (draft.id && !old) throw new Error("这个服务已不存在，请重新打开设置。");
+    if (old && validated.provider !== old.provider)
+      throw new Error("接口格式在创建后不能更改，请添加新的 AI 服务。");
     const id = old?.id ?? createLocalId("service");
     const key = newKey.trim();
     if (!key && !old) throw new Error("请填写 API Key。");

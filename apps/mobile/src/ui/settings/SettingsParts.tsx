@@ -9,7 +9,7 @@ import {
   View,
 } from "react-native";
 import { SymbolView } from "expo-symbols";
-import { font, usePalette } from "../theme";
+import { usePalette } from "../theme";
 export function SettingsHeader({
   title,
   onBack,
@@ -32,11 +32,7 @@ export function SettingsHeader({
         accessibilityRole="button"
         accessibilityLabel={backTitle ?? "返回"}
         onPress={onBack}
-        style={[
-          styles.back,
-          backTitle ? styles.textBack : undefined,
-          { backgroundColor: p.surface },
-        ]}
+        style={[styles.back, backTitle ? styles.textBack : undefined]}
       >
         {backTitle ? (
           <Text style={[styles.actionText, { color: p.ink }]}>{backTitle}</Text>
@@ -102,7 +98,7 @@ export function SettingsAction({
       style={[
         styles.action,
         {
-          backgroundColor: primary ? p.lamp : p.surface,
+          backgroundColor: primary ? p.ink : "transparent",
           opacity: disabled ? 0.45 : 1,
         },
       ]}
@@ -139,7 +135,7 @@ export function SettingsSection({
       {title ? (
         <Text
           accessibilityRole="header"
-          style={[styles.sectionTitle, { color: p.ink3 + "CC" }]}
+          style={[styles.sectionTitle, { color: p.ink2 }]}
         >
           {title}
         </Text>
@@ -156,7 +152,7 @@ export function SettingsSection({
       </View>
       {footer ? (
         <Text
-          style={[styles.footer, { color: p.ink3 + "CC" }]}
+          style={[styles.footer, { color: p.ink2 }]}
           lineBreakStrategyIOS="standard"
         >
           {footer}
@@ -208,7 +204,7 @@ export function SettingsRow({
                   : muted
                     ? p.ink2
                     : p.ink,
-              fontSize: compact ? 12 : 15,
+              fontSize: compact ? 14 : 17,
             },
           ]}
         >
@@ -223,7 +219,7 @@ export function SettingsRow({
       ) : selected ? (
         <SymbolView name="checkmark" size={20} tintColor={p.lampInk} />
       ) : onPress ? (
-        <SymbolView name="chevron.right" size={14} tintColor={p.ink3 + "66"} />
+        <SymbolView name="chevron.right" size={14} tintColor={p.ink3} />
       ) : null}
     </>
   );
@@ -232,14 +228,19 @@ export function SettingsRow({
       testID={testID}
       accessibilityRole="button"
       accessibilityLabel={title}
-      {...(accessibilityValue !== undefined ? { accessibilityValue: { text: accessibilityValue } } : {})}
+      {...(accessibilityValue !== undefined
+        ? { accessibilityValue: { text: accessibilityValue } }
+        : {})}
       accessibilityState={{ selected, disabled }}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
         detail ? styles.subtitleRow : undefined,
-        { borderBottomColor: p.line, opacity: disabled ? 0.45 : pressed ? 0.7 : 1 },
+        {
+          borderBottomColor: p.line,
+          opacity: disabled ? 0.45 : pressed ? 0.7 : 1,
+        },
       ]}
     >
       {content}
@@ -252,11 +253,11 @@ export function SettingsRow({
 }
 const styles = StyleSheet.create({
   header: {
-    minHeight: 44,
+    minHeight: 56,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
-    gap: 12,
+    paddingHorizontal: 12,
+    gap: 8,
     justifyContent: "space-between",
   },
   back: {
@@ -277,43 +278,42 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  title: { fontSize: 17, fontWeight: "600", fontFamily: font.serif },
+  title: { fontSize: 17, lineHeight: 25, fontWeight: "600" },
   leadingTitle: { flex: 1 },
   actions: { flexDirection: "row", gap: 12 },
   action: {
     borderRadius: 24,
     minHeight: 44,
-    minWidth: 66,
+    minWidth: 56,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
   },
-  actionText: { fontSize: 16, fontWeight: "600" },
+  actionText: { fontSize: 16, lineHeight: 24, fontWeight: "600" },
   section: { marginTop: 32 },
-  titledSection: { marginTop: 46 },
-  firstSection: { marginTop: 58 },
-  formFirstSection: { marginTop: 45 },
+  titledSection: { marginTop: 32 },
+  firstSection: { marginTop: 12 },
+  formFirstSection: { marginTop: 16 },
   sectionTitle: {
-    marginHorizontal: 16,
-    marginBottom: 8,
-    fontSize: 17,
+    marginHorizontal: 4,
+    marginBottom: 10,
+    fontSize: 13,
     lineHeight: 20,
-    fontWeight: "600",
-    color: "#8A8A8E",
+    fontWeight: "400",
   },
-  group: { borderRadius: 26, overflow: "hidden" },
-  footer: { marginHorizontal: 16, marginTop: 8, fontSize: 13, lineHeight: 16 },
+  group: { borderRadius: 16, borderCurve: "continuous", overflow: "hidden" },
+  footer: { marginHorizontal: 4, marginTop: 12, fontSize: 13, lineHeight: 21 },
   row: {
-    minHeight: 52,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    minHeight: 62,
+    paddingHorizontal: 17,
+    paddingVertical: 16,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 13,
   },
-  subtitleRow: { minHeight: 62 },
-  separator: { height: StyleSheet.hairlineWidth, marginHorizontal: 20 },
+  subtitleRow: { minHeight: 70 },
+  separator: { height: StyleSheet.hairlineWidth, marginHorizontal: 17 },
   rowText: { flex: 1 },
-  rowTitle: { fontSize: 15 },
-  detail: { marginTop: 1, fontSize: 12, lineHeight: 14 },
+  rowTitle: { fontSize: 17, lineHeight: 25 },
+  detail: { marginTop: 3, fontSize: 13, lineHeight: 20 },
 });

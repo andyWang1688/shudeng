@@ -17,6 +17,8 @@
 | [0018 按需资料 / 大 PDF](0018-lightweight-model-and-large-pdf.md) | 按需下载与默认阅读策略；历史实现和测试数字按当时版本理解。 |
 | [0019 RN / LangChain](0019-react-native-langchain-architecture.md) | 当前共享架构、设备内 Agent 与明确取代范围。 |
 | [0020 跨端设计](0020-cross-platform-design-principles.md) | 设计原则；具体端的视觉基准仍需确认。 |
+| [0021 书内标注](0021-book-owned-annotations.md) | 高亮与笔记按书管理，取代全局笔记栏目；保留已移除书籍的记录入口。 |
+| [0022 连续 EPUB 引擎](0022-continuous-epub-engine.md) | 采用多文档 Foliate fork 承载跨章布局，保留书灯原生与业务适配；性能验收另记。 |
 
 ## 被替代或仅保留部分意图
 

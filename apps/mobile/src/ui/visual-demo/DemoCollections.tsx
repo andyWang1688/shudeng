@@ -9,7 +9,13 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
-import { ArrowUpRight, ChevronDown, ChevronRight } from "lucide-react-native";
+import {
+  ArrowUpRight,
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  Trash2,
+} from "lucide-react-native";
 import Swipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
@@ -97,8 +103,10 @@ export function DemoNotes({
 
 export function DemoConversations({
   onOpenChat,
+  active = true,
 }: {
   onOpenChat: (book: DemoBook, question: string, selection?: string) => void;
+  active?: boolean;
 }) {
   // Renaming changes the list label, while the original question stays intact.
   const [chats, setChats] = useState(() =>
@@ -107,10 +115,23 @@ export function DemoConversations({
   const activeSwipe = useRef<SwipeableMethods | null>(null);
   const [revealedChat, setRevealedChat] = useState<string | null>(null);
   const swipes = useRef(new Map<string, SwipeableMethods>());
+  // Kept-alive demo tabs hide with display:none; re-enable native gestures on return.
+  useEffect(() => {
+    if (!active) {
+      activeSwipe.current?.close();
+      activeSwipe.current = null;
+      setRevealedChat(null);
+    }
+  }, [active]);
   const closeSwipe = () => {
     activeSwipe.current?.close();
     activeSwipe.current = null;
     setRevealedChat(null);
+  };
+  const hideSwipe = (id: string) => {
+    if (activeSwipe.current === swipes.current.get(id))
+      activeSwipe.current = null;
+    setRevealedChat((current) => (current === id ? null : current));
   };
   const rename = (chat: DemoConversation) => {
     closeSwipe();
@@ -148,14 +169,6 @@ export function DemoConversations({
       },
     ]);
   };
-  const actions = (chat: DemoConversation) => {
-    closeSwipe();
-    Alert.alert(chat.title, undefined, [
-      { text: "重新命名", onPress: () => rename(chat) },
-      { text: "删除", style: "destructive", onPress: () => remove(chat) },
-      { text: "取消", style: "cancel" },
-    ]);
-  };
   return (
     <CollectionBrowser
       title="对话"
@@ -166,6 +179,7 @@ export function DemoConversations({
       searchText={(chat) => chat.title + (chat.selection ?? "")}
       renderItem={(chat) => (
         <Swipeable
+          enabled={active}
           ref={(swipe) => {
             if (swipe) swipes.current.set(chat.id, swipe);
             else swipes.current.delete(chat.id);
@@ -177,9 +191,8 @@ export function DemoConversations({
             activeSwipe.current = swipe;
             setRevealedChat(chat.id);
           }}
-          onSwipeableClose={() =>
-            setRevealedChat((id) => (id === chat.id ? null : id))
-          }
+          onSwipeableWillClose={() => hideSwipe(chat.id)}
+          onSwipeableClose={() => hideSwipe(chat.id)}
           renderRightActions={() => (
             <View
               style={s.swipeActions}
@@ -191,17 +204,27 @@ export function DemoConversations({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={"重新命名：" + chat.title}
-                onPress={() => rename(chat)}
+                disabled={revealedChat !== chat.id}
+                onPress={() => {
+                  if (activeSwipe.current === swipes.current.get(chat.id))
+                    rename(chat);
+                }}
                 style={[s.swipeAction, s.renameAction]}
               >
+                <Pencil size={18} color={c.surface} accessible={false} />
                 <Text style={s.actionText}>重命名</Text>
               </Pressable>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={"删除：" + chat.title}
-                onPress={() => remove(chat)}
+                disabled={revealedChat !== chat.id}
+                onPress={() => {
+                  if (activeSwipe.current === swipes.current.get(chat.id))
+                    remove(chat);
+                }}
                 style={[s.swipeAction, s.deleteAction]}
               >
+                <Trash2 size={18} color={c.surface} accessible={false} />
                 <Text style={s.actionText}>删除</Text>
               </Pressable>
             </View>
@@ -210,7 +233,7 @@ export function DemoConversations({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={"打开对话：" + chat.title}
-            accessibilityHint="左滑或长按可重新命名和删除"
+            accessibilityHint="左滑可重新命名和删除"
             accessibilityActions={[
               { name: "rename", label: "重新命名" },
               { name: "delete", label: "删除" },
@@ -219,9 +242,10 @@ export function DemoConversations({
               if (nativeEvent.actionName === "rename") rename(chat);
               else if (nativeEvent.actionName === "delete") remove(chat);
             }}
-            onLongPress={() => actions(chat)}
             onPress={() => {
+              const hadSwipe = activeSwipe.current !== null;
               closeSwipe();
+              if (hadSwipe) return;
               onOpenChat(
                 demoBooks.find((book) => book.id === chat.bookId)!,
                 chat.question,
@@ -539,11 +563,25 @@ const s = StyleSheet.create({
     borderBottomColor: c.line,
   },
   chatBody: { flex: 1 },
-  swipeActions: { flexDirection: "row" },
-  swipeAction: { width: 76, justifyContent: "center", alignItems: "center" },
+  swipeActions: {
+    flexDirection: "row",
+    gap: 6,
+    paddingLeft: 8,
+    paddingVertical: 5,
+  },
+  swipeAction: {
+    width: 68,
+    minHeight: 52,
+    borderRadius: 12,
+    borderCurve: "continuous",
+    gap: 4,
+    paddingVertical: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   renameAction: { backgroundColor: c.secondary },
   deleteAction: { backgroundColor: "#B94237" },
-  actionText: { fontSize: 14, color: c.surface },
+  actionText: { fontSize: 13, lineHeight: 18, color: c.surface },
   chatTitle: { fontSize: 17, lineHeight: 26, color: c.ink },
   more: {
     flexDirection: "row",

@@ -26,7 +26,6 @@ export default function TabsLayout() {
         )}
       >
         <Tabs.Screen name="(shelf)" options={{ title: "书架" }} />
-        <Tabs.Screen name="notes" options={{ title: "笔记" }} />
         <Tabs.Screen name="conversations" options={{ title: "对话" }} />
         <Tabs.Screen name="(profile)" options={{ title: "我的" }} />
       </Tabs>

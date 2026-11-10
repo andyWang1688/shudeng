@@ -3,15 +3,21 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ScopedTheme } from "uniwind";
 import { useAppearance } from "../../src/ui/appearance";
-import {
-  ChatSheet,
-  useBookChat,
-} from "../../src/ui/chat";
+import { ChatSheet, useBookChat } from "../../src/ui/chat";
 import { ReaderAssistantThread } from "../../src/ui/chat/ReaderAssistantThread";
 import { darkColors, lightColors, type Palette } from "../../src/ui/theme";
-import { useOpenQuestionCitation, useQuestionPresentation } from "../../src/ui/reader-question/ReaderQuestionProvider";
-import { questionAppearanceFromParams, resolveQuestionAppearance } from "../../src/ui/reader-question/session";
-import { readerLocatorFromLegacy, storedLocatorFromUnknown } from "../../src/platform/library/pure";
+import {
+  useOpenQuestionCitation,
+  useQuestionPresentation,
+} from "../../src/ui/reader-question/ReaderQuestionProvider";
+import {
+  questionAppearanceFromParams,
+  resolveQuestionAppearance,
+} from "../../src/ui/reader-question/session";
+import {
+  readerLocatorFromLegacy,
+  storedLocatorFromUnknown,
+} from "../../src/platform/library/pure";
 import type { StoredReaderLocator } from "../../src/platform/library";
 
 function originLocator(value: string | undefined): StoredReaderLocator | null {
@@ -19,8 +25,13 @@ function originLocator(value: string | undefined): StoredReaderLocator | null {
   try {
     const stored = storedLocatorFromUnknown(JSON.parse(value));
     if (stored) return stored;
-  } catch { /* Legacy CFI strings are not JSON. */ }
-  return readerLocatorFromLegacy(value, 'PDF') ?? readerLocatorFromLegacy(value, 'EPUB');
+  } catch {
+    /* Legacy CFI strings are not JSON. */
+  }
+  return (
+    readerLocatorFromLegacy(value, "PDF") ??
+    readerLocatorFromLegacy(value, "EPUB")
+  );
 }
 
 function paramValue(value: string | string[] | undefined): string | undefined {
@@ -48,15 +59,24 @@ export default function BookChatRoute() {
   const appearance = questionAppearanceFromParams(params);
   const bookId = paramValue(params.bookId) ?? "";
   const presentation = useQuestionPresentation({
-    presentationId: paramValue(params.questionPresentationId), bookId,
-    conversationId: paramValue(params.conversationId), title: paramValue(params.bookTitle),
-    selectionQuote: paramValue(params.selectionQuote), initialQuestion: paramValue(params.initialQuestion),
-    origin: originLocator(paramValue(params.locator)), theme: resolveQuestionAppearance(appearance, resolvedMode), appearance,
+    presentationId: paramValue(params.questionPresentationId),
+    bookId,
+    conversationId: paramValue(params.conversationId),
+    title: paramValue(params.bookTitle),
+    selectionQuote: paramValue(params.selectionQuote),
+    initialQuestion: paramValue(params.initialQuestion),
+    origin: originLocator(paramValue(params.locator)),
+    theme: resolveQuestionAppearance(appearance, resolvedMode),
+    appearance,
   });
-  const palette: Palette = resolveQuestionAppearance(presentation.appearance, resolvedMode) === 'dark' ? darkColors : lightColors;
+  const palette: Palette =
+    resolveQuestionAppearance(presentation.appearance, resolvedMode) === "dark"
+      ? darkColors
+      : lightColors;
   const openCitation = useOpenQuestionCitation(presentation);
   useEffect(() => {
-    if (paramValue(params.questionPresentationId) !== presentation.id) router.setParams({ questionPresentationId: presentation.id });
+    if (paramValue(params.questionPresentationId) !== presentation.id)
+      router.setParams({ questionPresentationId: presentation.id });
   }, [params.questionPresentationId, presentation.id, router]);
   const chat = useBookChat({
     bookId,
@@ -64,17 +84,28 @@ export default function BookChatRoute() {
     bookTitleParam: presentation.title,
     selectionQuote: presentation.selectionQuote,
     initialQuestion: presentation.initialQuestion,
-    readingPosition: presentation.origin ? JSON.stringify(presentation.origin) : undefined,
+    readingPosition: presentation.origin
+      ? JSON.stringify(presentation.origin)
+      : undefined,
     presentation,
   });
 
-  const renderSheet = ({ content, composer }: { content: ReactNode; composer?: ReactNode }) => (
+  const renderSheet = ({
+    content,
+    composer,
+  }: {
+    content: ReactNode;
+    composer?: ReactNode;
+  }) => (
     <ChatSheet
+      title={chat.title}
       palette={palette}
       topInset={insets.top}
       bottomInset={insets.bottom}
       initialDetent={presentation.getSnapshot().sheetDetent}
-      onDetentChange={index => presentation.update({ sheetDetent: index }, false)}
+      onDetentChange={(index) =>
+        presentation.update({ sheetDetent: index }, false)
+      }
       onClose={() => router.back()}
       footer={composer}
     >
@@ -82,10 +113,17 @@ export default function BookChatRoute() {
     </ChatSheet>
   );
   return (
-    <ScopedTheme theme={resolveQuestionAppearance(presentation.appearance, resolvedMode)}>
-      <ReaderAssistantThread chat={chat} palette={palette} presentation={presentation}
-          renderContainer={renderSheet}
-          onOpenCitation={openCitation} onOpenSettings={() => router.push("/book-chat/ai-settings")} />
+    <ScopedTheme
+      theme={resolveQuestionAppearance(presentation.appearance, resolvedMode)}
+    >
+      <ReaderAssistantThread
+        chat={chat}
+        palette={palette}
+        presentation={presentation}
+        renderContainer={renderSheet}
+        onOpenCitation={openCitation}
+        onOpenSettings={() => router.push("/book-chat/ai-settings")}
+      />
     </ScopedTheme>
   );
 }

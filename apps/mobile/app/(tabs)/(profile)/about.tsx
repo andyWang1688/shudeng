@@ -1,27 +1,17 @@
 import { useMemo } from "react";
-import {
-  Image,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { SymbolView } from "expo-symbols";
+import { FileText, Hand } from "lucide-react-native";
+import { font, usePalette, type Palette } from "../../../src/ui/theme";
 import {
-  font,
-  spacing,
-  type,
-  usePalette,
-  type Palette,
-} from "../../../src/ui/theme";
-import { SettingsHeader } from "../../../src/ui/settings/SettingsParts";
+  SettingsHeader,
+  SettingsRow,
+  SettingsSection,
+} from "../../../src/ui/settings/SettingsParts";
 import thirdPartyNotices from "../../../src/ui/settings/thirdPartyNotices.json";
 
-const APP_VERSION = "0.4.8";
-const MOTTO = "一盏照书的灯，AI 照亮你读不懂的地方";
+const APP_VERSION = "0.5.0";
 
 /** 与 Swift 版「关于书灯 → 隐私政策」同一份文案。 */
 const PRIVACY: ReadonlyArray<{
@@ -50,7 +40,7 @@ const PRIVACY: ReadonlyArray<{
   },
 ];
 
-/** 关于书灯：品牌灯标 + 书灯 + motto + 版本，以及隐私政策 / 第三方许可说明。 */
+/** 关于书灯与本机隐私、第三方许可说明。 */
 export default function AboutRoute() {
   const router = useRouter();
   const palette = usePalette();
@@ -66,17 +56,17 @@ export default function AboutRoute() {
           onBack={() => router.back()}
           centered
         />
-        <ScrollView contentContainerStyle={styles.panelContent}>
+        <ScrollView
+          contentContainerStyle={styles.panelContent}
+          showsVerticalScrollIndicator={false}
+        >
           {sheet === "licenses" ? (
             <Text selectable style={styles.paragraphBody}>
               {thirdPartyNotices.text}
             </Text>
           ) : (
             PRIVACY.map((paragraph) => (
-              <View
-                key={paragraph.heading}
-                style={[styles.paragraph, styles.card, { padding: 16 }]}
-              >
+              <View key={paragraph.heading} style={styles.paragraph}>
                 <Text style={styles.paragraphHeading}>{paragraph.heading}</Text>
                 <Text style={styles.paragraphBody}>{paragraph.body}</Text>
               </View>
@@ -98,68 +88,38 @@ export default function AboutRoute() {
             <Image
               accessibilityLabel="书灯图标"
               source={require("../../../src/ui/settings/assets/brand-mark-mask.png")}
-              style={{ width: 64, height: 64, tintColor: palette.lamp }}
+              style={{ width: 40, height: 40, tintColor: palette.lampInk }}
               resizeMode="contain"
             />
           </View>
           <Text style={styles.wordmark}>书灯</Text>
-          <Text style={styles.motto}>{MOTTO}</Text>
           <Text style={styles.version}>版本 {APP_VERSION}</Text>
         </View>
 
-        <View style={styles.card}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="隐私政策"
+        <SettingsSection first>
+          <SettingsRow
+            title="隐私政策"
+            leading={<Hand size={21} color={palette.ink2} accessible={false} />}
             onPress={() =>
               router.push({
                 pathname: "/about",
                 params: { content: "privacy" },
               })
             }
-            style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-          >
-            <View style={styles.iconSlot}>
-              <SymbolView
-                name="hand.raised"
-                size={28}
-                tintColor={palette.ink2}
-              />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>隐私政策</Text>
-            </View>
-            <SymbolView
-              name="chevron.right"
-              size={14}
-              tintColor={palette.ink3 + "66"}
-            />
-          </Pressable>
-          <View style={styles.separator} />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="第三方许可"
+          />
+          <SettingsRow
+            title="第三方许可"
+            leading={
+              <FileText size={21} color={palette.ink2} accessible={false} />
+            }
             onPress={() =>
               router.push({
                 pathname: "/about",
                 params: { content: "licenses" },
               })
             }
-            style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-          >
-            <View style={styles.iconSlot}>
-              <SymbolView name="doc.text" size={28} tintColor={palette.ink2} />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>第三方许可</Text>
-            </View>
-            <SymbolView
-              name="chevron.right"
-              size={14}
-              tintColor={palette.ink3 + "66"}
-            />
-          </Pressable>
-        </View>
+          />
+        </SettingsSection>
       </ScrollView>
     </SafeAreaView>
   );
@@ -169,67 +129,52 @@ function createStyles(palette: Palette) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: palette.paper },
     content: {
-      paddingHorizontal: spacing.md,
+      paddingHorizontal: 24,
       paddingTop: 34,
-      paddingBottom: 24,
+      paddingBottom: 40,
+      width: "100%",
+      maxWidth: 760,
+      alignSelf: "center",
     },
     brand: { alignItems: "center", paddingBottom: 26 },
     lamp: {
-      width: 64,
-      height: 64,
+      width: 56,
+      height: 56,
       alignItems: "center",
       justifyContent: "center",
       backgroundColor: palette.lampWash,
-      borderColor: palette.line,
-      borderWidth: 1,
-      borderRadius: 16,
+      borderRadius: 17,
+      borderCurve: "continuous",
     },
     wordmark: {
       marginTop: 12,
-      fontSize: 22,
-      fontWeight: "600",
+      fontSize: 27,
+      lineHeight: 36,
       fontFamily: font.serif,
       color: palette.ink,
     },
-    motto: {
-      marginTop: 12,
-      fontSize: 12.5,
-      fontFamily: font.serif,
-      lineHeight: 18,
-      textAlign: "center",
-      color: palette.ink2,
-    },
     version: {
-      marginTop: 12,
-      fontSize: 12,
-      fontWeight: "500",
+      marginTop: 8,
+      fontSize: 13,
+      lineHeight: 20,
       color: palette.ink3,
     },
-    card: {
-      backgroundColor: palette.surface,
-      borderRadius: 26,
-      overflow: "hidden",
+    panelContent: {
+      paddingHorizontal: 24,
+      paddingTop: 24,
+      paddingBottom: 40,
+      gap: 28,
+      width: "100%",
+      maxWidth: 760,
+      alignSelf: "center",
     },
-    row: {
-      minHeight: 52,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: spacing.sm,
-      paddingHorizontal: spacing.md,
+    paragraph: { gap: 8 },
+    paragraphHeading: {
+      fontSize: 17,
+      lineHeight: 25,
+      fontWeight: "600",
+      color: palette.ink,
     },
-    pressed: { opacity: 0.7 },
-    separator: {
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: palette.line,
-      marginLeft: 56,
-      marginRight: 16,
-    },
-    iconSlot: { width: 28 },
-    rowBody: { flex: 1 },
-    rowTitle: { fontSize: type.body, color: palette.ink },
-    panelContent: { padding: spacing.md, gap: spacing.lg },
-    paragraph: { gap: 6 },
-    paragraphHeading: { fontSize: 15, fontWeight: "600", color: palette.ink },
-    paragraphBody: { fontSize: 14, lineHeight: 22, color: palette.ink2 },
+    paragraphBody: { fontSize: 16, lineHeight: 26, color: palette.ink2 },
   });
 }

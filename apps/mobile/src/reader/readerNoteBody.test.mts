@@ -13,16 +13,20 @@ function saveCallback(format: 'EPUB' | 'PDF') {
   const path = new URL(format === 'EPUB' ? './useReaderState.ts' : './pdf/usePdfReader.ts', import.meta.url);
   const source = ts.createSourceFile(path.pathname, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true);
   let callback: any;
+  let refresh: any;
+  let chapterHelper: any;
   const visit = (node: any) => {
+    if (format === 'EPUB' && ts.isFunctionDeclaration(node) && node.name?.text === 'annotationChapter') chapterHelper = node;
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'saveNote') {
       assert.ok(ts.isCallExpression(node.initializer));
       callback = node.initializer.arguments[0];
     }
+    if (format === 'EPUB' && ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'refreshSavedAnnotations') refresh = node.initializer.arguments[0];
     ts.forEachChild(node, visit);
   };
   visit(source);
   assert.ok(callback, 'reader must expose its real saveNote callback');
-  return ts.transpileModule('module.exports = ' + callback.getText(source) + ';', {
+  return ts.transpileModule((chapterHelper ? chapterHelper.getText(source) : '') + (refresh ? 'const refreshSavedAnnotations = ' + refresh.getText(source) + ';' : '') + 'module.exports = ' + callback.getText(source) + ';', {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
 }
@@ -33,7 +37,7 @@ function harness(format: 'EPUB' | 'PDF', editing: boolean, body: string, failFir
   const annotation = { id: 'existing-note', kind: 'note', body: '旧正文', ...selection };
   const created: any[] = [];
   const updated: any[] = [];
-  const failures: string[][] = [];
+  const failures: any[][] = [];
   let attempts = 0;
   let refreshed = 0;
   let cleared = 0;
@@ -41,7 +45,11 @@ function harness(format: 'EPUB' | 'PDF', editing: boolean, body: string, failFir
   const context: any = {
     module: { exports: null },
     bookId: 'book-id', fileUri: 'file:///owned.pdf', chapter: '章节', noteBody: body,
+    currentChapter: { current: '章节' },
     annotationOwner: { current: { active: true, bookId: 'book-id', fileUri: 'file:///owned.pdf' } },
+    readerOwner: { current: { active: true, bookId: 'book-id' } },
+    noteSaveOperation: { current: null },
+    ownsReaderUI: (owner: any) => owner.active && context.readerOwner.current === owner,
     ownsAnnotationUI: (owner: any) => owner.active && context.annotationOwner.current === owner,
     setError() {},
     selectionActionsEnabled: { current: true },
@@ -71,6 +79,69 @@ function harness(format: 'EPUB' | 'PDF', editing: boolean, body: string, failFir
     get refreshed() { return refreshed; }, get cleared() { return cleared; },
     save: () => context.module.exports() };
 }
+
+for (const editing of [false, true]) {
+  test(`EPUB ${editing ? 'edited' : 'new'} note remains saved when its display reload fails, and retries only the read`, async () => {
+    const h = harness('EPUB', editing, rawBody);
+    let reads = 0;
+    h.context.refreshAnnotations = async () => {
+      if (++reads === 1) throw new Error('display read unavailable');
+    };
+    assert.equal(await h.save(), true, 'durable success closes the editor');
+    assert.equal(h.created.length + h.updated.length, 1);
+    assert.equal(h.context.noteBody, '');
+    assert.equal(h.cleared, 1);
+    assert.equal(h.context.saving, false);
+    assert.equal(h.failures.length, 1);
+    assert.match(h.failures[0][0], /笔记已保存/);
+    assert.match(h.failures[0][1], /显示.*失败|显示.*未能/);
+    const retry = h.failures[0][2].find((button: any) => button.text === '重试显示');
+    assert.ok(retry);
+    await retry.onPress();
+    assert.equal(reads, 2);
+    assert.equal(h.created.length + h.updated.length, 1, 'retry never saves again');
+    assert.equal(h.failures.length, 1);
+  });
+}
+
+test('EPUB display retry stays available after another read failure and is revoked when its reader retires', async () => {
+  const h = harness('EPUB', true, rawBody);
+  let reads = 0;
+  h.context.refreshAnnotations = async () => {
+    reads++;
+    throw new Error('display read unavailable');
+  };
+  assert.equal(await h.save(), true);
+  const retry = () => h.failures.at(-1)[2].find((button: any) => button.text === '重试显示').onPress;
+  await retry()();
+  assert.equal(reads, 2);
+  assert.equal(h.failures.length, 2, 'another read failure is visible');
+  const oldRetry = retry();
+  h.context.readerOwner.current.active = false;
+  h.context.readerOwner.current = { active: true, bookId: 'another-book' };
+  await oldRetry();
+  assert.equal(reads, 2, 'retired alert cannot start another read');
+  assert.equal(h.failures.length, 2);
+  assert.equal(h.updated.length, 1);
+});
+
+test('EPUB note display completion cannot close the replacement reader editor', async () => {
+  const h = harness('EPUB', true, rawBody);
+  let release!: () => void;
+  let refreshing = false;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  h.context.refreshAnnotations = () => { refreshing = true; return waiting; };
+  const save = h.save();
+  while (!refreshing) await Promise.resolve();
+  h.context.readerOwner.current.active = false;
+  h.context.readerOwner.current = { active: true, bookId: 'replacement-book' };
+  h.context.noteBody = '下一本书的未保存正文';
+  release();
+  assert.equal(await save, false, 'retired caller must not close a replacement editor');
+  assert.equal(h.context.noteBody, '下一本书的未保存正文');
+  assert.equal(h.updated.length, 1);
+  assert.deepEqual(h.failures, []);
+});
 
 const rawBody = ' \t\n第一行\r\n第二行\u3000 \n';
 for (const format of ['EPUB', 'PDF'] as const) {

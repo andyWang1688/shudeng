@@ -73,11 +73,10 @@ export function validateServiceDraft(draft: AIServiceDraft): AIServiceDraft {
     throw new Error("请填写服务名称和模型。");
   if (
     draft.contextWindowTokens !== undefined &&
-    (!Number.isInteger(draft.contextWindowTokens) ||
-      draft.contextWindowTokens < 1000 ||
-      draft.contextWindowTokens > 1_000_000)
+    (!Number.isSafeInteger(draft.contextWindowTokens) ||
+      draft.contextWindowTokens < 1000)
   ) {
-    throw new Error("上下文窗口需为 1,000–1,000,000 之间的整数。");
+    throw new Error("上下文窗口需为至少 1,000 的安全整数。");
   }
   return {
     ...(draft.id !== undefined ? { id: draft.id } : {}),

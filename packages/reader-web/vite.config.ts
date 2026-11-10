@@ -1,7 +1,9 @@
 import { defineConfig } from 'vite'
+import { foliateEpubOnly } from './foliate-build.ts'
 
 export default defineConfig({
   base: './',
+  plugins: [foliateEpubOnly()],
   build: {
     outDir: 'dist',
     target: 'es2020',

@@ -68,7 +68,7 @@ function screenHarness(installed = false, removeFailure = false) {
     "../../platform/semanticModel": { getSemanticModelState: async () => ({ installed, bytes: 0 }), installSemanticModel: ({ onProgress }: any) => { progress = onProgress; return new Promise<void>((yes, no) => { finish = yes; reject = no; }); }, async removeSemanticModel() { removed++; if (removeFailure) throw new Error("owned fixture failure"); } },
     "../../platform/settings/semanticPreparation": { observeSemanticPreparation: () => () => {}, prepareExistingBooks() { preparation++; }, async cancelSemanticPreparation() { preparationCancelled++; } },
   });
-  const Screen = load("apps/mobile/src/ui/settings/AISettingsScreen.tsx").AISettingsScreen;
+  const Screen = load("apps/mobile/src/ui/settings/SemanticSettingsScreen.tsx").SemanticSettingsScreen;
   const render = () => h.render(() => Screen({ onBack() {}, onEditService() {}, onMCPSettings() {}, onSendingDetails() {} }));
   return { render, alerts, unmount: h.unmount, finish: () => finish(), cancelComplete: () => reject(Object.assign(new Error("下载已取消。"), { name: "AbortError" })), lateProgress: () => progress({ stage: "download", fraction: .9 }), get preparation() { return preparation; }, get removed() { return removed; }, get preparationCancelled() { return preparationCancelled; } };
 }

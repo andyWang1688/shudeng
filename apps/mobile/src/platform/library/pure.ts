@@ -67,6 +67,7 @@ export function annotationReadingOrder(value: unknown): { readonly progression?:
     visit(input.locations, depth + 1);
     visit(input.locator, depth + 1);
     visit(input.readium, depth + 1);
+    visit(input.selection, depth + 1);
     if (isRecord(input.legacy)) visit(input.legacy.raw, depth + 1);
     visit(input.cfi, depth + 1);
   };

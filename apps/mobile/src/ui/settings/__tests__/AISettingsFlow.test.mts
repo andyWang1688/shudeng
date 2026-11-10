@@ -4,6 +4,7 @@ import {
   aiConsentScope,
   validateServiceDraft,
 } from "../../../platform/settings/aiCatalog.ts";
+import { parseContextWindowTokens } from "../../../../../../packages/core/src/agent/context-window.ts";
 import {
   hooks,
   jsx,
@@ -22,71 +23,32 @@ const basePorts = (h: ReturnType<typeof hooks>) => ({
   "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" },
   "../theme": { usePalette: () => palette },
   "./SettingsParts": parts,
+  "./ServiceList": { ServiceList: "ServiceList" },
 });
 const row = (tree: any, title: string) =>
   nodes(tree, (n) => n.type === "SettingsRow" && n.props.title === title)[0];
 const action = (tree: any, title: string) =>
   nodes(tree, (n) => n.type === "SettingsAction" && n.props.title === title)[0];
 
-test("main settings group the four concerns and defer MCP loading to its own screen", async () => {
+test("AI services load real configurations and keep unrelated settings off the list", async () => {
   const h = hooks();
-  let openedMCP = 0,
-    readsMCP = 0;
+  let unrelatedReads = 0;
   const Screen = loader({
     ...basePorts(h),
     "expo-router": { useFocusEffect: (fn: any) => h.react.useEffect(fn, [fn]) },
-    "expo-symbols": { SymbolView: "SymbolView" },
     "../components/BookNotice": { BookNotice: "BookNotice" },
-    "./useAISendingConsent": {
-      useAISendingConsent: () => ({ sendingConsent: null }),
-    },
-    "../../platform/aiConfig": {
-      loadAIServiceCatalog: async () => ({
-        version: 2,
-        selectedId: null,
-        services: [],
-      }),
-    },
-    "../../platform/mcp": {
-      loadMCPServers() {
-        readsMCP++;
-        throw new Error("MCP must load on its own screen");
-      },
-    },
-    "../../platform/semanticModel": {
-      getSemanticModelState: async () => ({ installed: false }),
-    },
-    "../../platform/settings/semanticPreparation": {},
+    "./useAISendingConsent": { useAISendingConsent: () => ({ sendingConsent: null }) },
+    "../../platform/settings/aiCatalog": { aiConsentScope },
+    "../../platform/aiConfig": { loadAIServiceCatalog: async () => ({ version: 2, selectedId: null, services: [] }) },
+    "../../platform/mcp": { loadMCPServers() { unrelatedReads++; throw new Error("unexpected MCP read"); } },
+    "../../platform/semanticModel": { getSemanticModelState() { unrelatedReads++; throw new Error("unexpected semantic read"); } },
   })("apps/mobile/src/ui/settings/AISettingsScreen.tsx").AISettingsScreen;
-  const render = () =>
-    h.render(() =>
-      Screen({
-        onBack() {},
-        onEditService() {},
-        onAssistantSettings() {},
-        onSendingDetails() {},
-        onMCPSettings() {
-          openedMCP++;
-        },
-      }),
-    );
-  render();
-  await flush();
-  const tree = render();
-  assert.equal(
-    nodes(tree, (n) => n.type === "SettingsHeader")[0].props.title,
-    "AI 与助手",
-  );
-  assert.deepEqual(
-    nodes(tree, (n) => n.type === "SettingsSection").map((n) => n.props.title),
-    ["模型服务", "阅读助手", "本地语义资料", "其他"],
-  );
-  assert.equal(readsMCP, 0);
-  row(tree, "外部工具").props.onPress();
-  assert.equal(openedMCP, 1);
-  assert.ok(row(tree, "自定义指令"));
-  assert.ok(row(tree, "AI 发送说明"));
-  h.unmount();
+  const render = () => h.render(() => Screen({ onBack() {}, onEditService() {} }));
+  render(); await flush(); const tree = render();
+  assert.equal(nodes(tree, (n) => n.type === "SettingsHeader")[0].props.title, "AI 服务");
+  assert.equal(nodes(tree, (n) => n.type === "ServiceList")[0].props.disabled, false);
+  for (const title of ["外部工具", "AI 发送说明", "自定义指令", "语义资料"]) assert.equal(row(tree, title), undefined);
+  assert.equal(unrelatedReads, 0); h.unmount();
 });
 
 test("service draft retains the web-search choice across advanced-settings navigation", () => {
@@ -109,6 +71,22 @@ test("service draft retains the web-search choice across advanced-settings navig
   assert.equal(draft.webSearchEnabled, true);
   assert.equal(draft.name, "在高级设置修改的名称");
   h.unmount();
+});
+
+test("saved service drafts keep their original protocol while new drafts can choose one", () => {
+  for (const existing of [false, true]) {
+    const h = hooks();
+    const Provider = loader({
+      react: { ...h.react, createContext: () => ({ Provider: "DraftProvider" }) },
+      "react/jsx-runtime": { jsx, jsxs: jsx },
+    })("apps/mobile/src/ui/settings/AIServiceDraft.tsx").AIServiceDraftProvider;
+    const service = existing ? { id: "saved", name: "Saved model", provider: "openai", model: "reading-model", baseUrl: "https://reader.example/v1" } : null;
+    const render = () => h.render(() => Provider({ service, selected: false, children: null }));
+    const draft = render().props.value;
+    draft.setProvider("anthropic");
+    assert.equal(render().props.value.provider, existing ? "openai" : "anthropic");
+    h.unmount();
+  }
 });
 
 const { resolveWebSearchPolicy } = loader({
@@ -146,8 +124,8 @@ test("service search is an unsaved choice and unsupported gateways cannot be sav
     };
     const Editor = loader({
       ...basePorts(h),
-      "expo-router": { useRouter: () => ({ push() {} }) },
-      "@shudeng/core/agent": { resolveWebSearchPolicy },
+      "expo-router": { useRouter: () => ({ push() {} }), usePreventRemove: () => () => undefined },
+      "@shudeng/core/agent": { resolveWebSearchPolicy, parseContextWindowTokens },
       "./AIServiceDraft": { AI_PRESETS: {}, useAIServiceDraft: () => draft },
       "../../platform/settings/aiCatalog": {
         aiConsentScope,
@@ -170,27 +148,38 @@ test("service search is an unsaved choice and unsupported gateways cannot be sav
       },
     })("apps/mobile/src/ui/settings/AIServiceEditor.tsx").AIServiceEditor;
     const render = () =>
-      h.render(() =>
-        Editor({
+      h.render(() => {
+        const tree = Editor({
           service,
           selected: true,
           onClose() {
             closes++;
           },
           onChanged() {},
-        }),
-      );
+        });
+        for (const form of nodes(tree, node => typeof node.type === "function" && node.type.name === "AIServiceForm"))
+          form.props = { ...form.props, rendered: form.type(form.props) };
+        return tree;
+      });
     let tree = render();
     let toggle = nodes(
       tree,
       (n) => n.props?.testID === "ai-service-web-search",
     )[0];
     const supported = baseUrl.startsWith("https://api.openai.com");
-    assert.equal(toggle.props.disabled, !supported);
-    toggle.props.onValueChange(true);
+    if (supported) {
+      assert.equal(toggle.props.disabled, false);
+      toggle.props.onValueChange(true);
+    } else {
+      assert.equal(toggle, undefined);
+      assert.equal(row(tree, "联网搜索"), undefined);
+      const form = nodes(tree, node => typeof node.type === "function" && node.type.name === "AIServiceForm")[0];
+      form.props.onWebSearchChange(true);
+    }
     tree = render();
     toggle = nodes(tree, (n) => n.props?.testID === "ai-service-web-search")[0];
-    assert.equal(toggle.props.value, supported);
+    if (supported) assert.equal(toggle.props.value, true);
+    else assert.equal(draft.webSearchEnabled, false);
     assert.equal(writes.length, 0);
     action(tree, "保存").props.onPress();
     await flush();

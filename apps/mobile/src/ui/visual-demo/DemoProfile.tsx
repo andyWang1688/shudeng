@@ -1,176 +1,266 @@
-/** Visual prototype. Settings stay in memory; no service configuration is changed. */
+/** Profile hierarchy prototype. All samples and drafts live only in memory. */
 import { useState, type ReactNode } from "react";
 import {
+  Alert,
+  Keyboard,
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
 } from "react-native";
 import {
-  ChevronLeft,
+  BookOpen,
   ChevronRight,
   CircleHelp,
+  Download,
+  FilePenLine,
   SlidersHorizontal,
-  BookOpen,
 } from "lucide-react-native";
 import { DemoHeading } from "./DemoChrome";
+import {
+  DemoModelSettings,
+  ModelDemoHeader,
+  sampleServices,
+  type DemoService,
+} from "./DemoModelSettings";
 import { demoColors as c } from "./demoTheme";
 
-type Page = "home" | "assistant" | "service" | "about";
+type Page = "home" | "models" | "assistant" | "semantic" | "about";
+const defaultInstructions = "先从书中寻找依据，清楚区分原文与推断。";
+const pageTitles = {
+  assistant: "助手指令",
+  semantic: "离线语义资料",
+  about: "关于书灯",
+};
 export function DemoProfile() {
   const detail = process.env.EXPO_PUBLIC_UI_DEMO_DETAIL;
   const [page, setPage] = useState<Page>(
-    detail === "assistant" || detail === "about" ? detail : "home",
+    detail === "models"
+      ? "models"
+      : detail && detail in pageTitles
+        ? (detail as Page)
+        : "home",
   );
-  const [web, setWeb] = useState(true);
-  const [text, setText] = useState("先从书中寻找依据，清楚区分原文与推断。");
-  const title = {
-    home: "我的",
-    assistant: "AI 与助手",
-    service: "OpenAI",
-    about: "关于书灯",
-  }[page];
+  const [services, setServices] = useState<DemoService[]>(sampleServices);
+  const [selectedId, setSelectedId] = useState("deepseek");
+  const [instructions, setInstructions] = useState(defaultInstructions);
+  const [draft, setDraft] = useState(defaultInstructions);
+  const [saved, setSaved] = useState(false);
+  const selected = services.find((service) => service.id === selectedId);
+  const save = (service: DemoService) =>
+    setServices((old) =>
+      old.some((item) => item.id === service.id)
+        ? old.map((item) => (item.id === service.id ? service : item))
+        : [...old, service],
+    );
+  const remove = (id: string) => {
+    setServices((old) => old.filter((service) => service.id !== id));
+    if (id === selectedId) setSelectedId("");
+  };
+  const navigate = (next: Page) => {
+    Keyboard.dismiss();
+    setSaved(false);
+    setPage(next);
+  };
+  if (page === "models")
+    return (
+      <DemoModelSettings
+        services={services}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        onSave={save}
+        onRemove={remove}
+        onBack={() => navigate("home")}
+      />
+    );
   return (
     <View style={s.screen}>
       {page === "home" ? (
         <DemoHeading title="我的" />
       ) : (
-        <View style={s.navigation}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="返回"
-            onPress={() => setPage(page === "service" ? "assistant" : "home")}
-            style={s.back}
-          >
-            <ChevronLeft size={24} color={c.ink} />
-          </Pressable>
-          <Text accessibilityRole="header" style={s.navTitle}>
-            {title}
-          </Text>
-          <View style={s.balance} />
-        </View>
+        <ModelDemoHeader
+          title={pageTitles[page]}
+          onBack={() => navigate("home")}
+          {...(page === "assistant"
+            ? {
+                action: "保存",
+                onAction: () => {
+                  Keyboard.dismiss();
+                  setInstructions(draft);
+                  setSaved(true);
+                },
+              }
+            : {})}
+        />
       )}
       <ScrollView
-        bounces
-        alwaysBounceVertical
-        keyboardDismissMode="on-drag"
+        key={page}
+        contentContainerStyle={s.content}
+        automaticallyAdjustKeyboardInsets
+        keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={s.content}
       >
         {page === "home" && (
           <>
-            <View style={s.identity}>
-              <View style={s.appMark}>
-                <BookOpen size={25} color={c.accent} strokeWidth={1.6} />
-              </View>
-              <Text style={s.brand}>书灯</Text>
-            </View>
-            <View style={s.group}>
+            <Section title="AI 与助手" first>
               <Row
-                icon={<SlidersHorizontal size={21} color={c.secondary} />}
-                label="AI 与助手"
-                onPress={() => setPage("assistant")}
+                icon={SlidersHorizontal}
+                title="AI 服务"
+                value={selected?.name ?? "未选择"}
+                onPress={() => navigate("models")}
               />
               <Row
-                icon={<CircleHelp size={21} color={c.secondary} />}
-                label="关于书灯"
-                onPress={() => setPage("about")}
+                icon={FilePenLine}
+                title="助手指令"
+                onPress={() => navigate("assistant")}
+              />
+              <Row
+                icon={Download}
+                title="离线语义资料"
+                value="未下载"
+                onPress={() => navigate("semantic")}
                 last
               />
-            </View>
+            </Section>
+            <Section title="通用">
+              <Row
+                icon={CircleHelp}
+                title="关于书灯"
+                onPress={() => navigate("about")}
+                last
+              />
+            </Section>
           </>
         )}
         {page === "assistant" && (
           <>
-            <Text style={s.label}>模型服务</Text>
-            <View style={s.group}>
-              <Row
-                label="OpenAI"
-                value="GPT-4.1"
-                onPress={() => setPage("service")}
-                last
-              />
-            </View>
-            <Text style={[s.label, s.sectionGap]}>助手指令</Text>
+            <Text style={s.hint}>人设、语气与回答偏好，适用于所有书籍。</Text>
             <TextInput
-              accessibilityLabel="助手指令"
-              value={text}
-              onChangeText={setText}
+              accessibilityLabel="助手指令，支持 Markdown"
               multiline
-              style={s.instructions}
               textAlignVertical="top"
+              value={draft}
+              onChangeText={(value) => {
+                setDraft(value);
+                setSaved(false);
+              }}
+              placeholder="写下你希望助手如何与你交流…"
+              placeholderTextColor={c.muted}
+              style={s.instructions}
             />
+            <Text style={s.hint} accessibilityLiveRegion="polite">
+              {saved
+                ? "已保存，下一次提问生效。"
+                : draft !== instructions
+                  ? "有未保存的修改"
+                  : "支持 Markdown，保存后下一次提问生效。"}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              style={s.textAction}
+              onPress={() => {
+                setDraft(defaultInstructions);
+                setSaved(false);
+              }}
+            >
+              <Text style={s.actionText}>恢复默认</Text>
+            </Pressable>
           </>
         )}
-        {page === "service" && (
+        {page === "semantic" && (
           <>
-            <Text style={s.label}>模型</Text>
-            <View style={s.group}>
-              <View style={s.valueRow}>
-                <Text style={s.rowText}>当前模型</Text>
-                <Text style={s.value}>GPT-4.1</Text>
+            <Section title="检索资料" first>
+              <View style={s.infoRow}>
+                <Download size={24} color={c.accent} accessible={false} />
+                <View style={s.rowText}>
+                  <Text style={s.title}>离线语义资料</Text>
+                  <Text style={s.detail}>未下载 · 约 81 MB</Text>
+                </View>
               </View>
-            </View>
-            <Text style={[s.label, s.sectionGap]}>模型能力</Text>
-            <View style={s.group}>
-              <View style={s.valueRow}>
-                <Text style={s.rowText}>联网搜索</Text>
-                <Switch
-                  accessibilityLabel="联网搜索"
-                  value={web}
-                  onValueChange={setWeb}
-                  trackColor={{ false: c.line, true: c.accent }}
-                  thumbColor={c.surface}
-                />
-              </View>
-            </View>
-            <Text style={s.hint}>由模型服务提供，可能产生额外费用。</Text>
+            </Section>
+            <Text style={s.hint}>
+              用于书内语义检索。阅读、原文搜索与标注无需下载。
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              style={s.primary}
+              onPress={() =>
+                Alert.alert(
+                  "界面预览",
+                  "此 Demo 不下载文件，也不会准备书籍索引。",
+                )
+              }
+            >
+              <Text style={s.primaryText}>下载资料</Text>
+            </Pressable>
+            <Text style={s.hint}>
+              下载完成后，各本书还需准备自己的检索索引。
+            </Text>
           </>
         )}
         {page === "about" && (
           <View style={s.about}>
-            <View style={s.appMark}>
-              <BookOpen size={25} color={c.accent} />
+            <View style={s.mark}>
+              <BookOpen size={25} color={c.accent} accessible={false} />
             </View>
             <Text style={s.brand}>书灯</Text>
-            <Text style={s.hint}>界面设计预览 · 示例数据</Text>
+            <Text style={s.detail}>交互预览 · 示例配置</Text>
           </View>
         )}
       </ScrollView>
     </View>
   );
 }
+function Section({
+  title,
+  first,
+  children,
+}: {
+  title: string;
+  first?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <View style={!first && s.sectionGap}>
+      <Text accessibilityRole="header" style={s.label}>
+        {title}
+      </Text>
+      <View style={s.group}>{children}</View>
+    </View>
+  );
+}
 function Row({
-  label,
+  icon: Icon,
+  title,
+  detail,
   value,
-  icon,
   onPress,
   last,
 }: {
-  label: string;
+  icon: typeof BookOpen;
+  title: string;
+  detail?: string;
   value?: string;
-  icon?: ReactNode;
   onPress: () => void;
   last?: boolean;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={[title, detail, value].filter(Boolean).join("，")}
       onPress={onPress}
-      style={({ pressed }) => [
-        s.row,
-        !last && s.rowLine,
-        pressed && { opacity: 0.6 },
-      ]}
+      style={({ pressed }) => [s.row, !last && s.line, pressed && s.pressed]}
     >
-      {icon}
-      <Text style={s.rowText}>{label}</Text>
+      <Icon size={21} color={c.secondary} accessible={false} />
+      <View style={s.rowText}>
+        <Text style={s.title}>{title}</Text>
+        {detail && <Text style={s.detail}>{detail}</Text>}
+      </View>
       {value && <Text style={s.value}>{value}</Text>}
-      <ChevronRight size={17} color={c.muted} />
+      <ChevronRight size={17} color={c.muted} accessible={false} />
     </Pressable>
   );
 }
@@ -179,19 +269,84 @@ const s = StyleSheet.create({
   content: {
     paddingHorizontal: 24,
     paddingTop: 10,
-    paddingBottom: 40,
+    paddingBottom: 30,
     width: "100%",
     maxWidth: 760,
     alignSelf: "center",
   },
-  identity: {
-    flexDirection: "row",
-    gap: 15,
-    alignItems: "center",
-    marginTop: 4,
-    marginBottom: 38,
+  sectionGap: { marginTop: 24 },
+  label: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: c.secondary,
+    marginLeft: 16,
+    marginBottom: 8,
   },
-  appMark: {
+  group: {
+    backgroundColor: c.surface,
+    borderRadius: 16,
+    paddingHorizontal: 17,
+    borderCurve: "continuous",
+  },
+  row: {
+    minHeight: 60,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 13,
+    paddingVertical: 15,
+  },
+  line: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.line,
+  },
+  rowText: { flex: 1, minWidth: 0, gap: 3 },
+  title: { fontSize: 17, lineHeight: 25, color: c.ink, flexShrink: 1 },
+  detail: { color: c.secondary, fontSize: 14, lineHeight: 22 },
+  value: { color: c.secondary, fontSize: 14, lineHeight: 22, flexShrink: 1 },
+  hint: {
+    fontSize: 14,
+    lineHeight: 23,
+    color: c.secondary,
+    marginHorizontal: 4,
+    marginTop: 12,
+  },
+  instructions: {
+    minHeight: 260,
+    marginTop: 20,
+    borderRadius: 16,
+    padding: 17,
+    backgroundColor: c.surface,
+    color: c.ink,
+    fontSize: 17,
+    lineHeight: 28,
+  },
+  textAction: {
+    minHeight: 48,
+    alignSelf: "flex-start",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+    marginTop: 8,
+  },
+  actionText: { fontSize: 16, color: c.accent },
+  infoRow: {
+    minHeight: 76,
+    paddingVertical: 17,
+    flexDirection: "row",
+    gap: 14,
+    alignItems: "center",
+  },
+  primary: {
+    minHeight: 50,
+    borderRadius: 14,
+    backgroundColor: c.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 26,
+    padding: 12,
+  },
+  primaryText: { fontSize: 17, fontWeight: "600", color: c.surface },
+  about: { alignItems: "center", paddingTop: 48, gap: 15 },
+  mark: {
     width: 56,
     height: 56,
     borderRadius: 17,
@@ -205,75 +360,5 @@ const s = StyleSheet.create({
     fontSize: 27,
     lineHeight: 36,
   },
-  navigation: {
-    minHeight: 56,
-    paddingHorizontal: 12,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  back: {
-    width: 44,
-    height: 44,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  balance: { width: 44 },
-  navTitle: {
-    flex: 1,
-    color: c.ink,
-    fontSize: 17,
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  group: {
-    backgroundColor: c.surface,
-    borderRadius: 16,
-    paddingHorizontal: 17,
-    borderCurve: "continuous",
-  },
-  row: {
-    flexDirection: "row",
-    gap: 13,
-    alignItems: "center",
-    minHeight: 62,
-    paddingVertical: 16,
-  },
-  rowLine: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: c.line,
-  },
-  rowText: { flex: 1, fontSize: 17, lineHeight: 25, color: c.ink },
-  value: { color: c.secondary, fontSize: 14, lineHeight: 22 },
-  valueRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
-    minHeight: 64,
-    paddingVertical: 12,
-  },
-  label: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: c.secondary,
-    marginLeft: 4,
-    marginBottom: 10,
-  },
-  sectionGap: { marginTop: 32 },
-  hint: {
-    color: c.secondary,
-    fontSize: 13,
-    lineHeight: 21,
-    marginTop: 12,
-    paddingHorizontal: 4,
-  },
-  instructions: {
-    minHeight: 160,
-    padding: 17,
-    borderRadius: 16,
-    backgroundColor: c.surface,
-    fontSize: 17,
-    lineHeight: 28,
-    color: c.ink,
-  },
-  about: { alignItems: "center", paddingTop: 48, gap: 15 },
+  pressed: { opacity: 0.6 },
 });

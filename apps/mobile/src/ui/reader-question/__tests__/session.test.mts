@@ -236,6 +236,61 @@ test('history presentation survives Activity effect cleanup while its question r
   assert.equal(f.registry.get(history.id), undefined);
 });
 
+test('closing and reopening a saved conversation keeps its unsent draft without retaining the old route', () => {
+  const f = fixture();
+  const input = { bookId: 'same-book', theme: 'light' as const, origin: null, conversationId: 'history-draft' };
+  const first = f.registry.createHistory(input);
+  const unbind = f.registry.bind(first, 'history-route');
+  first.update({ draft: '未发送的追问', selection: { start: 2, end: 4 } });
+  unbind();
+  f.registry.prune(new Set(['tabs', 'reader-route-A']));
+  assert.equal(f.registry.get(first.id), undefined, 'the removed presentation must still be collected');
+  const reopened = f.registry.createHistory(input);
+  assert.notEqual(reopened.id, first.id);
+  assert.equal(reopened.getSnapshot().draft, '未发送的追问');
+  assert.deepEqual(reopened.getSnapshot().selection, { start: 2, end: 4 });
+  assert.equal(reopened.origin, null);
+  assert.equal(reopened.source, null);
+  assert.equal(f.registry.createHistory({ ...input, bookId: 'another-book' }).getSnapshot().draft, '');
+  assert.equal(f.registry.createHistory({ ...input, conversationId: 'another-conversation' }).getSnapshot().draft, '');
+});
+
+test('a retained exit binding cannot overwrite the reopened conversation draft', () => {
+  const f = fixture();
+  const input = { bookId: 'same-book', theme: 'light' as const, origin: null, conversationId: 'history' };
+  const old = f.registry.createHistory(input);
+  const oldUnbind = f.registry.bind(old, 'old-route');
+  old.update({ draft: '旧窗口的输入' });
+  f.registry.prune(new Set(['tabs', 'reader-route-A']));
+  const next = f.registry.createHistory(input);
+  assert.equal(next.getSnapshot().draft, '旧窗口的输入');
+  const nextUnbind = f.registry.bind(next, 'next-route');
+  next.update({ draft: '新窗口继续输入' });
+  old.update({ draft: '迟到的旧事件' });
+  oldUnbind();
+  assert.equal(f.registry.get(old.id), undefined);
+  nextUnbind();
+  f.registry.prune(new Set(['tabs', 'reader-route-A']));
+  assert.equal(f.registry.createHistory(input).getSnapshot().draft, '新窗口继续输入');
+});
+
+test('clearing or explicitly replacing a draft and disposing the registry never resurrects old text', () => {
+  const f = fixture();
+  const input = { bookId: 'same-book', theme: 'light' as const, origin: null, conversationId: 'history' };
+  const first = f.registry.createHistory(input);
+  first.update({ draft: '不能复活' });
+  const explicit = f.registry.createHistory({ ...input, initialQuestion: '' });
+  assert.equal(explicit.getSnapshot().draft, '');
+  explicit.update({ draft: '新的内容' });
+  explicit.update({ draft: '' });
+  assert.equal(f.registry.createHistory(input).getSnapshot().draft, '');
+  const final = f.registry.createHistory(input);
+  final.update({ draft: '本次运行的草稿' });
+  f.registry.dispose();
+  final.update({ draft: '销毁后的迟到事件' });
+  assert.equal(f.registry.createHistory(input).getSnapshot().draft, '');
+});
+
 test('ordinary ask taps cannot enqueue a second sheet before mounting or while Activity hides it', () => {
   const f = fixture();
   f.registry.openQuestion(f.owner.id, { bookId: 'same-book', theme: 'light', origin });

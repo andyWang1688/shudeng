@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { SymbolView } from "expo-symbols";
-import { type as typeScale, usePalette, type Palette } from "./theme";
+import { BookOpen, MessageCircle, UserRound } from "lucide-react-native";
+import { usePalette, type Palette } from "./theme";
 import { useHaptics } from "./components/useHaptics";
 import { useTabInteractionLocked } from "./tabInteraction";
 
@@ -15,30 +15,21 @@ type TabBarProps = {
   readonly navigateToTab: (routeKey: string) => void;
 };
 
-const TAB_META: Record<
-  string,
-  { label: string; symbol: string; selectedSymbol: string }
-> = {
+const TAB_META: Record<string, { label: string }> = {
   "(shelf)": {
     label: "书架",
-    symbol: "books.vertical",
-    selectedSymbol: "books.vertical.fill",
-  },
-  notes: {
-    label: "笔记",
-    symbol: "square.and.pencil",
-    selectedSymbol: "square.and.pencil",
   },
   conversations: {
     label: "对话",
-    symbol: "bubble.left.and.bubble.right",
-    selectedSymbol: "bubble.left.and.bubble.right.fill",
   },
   "(profile)": {
     label: "我的",
-    symbol: "person.crop.circle",
-    selectedSymbol: "person.crop.circle.fill",
   },
+};
+const TAB_ICONS = {
+  "(shelf)": BookOpen,
+  conversations: MessageCircle,
+  "(profile)": UserRound,
 };
 
 /** Expo Router Tabs 自定义底栏：通过 Tabs 提供的切换动作保留各栏状态。 */
@@ -61,6 +52,7 @@ export function BottomBar({ state, navigateToTab }: TabBarProps) {
         const meta = TAB_META[route.name];
         if (!meta) return null;
         const on = state.index === index;
+        const Icon = TAB_ICONS[route.name as keyof typeof TAB_ICONS];
         return (
           <Pressable
             key={route.key}
@@ -76,10 +68,11 @@ export function BottomBar({ state, navigateToTab }: TabBarProps) {
             style={({ pressed }) => [styles.item, pressed && styles.pressed]}
           >
             <View style={styles.iconSlot}>
-              <SymbolView
-                name={(on ? meta.selectedSymbol : meta.symbol) as never}
-                size={22}
-                tintColor={on ? palette.ink : palette.ink3}
+              <Icon
+                size={23}
+                color={on ? palette.lamp : palette.ink3}
+                strokeWidth={on ? 2 : 1.5}
+                accessible={false}
               />
             </View>
             <Text
@@ -102,7 +95,7 @@ function createStyles(palette: Palette) {
   return StyleSheet.create({
     bar: {
       flexDirection: "row",
-      borderTopWidth: 1,
+      borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: palette.line,
       backgroundColor: palette.paper,
       paddingHorizontal: 6,
@@ -122,11 +115,11 @@ function createStyles(palette: Palette) {
     },
     label: {
       marginTop: 3,
-      fontSize: typeScale.captionSmall,
-      lineHeight: 12,
+      fontSize: 11,
+      lineHeight: 17,
       fontWeight: "500",
       color: palette.ink3,
     },
-    on: { color: palette.ink },
+    on: { color: palette.lamp },
   });
 }

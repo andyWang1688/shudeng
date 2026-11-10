@@ -1,59 +1,59 @@
 /**
- * 书灯设计令牌：对齐 docs/design/ui-development-standard.md、Swift BookDesign 与 design-baseline。
- * `colors` 保留浅色静态导出给旧页面；根四栏用 `usePalette()` 跟随系统深色。
+ * Product tokens follow the approved UI demo, with semantic dark-mode equivalents.
+ * `colors` 保留浅色静态导出给旧页面；产品页面用 `usePalette()` 跟随外观。
  */
-import { useColorScheme } from 'react-native';
-import { useAppearanceMode } from './appearance';
+import { useColorScheme } from "react-native";
+import { useAppearanceMode } from "./appearance";
 
 export const lightColors = {
-  paper: '#FAF7F1',
-  paperDeep: '#F2EDE2',
-  surface: '#FFFFFF',
-  ink: '#211E18',
-  ink2: '#57534A',
-  ink3: '#6E6A60',
-  line: '#E7E0D2',
-  lamp: '#B4712A',
-  lampInk: '#8A5413',
-  lampWash: '#F6E7CC',
-  selection: '#F2DBA6',
-  error: '#A63A2B',
-  errorWash: '#F8E7E1',
-  danger: '#A63A2B',
-  dangerWash: '#F8E7E1',
-  green: '#4F5A4A',
-  olive: '#E8E5D8',
+  paper: "#FAF9F6",
+  paperDeep: "#F0EDE7",
+  surface: "#FFFFFF",
+  ink: "#292722",
+  ink2: "#625E56",
+  ink3: "#777168",
+  line: "#E4E0D8",
+  lamp: "#805638",
+  lampInk: "#805638",
+  lampWash: "#EDE4D9",
+  selection: "#F2DBA6",
+  error: "#A63A2B",
+  errorWash: "#F8E7E1",
+  danger: "#A63A2B",
+  dangerWash: "#F8E7E1",
+  green: "#4F5A4A",
+  olive: "#E8E5D8",
 } as const;
 
 export const darkColors: Palette = {
-  paper: '#1B1A17',
-  paperDeep: '#24221E',
-  surface: '#2A2723',
-  ink: '#F3EEE3',
-  ink2: '#C3BCAE',
-  ink3: '#948D80',
-  line: '#3A362F',
-  lamp: '#E0AE6A',
-  lampInk: '#F0C98B',
-  lampWash: '#3A2F1F',
-  selection: '#5A4A2A',
-  error: '#F0A79A',
-  errorWash: '#3A2823',
-  danger: '#F0A79A',
-  dangerWash: '#3A2823',
-  green: '#46503F',
-  olive: '#3A362F',
+  paper: "#1B1A17",
+  paperDeep: "#24221E",
+  surface: "#2A2723",
+  ink: "#F3EEE3",
+  ink2: "#C3BCAE",
+  ink3: "#948D80",
+  line: "#3A362F",
+  lamp: "#E0AE6A",
+  lampInk: "#F0C98B",
+  lampWash: "#3A2F1F",
+  selection: "#5A4A2A",
+  error: "#F0A79A",
+  errorWash: "#3A2823",
+  danger: "#F0A79A",
+  dangerWash: "#3A2823",
+  green: "#46503F",
+  olive: "#3A362F",
 } as const;
 
 export type Palette = { readonly [K in keyof typeof lightColors]: string };
 
-/** 旧页面（阅读器、问答等）仍用浅色静态令牌；逐页对齐的根四栏用 usePalette。 */
+/** 保留给尚未迁移的消费者；当前产品页面使用 usePalette。 */
 export const colors: Palette = lightColors;
 
 export function usePalette(): Palette {
   const mode = useAppearanceMode();
   const systemScheme = useColorScheme();
-  const dark = mode === 'system' ? systemScheme === 'dark' : mode === 'dark';
+  const dark = mode === "system" ? systemScheme === "dark" : mode === "dark";
   return dark ? darkColors : lightColors;
 }
 
@@ -96,7 +96,7 @@ export const type = {
 
 export const font = {
   system: undefined as string | undefined,
-  serif: 'Songti SC',
+  serif: "Songti SC",
 } as const;
 
 export type BookCoverTone = {
@@ -117,7 +117,11 @@ function titlePaletteIndex(title: string): number {
         : point < 0x800
           ? [0xc0 | (point >> 6), 0x80 | (point & 0x3f)]
           : point < 0x10000
-            ? [0xe0 | (point >> 12), 0x80 | ((point >> 6) & 0x3f), 0x80 | (point & 0x3f)]
+            ? [
+                0xe0 | (point >> 12),
+                0x80 | ((point >> 6) & 0x3f),
+                0x80 | (point & 0x3f),
+              ]
             : [
                 0xf0 | (point >> 18),
                 0x80 | ((point >> 12) & 0x3f),
@@ -132,16 +136,18 @@ function titlePaletteIndex(title: string): number {
 /** Generic fallback used only when the publication has no embedded cover. */
 export function bookCoverTone(title: string, _format?: string): BookCoverTone {
   const groups = [
-    ['#F0E5CE', '#3B332A'],
-    ['#38483F', '#F1EAD9'],
-    ['#8F5336', '#F7EBDF'],
-    ['#3A4653', '#EFF0E8'],
+    ["#F0E5CE", "#3B332A"],
+    ["#38483F", "#F1EAD9"],
+    ["#8F5336", "#F7EBDF"],
+    ["#3A4653", "#EFF0E8"],
   ] as const;
   const [background, ink] = groups[titlePaletteIndex(title)]!;
   return { background, ink, rule: `${ink}66` };
 }
 
 export function bookSwatchTone(title: string, _format?: string): BookCoverTone {
-  const background = ['#38483F', '#8F5336', '#3A4653', '#6D5A3A'][titlePaletteIndex(title)]!;
+  const background = ["#38483F", "#8F5336", "#3A4653", "#6D5A3A"][
+    titlePaletteIndex(title)
+  ]!;
   return { background, ink: lightColors.paper, rule: `${lightColors.paper}66` };
 }

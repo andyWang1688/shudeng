@@ -207,7 +207,7 @@ async function dispatch(message: HostToReader): Promise<void> {
         epubReader()?.setSelectionActionsEnabled(message.payload.enabled)
         break
       case 'reader:bookmark-context':
-        epubReader()?.bookmarkContext(message.payload.bookmarks, message.payload.requestId)
+        epubReader()?.bookmarkContext(message.payload.bookmarks, message.payload.requestId, message.payload.captureLocation)
         break
       case 'reader:contents':
         send({ type: 'reader:contents', payload: { items: epubReader()?.contents() ?? [] } })

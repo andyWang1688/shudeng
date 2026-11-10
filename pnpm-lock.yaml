@@ -13,9 +13,9 @@ patchedDependencies:
   expo-symbols@58.0.4:
     hash: 7eb578c9eb068e80002aa6887821d4f2723ad6918bf80d27c3d3015904a69dac
     path: patches/expo-symbols@58.0.4.patch
-  foliate-js@1.0.1:
-    hash: dc3ded0270442a9696c5193598c2b612e1e29babe7c674b8ce56799759ed7164
-    path: patches/foliate-js@1.0.1.patch
+  foliate-js@0.0.0:
+    hash: c784227e998ffbf8645485072b7e85ddb9c961796fc733e6fef4637d1291029c
+    path: patches/foliate-js@0.0.0.patch
   onnxruntime-react-native@1.24.3:
     hash: 03b879966ea5790f8fbb81c9c33e7838344e21de97e859a893eeff1fb59f0093
     path: patches/onnxruntime-react-native@1.24.3.patch
@@ -265,8 +265,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       foliate-js:
-        specifier: 1.0.1
-        version: 1.0.1(patch_hash=dc3ded0270442a9696c5193598c2b612e1e29babe7c674b8ce56799759ed7164)
+        specifier: https://codeload.github.com/readest/foliate-js/tar.gz/b34a0aa63163d19cd13e2ecd19b678394c32fee5
+        version: https://codeload.github.com/readest/foliate-js/tar.gz/b34a0aa63163d19cd13e2ecd19b678394c32fee5(patch_hash=c784227e998ffbf8645485072b7e85ddb9c961796fc733e6fef4637d1291029c)
       pdfjs-dist:
         specifier: 6.5.438
         version: 6.5.438
@@ -2936,8 +2936,9 @@ packages:
     resolution: {integrity: sha512-O8QvQf/B3rBF+eagcc9/WMAjfJoaKckdgSd8PT/qvMIIe4ZjVKrSqV5SDnRFAKY0VrE8r5C4ADYgvYhmwkWADA==}
     engines: {node: '>=0.4.0'}
 
-  foliate-js@1.0.1:
-    resolution: {integrity: sha512-Cj4h2ub5aVA+yUgbhvVhCyxwi0GPF4pyNBa6Lw9+6WKY1ReBxipItn2kEBO6u7Vu/xYXjK711R74+t+yW/0u5w==}
+  foliate-js@https://codeload.github.com/readest/foliate-js/tar.gz/b34a0aa63163d19cd13e2ecd19b678394c32fee5:
+    resolution: {gitHosted: true, integrity: sha512-YRK7FHzIU3xMbcWejr+7UosiVuVo4ayNawiNxDxSGz3YlIF42SY0cE6YOCkXguILik+saq50NCs5fXSiHpdS7w==, tarball: https://codeload.github.com/readest/foliate-js/tar.gz/b34a0aa63163d19cd13e2ecd19b678394c32fee5}
+    version: 0.0.0
 
   fresh@0.5.2:
     resolution: {integrity: sha512-zJ2mQYM18rEFOudeV4GShTGIQ7RbzA7ozbU9I/XBpm7kqgMywgmylMwXHxZJmkVoYkna9d2pVXVXPdYTP9ej8Q==}
@@ -7301,7 +7302,7 @@ snapshots:
     dependencies:
       flow-estree: 0.336.0
 
-  foliate-js@1.0.1(patch_hash=dc3ded0270442a9696c5193598c2b612e1e29babe7c674b8ce56799759ed7164):
+  foliate-js@https://codeload.github.com/readest/foliate-js/tar.gz/b34a0aa63163d19cd13e2ecd19b678394c32fee5(patch_hash=c784227e998ffbf8645485072b7e85ddb9c961796fc733e6fef4637d1291029c):
     dependencies:
       construct-style-sheets-polyfill: 3.1.0
 

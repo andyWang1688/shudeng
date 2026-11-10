@@ -8,6 +8,8 @@ const descriptor = { sessionID, resourceBaseURL: `shudeng-epub://reader/${sessio
 test('maps exact ZIP names to opaque IDs and never constructs paths from untrusted names', async () => {
   const requested: string[] = [];
   const loader = foliateResourceLoader(descriptor, (async input => { requested.push(String(input)); return new Response('正文'); }) as typeof fetch);
+  assert.deepEqual(loader.entries, [{ filename: descriptor.entries[0]!.path, uncompressedSize: 23 }]);
+  assert.deepEqual(requested, [], 'indexing ZIP metadata must not read resources');
   assert.equal(await loader.loadText(descriptor.entries[0]!.path), '正文');
   assert.deepEqual(requested, [`shudeng-epub://reader/${sessionID}/${resourceID}`]);
   assert.equal(await loader.loadText('../outside'), null);

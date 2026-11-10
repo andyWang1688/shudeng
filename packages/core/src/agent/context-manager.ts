@@ -14,12 +14,17 @@ export interface ContextBudget {
 }
 
 export function nativeContextBudget(window: number, outputReserve = 1400): ContextBudget {
-  const size = Math.max(2000, Math.floor(window));
-  const reserve = Math.max(0, outputReserve);
+  if (!Number.isSafeInteger(window) || window < 1_000)
+    throw new Error('上下文窗口需为至少 1,000 的安全整数。');
+  if (!Number.isSafeInteger(outputReserve) || outputReserve < 0 || outputReserve >= window)
+    throw new Error('输出预留需为小于上下文窗口的非负安全整数。');
+  const size = window;
+  const reserve = outputReserve;
   // Fixed 8000-token headroom made an 8192-token model unusable before its first question.
   const headroom = Math.min(16000, Math.max(256, Math.floor(size / 10)));
-  return { window: size, threshold: Math.max(1000, Math.min(Math.floor(size * 0.8), size - reserve - headroom)),
-    retainTokens: Math.max(256, Math.floor(Math.max(1000, size - reserve) * 0.16)) };
+  const threshold = Math.max(1, Math.min(Math.floor(size * 0.8), size - reserve - headroom));
+  return { window: size, threshold,
+    retainTokens: Math.min(threshold, Math.max(256, Math.floor((size - reserve) * 0.16))) };
 }
 
 /** Swift String.prefix/suffix count extended graphemes, rather than UTF-16 units. */

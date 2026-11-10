@@ -1,5 +1,5 @@
 /**
- * 引用核对：只接受工具真实返回过的原文片段。
+ * 引用核对：只接受本轮工具原文中实际派发给模型的片段。
  * 模型给的 quote 必须在某条已登记 evidence 的原文里连续出现（空白差异归一化后），
  * 且 id 必须是本轮登记过的证据 id；否则剔除并记录 warning。绝不“放宽到任意文本”。
  */
@@ -23,6 +23,7 @@ export class EvidenceRegistry {
   private readonly byId = new Map<string, RegisteredEvidence>();
   private readonly order: string[] = [];
   private readonly rendered = new Map<string, readonly RenderedEvidenceMaterial[]>();
+  private readonly transmitted = new Map<string, Set<string>>();
 
   recordRendered(content: string, materials: readonly RenderedEvidenceMaterial[]): string {
     this.rendered.set(content, materials.map(material => Object.freeze({ ...material })));
@@ -31,6 +32,19 @@ export class EvidenceRegistry {
 
   renderedMaterials(content: string): readonly RenderedEvidenceMaterial[] | undefined {
     return this.rendered.get(content);
+  }
+
+  recordTransmitted(id: string, content: string): void {
+    if (!this.byId.has(id)) return;
+    const normalized = normalizeWhitespace(content);
+    if (!normalized) return;
+    const versions = this.transmitted.get(id) ?? new Set<string>();
+    versions.add(normalized);
+    this.transmitted.set(id, versions);
+  }
+
+  includesTransmittedQuote(id: string, normalizedQuote: string): boolean {
+    return [...(this.transmitted.get(id) ?? [])].some(content => content.includes(normalizedQuote));
   }
 
   /** A budget trim may cut inside a quote; preserve only its transmitted prefix. */
@@ -122,7 +136,7 @@ export interface CitationCheckOutcome {
 }
 
 /**
- * 核对模型给出的引用：id 必须在本轮证据里，quote 必须是该证据原文的连续子串。
+ * 核对引用：id 属于本轮证据，quote 连续存在于该证据原文和本轮实际派发的片段中。
  * 同一 id 只接受第一次出现；伪造/未知/空引用全部剔除。
  */
 export function verifyCitations(
@@ -141,7 +155,8 @@ export function verifyCitations(
       continue;
     }
     const normalizedQuote = normalizeWhitespace(quote);
-    if (!normalizedQuote || !normalizeWhitespace(evidence.quote).includes(normalizedQuote)) {
+    if (!normalizedQuote || !normalizeWhitespace(evidence.quote).includes(normalizedQuote) ||
+        !registry.includesTransmittedQuote(id, normalizedQuote)) {
       droppedIds.push(id);
       continue;
     }

@@ -4,6 +4,7 @@ import Module, { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { aiConsentScope, validateServiceDraft } from "../../platform/settings/aiCatalog.ts";
+import { parseContextWindowTokens } from "../../../../../packages/core/src/agent/context-window.ts";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
@@ -49,11 +50,14 @@ function harness(kind: "hook" | "editor" | "list", saved: any = null) {
   const draft = { ...local, provider: local.provider, windowSize: "", key: "fake-only-key", setKey() {}, webSearchEnabled: false, setWebSearchEnabled() {} };
   const imports: Record<string, any> = {
     "react": react, "react/jsx-runtime": { jsx, jsxs: jsx }, "react-native": native,
-    "expo-router": { useRouter: () => ({ push() {} }), useFocusEffect: (fn: any) => react.useEffect(fn, [fn]) },
+    "expo-router": { useRouter: () => ({ push() {} }), usePreventRemove: () => () => undefined, useFocusEffect: (fn: any) => react.useEffect(fn, [fn]) },
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" }, "expo-symbols": { SymbolView: "SymbolView" },
     "../components/BookNotice": { BookNotice: "BookNotice" }, "../theme": { usePalette: () => ({ paper: "paper" }) },
     "./AIServiceDraft": { AI_PRESETS: {}, useAIServiceDraft: () => draft },
-    "@shudeng/core/agent": { resolveWebSearchPolicy: () => ({ state: { status: "unsupported" } }) },
+    "./ServiceList": { ServiceList: "ServiceList" },
+    "./SettingsEditorLayout": { SettingsEditorLayout: "SettingsEditorLayout" },
+    "./AIServiceForm": { AIServiceForm: "AIServiceForm" },
+    "@shudeng/core/agent": { parseContextWindowTokens, resolveWebSearchPolicy: () => ({ state: { status: "unsupported" } }) },
     "../../platform/settings/aiCatalog": { aiConsentScope, validateServiceDraft },
     "../../platform/aiConfig": {
       saveAIService: async (...args: any[]) => calls.save.push(args),
@@ -154,6 +158,9 @@ test("the real editor saves only after consent and never saves a cancelled or ab
     const save = find(h.result, node => node.type === "SettingsAction" && node.props.title === "保存");
     save.props.onPress(); h.render(); assert.equal(h.calls.save.length, 0);
     const card = h.notice(); assert.ok(card);
+    const layout = find(h.result, node => node.type === "SettingsEditorLayout");
+    assert.equal(layout.props.nativeContent.type, "AIServiceForm");
+    assert.equal(find(layout, node => node.type === "BookNotice"), null);
     if (result === "unmount") h.unmount();
     else { card.props.actions[result === "allow" ? 1 : 0].onPress(); await h.flush(); }
     for (let i = 0; i < 8; i++) await Promise.resolve();
@@ -163,14 +170,10 @@ test("the real editor saves only after consent and never saves a cancelled or ab
   }
 });
 
-test("the real editor and list switch saved revisions only after consent; unmount cancels both", async () => {
-  for (const kind of ["editor", "list"] as const) for (const result of ["allow", "cancel", "unmount"]) {
-    const h = harness(kind, local); await h.flush();
-    if (kind === "editor") find(h.result, node => node.type === "SettingsRow" && node.props.title === "使用这个服务").props.onPress();
-    else {
-      find(h.result, node => node.type === "SettingsAction" && node.props.title === "切换").props.onPress();
-      h.calls.choices[0].onPress();
-    }
+test("the real list switches saved revisions only after consent; unmount cancels the switch", async () => {
+  for (const result of ["allow", "cancel", "unmount"]) {
+    const h = harness("list", local); await h.flush();
+    find(h.result, node => node.type === "ServiceList").props.onSelect(local);
     h.render(); const card = h.notice(); assert.ok(card); assert.equal(h.calls.select.length, 0);
     if (result === "unmount") h.unmount();
     else { card.props.actions[result === "allow" ? 1 : 0].onPress(); await h.flush(); }
