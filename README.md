@@ -4,7 +4,7 @@
 
 [![使用文档](https://img.shields.io/badge/%E4%BD%BF%E7%94%A8%E6%96%87%E6%A1%A3-5B7DB1)](https://andywang1688.github.io/shudeng/)
 
-最新版 v0.4.8：DeepSeek 真流式思考（已思考用时）、Markdown 回答层级、上下文圆环与窗口下拉；无需服务器。[下载](https://github.com/andyWang1688/shudeng/releases/tag/v0.4.8) · [更新说明](docs/releases/v0.4.8.md)
+最新版 v0.5.0：React Native 新架构、新阅读界面、书内标注、连续跨章滚动与设备内阅读 Agent。[下载](https://github.com/andyWang1688/shudeng/releases/tag/v0.5.0) · [更新说明](docs/releases/v0.5.0.md)
 
 ## 安装
 
@@ -15,6 +15,8 @@
 3. 把 `Shudeng.app` 拖进模拟器，打开「书灯」。
 
 更细的步骤和截图：[快速开始](https://andywang1688.github.io/shudeng/quick-start)。
+
+新版与旧 Swift 版、开发包的数据空间独立，不会自动迁移旧书库或密钥。请保留旧 App，向新版重新导入所需书籍。
 
 ## 能做什么
 
@@ -32,7 +34,7 @@
 
 当前开发为 RN/Expo + TypeScript 重构，先读[开发导航](docs/README.md)，按任务选择规范与验证入口。功能冻结期间，视觉迭代使用[独立 Demo](apps/mobile/src/ui/visual-demo/README.md)。
 
-`ios/Shudeng.xcodeproj` 是已发布 Swift 版的行为基线与迁移参照；上面的下载说明仍对应 v0.4.8，不代表 RN 分支已发布。构建、清理和发布分别按开发导航中的对应流程执行。
+`ios/Shudeng.xcodeproj` 是旧 Swift 版的行为基线与迁移参照；v0.5.0 的产品入口在 `apps/mobile`。构建、清理和发布分别按开发导航中的对应流程执行。
 
 ## 其他
 

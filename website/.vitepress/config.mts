@@ -11,6 +11,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: '使用文档', link: '/quick-start' },
+      { text: '下载 v0.5.0', link: 'https://github.com/andyWang1688/shudeng/releases/tag/v0.5.0' },
       { text: 'GitHub', link: 'https://github.com/andyWang1688/shudeng' }
     ],
     sidebar: [
