@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.0",
+  "build": "13",
+  "release_date": "2026-11-10",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "12c502d61d11b99fea3d762514eb5094169d6680",
+    "tag": "v0.5.0",
+    "mobile_tree": "8f8745a10edec80a34e07c83bf879fb11a14978f",
+    "core_tree": "1ff47620209b10f85612a1f6ffed18e4253f30c6",
+    "reader_web_tree": "7a5f93701c1e34e4a72daa92b223fa57be634823",
+    "tracked_worktree_clean": true
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": ["arm64"],
+    "minimum_os_version": "16.4",
+    "validated_runtime": "iOS 26.5",
+    "validated_host_architecture": "Apple Silicon",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "toolchain": {
+    "xcode": "27.0",
+    "xcode_build": "27A266a",
+    "sdk": "iOS Simulator 27.0",
+    "expo": "58.0.22",
+    "react_native": "0.88.1",
+    "new_architecture": true
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "executable": "app",
+    "binary_sha256": "23a7847847b962ed5a27230afd20b1f6c405a399b6b3de768c53470e7eb12c22",
+    "js_bundle_sha256": "fae9133a7629b4c5210bcf5f2ea92edcf3093cc0597c3bc46f6d98b30c32fb84",
+    "signing": "Simulator ad hoc",
+    "cdhash": "596af1a56c65dd8f3d113745a2dca1cd15efb218",
+    "app_disk_kib": 102852
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.0-ios-simulator.zip",
+      "bytes": 29173945,
+      "sha256": "9696ee511b2c9bf3f171a5dd5f87c4c24303cb2d220c9883eb0e1f4a16ffe81a"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 2929,
+      "sha256": "57bf2c9e86d3b60b086ccd5837e1b7fc97ea42d34a7d8d318c3f4e3e72ac242d"
+    }
+  ],
+  "migration": {
+    "legacy_swift_bundle_id": "dev.shudeng.app",
+    "development_bundle_id": "dev.shudeng.integration",
+    "automatic_cross_bundle_migration": false,
+    "preserve_other_app_data": true,
+    "instruction": "保留旧 App；向新版重新导入书籍并配置 AI 服务。RN 的只读旧数据副本迁移接口不等于自动访问其他 App 沙盒。"
+  },
+  "semantic_model": {
+    "release": "semantic-model-v2",
+    "delivery": "on_demand",
+    "bundled": false
+  },
+  "validation": {
+    "release_build": "passed: scripts/build-ios-rn.sh Release",
+    "final_typecheck": "passed: core, reader-web, mobile, eval",
+    "final_tests": {
+      "passed": 1113,
+      "skipped": 9,
+      "failed": 0,
+      "core_passed": 330,
+      "reader_web_passed": 66,
+      "mobile_node_passed": 522,
+      "mobile_vitest_passed": 195,
+      "skipped_reason": "Provider redirect integration tests are opt-in."
+    },
+    "package_audit": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "license_audit": "passed: 127 bundled npm packages, native Pods, ONNX Runtime 1.30.0 and inlined reader vendors",
+    "project_fixture_exclusion": "passed: 6697 Metro sources; no product demo, sample book, spike or project test source",
+    "website_build": "passed",
+    "simulator_smoke": {
+      "bundle_id": "dev.shudeng.mobile",
+      "launch_process_id": 61835,
+      "status": "passed",
+      "cases": ["install and launch final distributed app", "existing shelf", "open EPUB text with existing highlights", "open and close reading settings", "return to shelf"],
+      "data": "Existing same-bundle library retained; no cross-bundle migration or configuration change performed."
+    }
+  },
+  "excluded_data": ["API keys", "personal books", "annotations and conversations", "test EPUB/PDF fixtures", "local databases and logs", "offline semantic model"],
+  "not_validated": ["physical device, TestFlight and App Store", "iOS 16.4 runtime and other platforms", "real provider quality, search availability and billing", "complete accessibility and large type combinations", "large-book long-running memory and scroll performance", "complete business regression on final distributed package"],
+  "evidence": ["docs/validation/2026-11-10/release-v0.5.0.md", "docs/validation/2026-11-10/settings-integration.md", "docs/validation/2026-11-09/continuous-epub.md"]
+}
