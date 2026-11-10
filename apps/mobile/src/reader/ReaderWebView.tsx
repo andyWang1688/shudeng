@@ -3,11 +3,9 @@ import type { ElementRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { usePalette, type Palette } from '../ui/theme';
-import { readerFixtures } from './readerFixtures';
 import { readerWebHtml } from './readerWebHtml';
 import {
   mapIncomingToReaderEvent,
-  openPayloadForBook,
   parseIncomingMessage,
   type IncomingMessage,
   type ReaderAnnotationSeed,
@@ -63,7 +61,7 @@ type SelectionState = {
 };
 
 /**
- * 原生 WebView 壳：加载自包含 reader-web HTML（EPUB/PDF fixture base64 直接注入），
+ * 原生 WebView 壳：加载自包含 reader-web HTML，正文由调用方显式提供，
  * 通过 reader:open/ready/selection/progress/annotation 协议与网页阅读器双向通信。
  * Expo Web 使用 ReaderWebView.web.tsx 的 iframe 实现；这里只在 iOS/Android 生效。
  */
@@ -86,15 +84,18 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
   const nativeAcknowledgedId = useRef(0);
   const [nativeCommands, setNativeCommands] = useState<readonly { readonly id: number; readonly message: object }[]>([]);
   const nativeCommand = useMemo(() => JSON.stringify(nativeCommands), [nativeCommands]);
-  const nativeSurface = (openOverride?.format ?? (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub')) === 'epub' && NativeEpubSurface !== null;
+  const nativeSurface = openOverride?.format === 'epub' && NativeEpubSurface !== null;
   const engineFlow = flow === 'scrolled' ? 'scrolled' : 'paginated';
   const fontSize = fontScale * 18.5;
 
-  const format = useMemo(() => (bookId.toLowerCase().includes('pdf') ? 'pdf' : 'epub'), [bookId]);
-  const fixture = readerFixtures[format];
   const fileUri = openOverride && 'fileUri' in openOverride ? openOverride.fileUri : null;
+  const hasSource = !!openOverride && ('fileUri' in openOverride ? !!openOverride.fileUri.trim() : !!openOverride.dataBase64.trim());
   const eventHandler = useRef(onEvent);
   eventHandler.current = onEvent;
+
+  useEffect(() => {
+    if (!hasSource) eventHandler.current({ type: 'error', message: '书籍内容缺失，请返回书架重新打开。' });
+  }, [bookId, hasSource]);
 
   useEffect(() => {
     if (!fileUri) return;
@@ -144,12 +145,10 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
   }, [nativeSurface]);
 
   const injectOpen = useCallback(() => {
-    if (openSent.current) return;
+    if (openSent.current || !hasSource || !openOverride) return;
     if (fileUri && !archive) return;
     openSent.current = true;
-    const payload = openOverride
-      ? { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, ...('dataBase64' in openOverride ? { dataBase64: openOverride.dataBase64 } : { archive }), mimeType: openOverride.mimeType, theme, fontSize, flow: engineFlow, ...(initialLocation ? { initialLocation } : {}) } }
-      : { ...openPayloadForBook(bookId, fixture, initialLocation), payload: { ...openPayloadForBook(bookId, fixture, initialLocation).payload, theme, fontSize, flow: engineFlow } };
+    const payload = { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, ...('dataBase64' in openOverride ? { dataBase64: openOverride.dataBase64 } : { archive }), mimeType: openOverride.mimeType, theme, fontSize, flow: engineFlow, ...(initialLocation ? { initialLocation } : {}) } };
     const opening = { ...payload, payload: { ...payload.payload, selectionActionsEnabled } };
     sentPreferences.current = { theme, fontSize, ...(opening.payload.format === 'epub' ? { flow: engineFlow } : {}) };
     if (nativeSurface) { send(opening); return; }
@@ -166,7 +165,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
         deliver();
       })(); true;
     `);
-  }, [archive, bookId, engineFlow, fileUri, fixture, fontSize, initialLocation, nativeSurface, openOverride, selectionActionsEnabled, send, theme]);
+  }, [archive, engineFlow, fileUri, fontSize, hasSource, initialLocation, nativeSurface, openOverride, selectionActionsEnabled, send, theme]);
 
   useImperativeHandle(ref, () => ({
     highlightSelection: (locator: ReaderLocator, quote: string) => { if (selectionActionsEnabled) onEvent({ type: 'annotationAdded', locator, quote }); },
@@ -256,7 +255,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
 
   return (
     <View style={styles.container}>
-      {nativeSurface && NativeEpubSurface && (!fileUri || archive) ? <NativeEpubSurface
+      {hasSource && nativeSurface && NativeEpubSurface && (!fileUri || archive) ? <NativeEpubSurface
         archiveSessionID={archive?.sessionID ?? ''}
         html={readerWebHtml} command={nativeCommand} curl={flow === 'curl'} dark={theme === 'dark'} style={styles.webView}
         onEpubEvent={({ nativeEvent }) => {
@@ -281,7 +280,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
           const parsed = parseIncomingMessage(value);
           if (parsed) handleMessage(parsed);
         }}
-      /> : !fileUri ? <WebView
+      /> : hasSource && !fileUri ? <WebView
         ref={webViewRef}
         style={styles.webView}
         originWhitelist={['*']}

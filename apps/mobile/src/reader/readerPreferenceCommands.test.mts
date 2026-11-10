@@ -14,6 +14,7 @@ async function mount(native: boolean, initial: Record<string, unknown> = {}) {
   const React = require("react");
   const ReactDOM = require("react-dom/client");
   const messages: any[] = [];
+  const events: any[] = [];
   let surface: any;
   let surfaceRenders = 0;
   let acknowledgedId = 0;
@@ -37,14 +38,12 @@ async function mount(native: boolean, initial: Record<string, unknown> = {}) {
     surface = props;
     return null;
   };
-  const fixture = { title: "Fixture", mimeType: "application/epub+zip", base64: "AA==" };
   const stubs: Record<string, any> = {
     react: React,
     "react/jsx-runtime": require("react/jsx-runtime"),
     "react-native": { View: (props: any) => props.children, StyleSheet: { create: (value: any) => value } },
     "react-native-webview": { WebView },
     "../ui/theme": { usePalette: () => palette },
-    "./readerFixtures": { readerFixtures: { epub: fixture, pdf: fixture } },
     "./readerWebHtml": { readerWebHtml: "<html></html>" },
     "./ReaderSelectionBar": { ReaderSelectionBar: () => null },
     "./NativeEpubSurface": { NativeEpubSurface: native ? NativeEpubSurface : null },
@@ -65,8 +64,9 @@ async function mount(native: boolean, initial: Record<string, unknown> = {}) {
   };
   const ReaderWebView = load(fileURLToPath(new URL("./ReaderWebView.tsx", import.meta.url))).ReaderWebView;
   let props = {
-    bookId: "book-a", initialLocation: undefined, openOverride: undefined,
-    theme: "light", fontScale: 1, flow: "paginated", onEvent() {}, ...initial,
+    bookId: "book-a", initialLocation: undefined,
+    openOverride: { format: "epub", title: "Explicit EPUB", mimeType: "application/epub+zip", dataBase64: "AA==" },
+    theme: "light", fontScale: 1, flow: "paginated", onEvent: (event: any) => events.push(event), ...initial,
   };
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -79,6 +79,7 @@ async function mount(native: boolean, initial: Record<string, unknown> = {}) {
   await act(() => root.render(React.createElement(ReaderWebView, props)));
   return {
     emit,
+    events,
     get surfaceRenders() { return surfaceRenders; },
     get acknowledgedId() { return acknowledgedId; },
     async update(next: Record<string, unknown>) {
@@ -154,6 +155,8 @@ for (const native of [true, false]) {
       await reader.loaded();
       const [opening] = await reader.drain();
       assert.equal(opening.type, "reader:open");
+      assert.equal(opening.payload.title, "Explicit EPUB");
+      assert.equal(opening.payload.dataBase64, "AA==");
       assert.equal(opening.payload.theme, "dark");
       assert.equal(opening.payload.fontSize, 1.2 * 18.5);
       assert.equal(opening.payload.flow, "scrolled");
@@ -171,6 +174,24 @@ for (const native of [true, false]) {
       await reader.ready();
       await reader.update({ theme: "light", fontScale: 1.4, flow: "curl", onEvent() {} });
       assert.deepEqual(await reader.preferences(), [], "repeated ready and unrelated renders must not resend preferences");
+    } finally { await reader.unmount(); }
+  });
+
+  test(`${native ? "native EPUB" : "WebView EPUB"} rejects absent source content without mounting a sample`, async () => {
+    const reader = await mount(native, { openOverride: undefined });
+    try {
+      assert.equal(reader.surfaceRenders, 0);
+      assert.equal(reader.events.length, 1);
+      assert.equal(reader.events[0].type, "error");
+      assert.match(reader.events[0].message, /书籍内容缺失/);
+    } finally { await reader.unmount(); }
+  });
+
+  test(`${native ? "native EPUB" : "WebView EPUB"} rejects empty explicitly supplied content`, async () => {
+    const reader = await mount(native, { openOverride: { format: "epub", title: "Missing", mimeType: "application/epub+zip", dataBase64: "  " } });
+    try {
+      assert.equal(reader.surfaceRenders, 0);
+      assert.match(reader.events[0]?.message ?? "", /书籍内容缺失/);
     } finally { await reader.unmount(); }
   });
 
@@ -202,7 +223,7 @@ test("duplicate native acknowledgements do not rerender the reader surface", asy
 });
 
 test("the PDF WebView fallback retains its ready-time flow synchronization", async () => {
-  const reader = await mount(false, { bookId: "book-pdf", flow: "scrolled" });
+  const reader = await mount(false, { bookId: "book-pdf", flow: "scrolled", openOverride: { format: "pdf", title: "Explicit PDF", mimeType: "application/pdf", dataBase64: "AA==" } });
   try {
     await reader.loaded();
     await reader.drain();

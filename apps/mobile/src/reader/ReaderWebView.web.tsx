@@ -2,9 +2,8 @@ import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo,
 import type { CSSProperties } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { usePalette, type Palette } from '../ui/theme';
-import { readerFixtures } from './readerFixtures';
 import { readerWebHtml } from './readerWebHtml';
-import { mapIncomingToReaderEvent, openPayloadForBook, parseIncomingMessage, type ReaderAnnotationSeed } from './readerProtocol';
+import { mapIncomingToReaderEvent, parseIncomingMessage, type ReaderAnnotationSeed } from './readerProtocol';
 import type { ReaderWebViewHandle, ReaderWebViewProps } from './ReaderWebView';
 export type { ReaderEvent } from './readerProtocol';
 
@@ -13,6 +12,14 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const eventHandler = useRef(onEvent);
+  eventHandler.current = onEvent;
+  const sourceError = !openOverride || ('dataBase64' in openOverride && !openOverride.dataBase64.trim())
+    ? '书籍内容缺失，请返回书架重新打开。'
+    : 'fileUri' in openOverride ? '本地 EPUB 文件需要在 App 内打开。' : null;
+  useEffect(() => {
+    if (sourceError) eventHandler.current({ type: 'error', message: sourceError });
+  }, [bookId, sourceError]);
   const [ready, setReady] = useState(false);
   const sent = useRef(new Map<string, string>());
   const send = useCallback((message: object) => iframeRef.current?.contentWindow?.postMessage(message, '*'), []);
@@ -26,10 +33,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
     captureBookmarkContext: (bookmarks, requestId, captureLocation) => send({ type: 'reader:bookmark-context', payload: { bookmarks, requestId, ...(captureLocation === undefined ? {} : { captureLocation }) } }),
   }), [onEvent, selectionActionsEnabled, send]);
   const open = useCallback(() => {
-    if (openOverride && 'fileUri' in openOverride) {
-      onEvent({ type: 'error', message: '本地 EPUB 文件需要在 App 内打开。' });
-      return;
-    }
+    if (sourceError || !openOverride) return;
     let attempts = 0;
     const deliver = () => {
       const target = iframeRef.current?.contentWindow;
@@ -38,7 +42,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
         if (attempts++ < 120) window.setTimeout(deliver, 50);
         return;
       }
-      const base = openOverride ? { type: 'reader:open', payload: { ...openOverride, url: 'inline://epub' } } : openPayloadForBook(bookId, readerFixtures.epub, initialLocation);
+      const base = { type: 'reader:open', payload: { ...openOverride, url: `inline://${openOverride.format}` } };
       send({ ...base, payload: { ...base.payload, theme, fontSize: fontScale * 18.5, flow, selectionActionsEnabled, ...(initialLocation ? { initialLocation } : {}) } });
       const doc = target.document;
       const style = doc.createElement('style');
@@ -46,7 +50,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
       doc.head.append(style);
     };
     setReady(false); sent.current.clear(); deliver();
-  }, [bookId, flow, fontScale, initialLocation, onEvent, openOverride, selectionActionsEnabled, send, theme]);
+  }, [flow, fontScale, initialLocation, openOverride, selectionActionsEnabled, send, sourceError, theme]);
   useEffect(() => {
     const listener = (event: MessageEvent) => {
       if (event.source !== iframeRef.current?.contentWindow) return;
@@ -75,7 +79,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
     if (!ready) return;
     send({ type: 'reader:theme', payload: { theme } }); send({ type: 'reader:fontSize', payload: { fontSize: fontScale * 18.5 } }); send({ type: 'reader:flow', payload: { flow } });
   }, [flow, fontScale, ready, send, theme]);
-  return <View style={styles.container}><iframe ref={iframeRef} title="书灯阅读器" srcDoc={readerWebHtml} onLoad={open} style={{ ...iframeStyle, backgroundColor: palette.paper }} /></View>;
+  return <View style={styles.container}>{!sourceError ? <iframe ref={iframeRef} title="书灯阅读器" srcDoc={readerWebHtml} onLoad={open} style={{ ...iframeStyle, backgroundColor: palette.paper }} /> : null}</View>;
 }));
 const iframeStyle = { borderWidth: 0, width: '100%', height: '100%' } satisfies CSSProperties;
 function makeStyles(palette: Palette) { return StyleSheet.create({ container: { flex: 1, backgroundColor: palette.paper } }); }
