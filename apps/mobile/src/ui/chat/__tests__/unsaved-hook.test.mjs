@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Real hook + runtime + writer; native adapters and React scheduling are isolated.
-const h = vi.hoisted(() => ({ slots: [], cursor: 0, effects: [], append: vi.fn(), start: vi.fn(), load: vi.fn(), config: null, indexAvailable: true }));
+const h = vi.hoisted(() => ({ slots: [], cursor: 0, effects: [], append: vi.fn(), start: vi.fn(), load: vi.fn(), config: null, configError: undefined, indexAvailable: true }));
 vi.mock('react', () => {
   const equal = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const memo = (factory, deps) => {
@@ -30,6 +30,7 @@ vi.mock('../../../platform/ai', () => ({
   getBookChatAvailability: async () => ({
     book: { id: 'unsaved-book', title: '原书名', format: 'epub', removedAt: null },
     config: h.config,
+    configError: h.configError,
     index: { available: h.indexAvailable, detail: '' },
   }),
   startBookChatTurn: (...args) => h.start(...args),
@@ -54,6 +55,7 @@ beforeEach(() => {
   h.slots = []; h.cursor = 0; h.effects = []; h.append.mockReset(); h.start.mockReset();
   h.config = { name: '本机', provider: 'openai', model: 'test', apiKey: 'synthetic' };
   h.indexAvailable = true;
+  h.configError = undefined;
   h.load.mockReset(); h.load.mockResolvedValue([]);
   vi.stubGlobal('requestAnimationFrame', callback => setTimeout(callback, 0));
   vi.stubGlobal('cancelAnimationFrame', id => clearTimeout(id));
@@ -65,6 +67,34 @@ beforeEach(() => {
 afterEach(() => { unmount(); discardConversationRun('unsaved-hook'); vi.unstubAllGlobals(); });
 
 describe('unsaved conversation run boundary', () => {
+  it('opens saved history without send consent and only shows the config error when sending', async () => {
+    h.config = null;
+    h.configError = '请先确认此服务的发送说明';
+    h.load.mockResolvedValue([
+      { id: 'saved:user', role: 'user', text: '首问', reasoning: '', citations: [], details: { status: 'done' } },
+      { id: 'saved', role: 'assistant', text: '保存的回答', reasoning: '', citations: [], details: { status: 'done' } },
+    ]);
+    let chat = await open();
+    expect(chat.turns.map(turn => turn.text)).toEqual(['首问', '保存的回答']);
+    expect(chat.loadError).toBeNull();
+    expect(chat.configurationNotice).toBeNull();
+    chat.setQuestion('保留追问');
+    chat = render();
+    expect(await chat.send()).toBe(false);
+    chat = render();
+    expect(chat.configurationNotice).toBe(h.configError);
+    expect(chat.question).toBe('保留追问');
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.append).not.toHaveBeenCalled();
+    chat.dismissConfigurationNotice();
+    chat.retry({ ...chat.turns[1], status: 'error', sourceQuestion: '首问' });
+    await settle();
+    chat = render();
+    expect(chat.configurationNotice).toBe(h.configError);
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.append).not.toHaveBeenCalled();
+  });
+
   it('only prompts for missing model configuration after sending and keeps draft and selection without a request', async () => {
     h.config = null;
     h.indexAvailable = false;

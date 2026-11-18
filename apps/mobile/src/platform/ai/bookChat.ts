@@ -38,6 +38,7 @@ export class BookChatIndexError extends Error {
 
 export interface BookChatAvailability {
   readonly config: AIConfig | null;
+  readonly configError?: string;
   readonly book: BookRow | null;
   readonly index: BookIndexStatus;
 }
@@ -62,11 +63,15 @@ async function indexStatus(book: BookRow): Promise<BookIndexStatus> {
 
 export async function getBookChatAvailability(bookId: string): Promise<BookChatAvailability> {
   const layer = await getDataLayer();
-  const [book, config] = await Promise.all([layer.store.getBook(bookId), loadAIConfig()]);
+  // Configuration gates new requests, never access to locally saved conversations.
+  const [book, configuration] = await Promise.all([layer.store.getBook(bookId), loadAIConfig().then(
+    config => ({ config }),
+    (error: unknown) => ({ config: null, configError: error instanceof Error ? error.message : String(error) }),
+  )]);
   const index = book
     ? await indexStatus(book)
     : { available: false, semantic: false, detail: '找不到这本书' };
-  return { config, book, index };
+  return { ...configuration, book, index };
 }
 
 export interface StartBookChatTurnOptions {

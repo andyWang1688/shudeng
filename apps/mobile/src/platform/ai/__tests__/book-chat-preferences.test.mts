@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
     webSearchEnabled: false,
   },
   preferenceError: null as Error | null,
+  configError: null as Error | null,
   toolGate: null as Promise<unknown[]> | null,
   models: [] as Array<Record<string, unknown>>,
   runs: [] as Array<Record<string, unknown>>,
@@ -27,7 +28,10 @@ vi.mock("@shudeng/core/agent", async (importOriginal) => ({
   },
 }));
 vi.mock("../../aiConfig", () => ({
-  loadAIConfig: async () => ({ ...state.config }),
+  loadAIConfig: async () => {
+    if (state.configError) throw state.configError;
+    return { ...state.config };
+  },
 }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("../../db", () => ({
@@ -65,12 +69,13 @@ vi.mock("../bookIndex", () => ({
   createLocalBookSource: async () => ({ search: async () => [] }),
   rebuildBookIndex: vi.fn(),
 }));
-import { startBookChatTurn } from "../bookChat";
+import { getBookChatAvailability, startBookChatTurn } from "../bookChat";
 
 beforeEach(() => {
   state.models = [];
   state.runs = [];
   state.preferenceError = null;
+  state.configError = null;
   state.toolGate = null;
   state.preferences = { instructions: "先查原文，再解释。" };
   state.config = {
@@ -84,6 +89,19 @@ beforeEach(() => {
 });
 
 describe("product agent preference snapshots", () => {
+  it.each([
+    "请先确认此服务的发送说明",
+    "已保存的 API Key 无法读取",
+  ])("keeps book availability readable while config fails: %s", async (message) => {
+    state.configError = new Error(message);
+    await expect(getBookChatAvailability("book")).resolves.toMatchObject({
+      book: { id: "book" }, config: null, configError: message, index: { available: true },
+    });
+    await expect(startBookChatTurn({ bookId: "book", question: "问题" })).rejects.toThrow(message);
+    expect(state.models).toEqual([]);
+    expect(state.runs).toEqual([]);
+  });
+
   it("applies saved instructions and provider search only to the answer model, with matching output budget", async () => {
     state.preferences = { instructions: "# 我的读书助手\n回答请简短。" };
     state.config.webSearchEnabled = true;

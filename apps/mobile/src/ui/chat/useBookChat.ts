@@ -41,6 +41,7 @@ export interface UseBookChatOptions {
 
 let sequence = 0;
 const nextId = () => `turn-${Date.now()}-${++sequence}`;
+const missingModelNotice = '还没有配置 AI 模型，设置后即可发送。';
 
 /** Owns one independent conversation, its durable history, and exactly one active run. */
 export function useBookChat(options: UseBookChatOptions) {
@@ -264,11 +265,14 @@ export function useBookChat(options: UseBookChatOptions) {
         runningRef.current ||
         activeConversationRun(conversationId)?.running ||
         hasUnsavedConversationTurn(conversationId, turns) ||
-        !availability?.book ||
-        !availability.config ||
-        !availability.index.available
+        !availability?.book
       )
         return;
+      if (!availability.config) {
+        setConfigurationNotice(availability.configError ?? missingModelNotice);
+        return;
+      }
+      if (!availability.index.available) return;
       runningRef.current = true;
       cancelRequested.current = false;
       setRunning(true);
@@ -502,7 +506,7 @@ export function useBookChat(options: UseBookChatOptions) {
       if (!text || runningRef.current || hasUnsavedConversationTurn(conversationId, turns) ||
         !availability?.book) return false;
       if (!availability.config) {
-        setConfigurationNotice('还没有配置 AI 模型，设置后即可发送。');
+        setConfigurationNotice(availability.configError ?? missingModelNotice);
         return false;
       }
       if (!availability.index.available) return false;
