@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.1",
+  "build": "14",
+  "release_date": "2026-11-18",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "0a795b9f3455c69c3dab2c3ebc40b25a6ab1a36b",
+    "tag": "v0.5.1",
+    "mobile_tree": "5c7933f70d43669941bdbfb8bd4eb773257cb6ec",
+    "core_tree": "1ff47620209b10f85612a1f6ffed18e4253f30c6",
+    "reader_web_tree": "7a5f93701c1e34e4a72daa92b223fa57be634823",
+    "application_source_clean": true
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": [
+      "arm64"
+    ],
+    "minimum_os_version": "16.4",
+    "validated_runtime": "iOS 26.5",
+    "validated_host_architecture": "Apple Silicon",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "toolchain": {
+    "xcode": "27.0",
+    "xcode_build": "27A266a",
+    "sdk": "iOS Simulator 27.0",
+    "expo": "58.0.22",
+    "react_native": "0.88.1",
+    "new_architecture": true,
+    "packaging_xcode": "27.2",
+    "packaging_xcode_build": "27B52",
+    "packaging_node": "24.22.3"
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "executable": "app",
+    "binary_sha256": "b1c7254913b5788b9f4a808aa1dec252a62c9fb72abbaed58eb2c1df1fa24b18",
+    "js_bundle_sha256": "e65fdfe17fd35ff0015a43ab595613461c111a31f1f987a4846d4a3eb8e3f8c9",
+    "signing": "Simulator ad hoc",
+    "cdhash": "baaf75291851863c4d73bbacc51f4fb622bd43cf",
+    "app_disk_kib": 102852
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.1-ios-simulator.zip",
+      "bytes": 29173507,
+      "sha256": "dbe8ea6bd141d09bfc31ebc361613f52fa370a90a4b881367d2c896e9782b7c1"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 3057,
+      "sha256": "92fd36c78d9d62fedd979b998b9e442543dc5d274d057f3e9e50303f565d8faf"
+    }
+  ],
+  "migration": {
+    "legacy_swift_bundle_id": "dev.shudeng.app",
+    "development_bundle_id": "dev.shudeng.integration",
+    "automatic_cross_bundle_migration": false,
+    "preserve_other_app_data": true,
+    "instruction": "保留旧 App；向新版重新导入书籍并配置 AI 服务。RN 的只读旧数据副本迁移接口不等于自动访问其他 App 沙盒。"
+  },
+  "semantic_model": {
+    "release": "semantic-model-v2",
+    "delivery": "on_demand",
+    "bundled": false
+  },
+  "validation": {
+    "native_build": "not rerun: reused verified v0.5.0 simulator native binary",
+    "js_export": "passed",
+    "final_typecheck": "passed: core, reader-web, mobile, eval",
+    "final_tests": {
+      "passed": 1116,
+      "skipped": 9,
+      "failed": 0,
+      "core_passed": 330,
+      "reader_web_passed": 66,
+      "mobile_node_passed": 522,
+      "mobile_vitest_passed": 198,
+      "skipped_reason": "Provider redirect integration tests are opt-in."
+    },
+    "package_audit": "passed",
+    "zip_integrity": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "license_audit": "passed: 127 bundled npm packages, Pods, ONNX Runtime and reader vendors",
+    "project_fixture_exclusion": "passed: 6697 Metro sources; no project demo, sample books, spike or test source; no user database, model or provisioning profile",
+    "website_build": "passed",
+    "simulator_smoke": {
+      "bundle_id": "dev.shudeng.mobile",
+      "launch_process_id": 37169,
+      "status": "passed",
+      "cases": [
+        "overwrite install and launch distributed app",
+        "confirm installed version 0.5.1 / 14",
+        "existing shelf displays 7 books"
+      ],
+      "data": "Existing same-bundle library retained; no book or configuration changes performed."
+    }
+  },
+  "excluded_data": [
+    "API keys",
+    "personal books",
+    "annotations and conversations",
+    "test EPUB/PDF fixtures",
+    "local databases and logs",
+    "offline semantic model"
+  ],
+  "not_validated": [
+    "physical device distribution, TestFlight and App Store",
+    "iOS 16.4 runtime and other platforms",
+    "real provider quality, search availability and billing",
+    "full gestures, citation navigation and complete business regression on final distributed package",
+    "complete accessibility and large type combinations",
+    "large-book long-running memory and scroll performance"
+  ],
+  "evidence": [
+    "docs/validation/2026-11-18/release-v0.5.1.md",
+    "docs/validation/2026-11-17/ios-usb-migration.md"
+  ],
+  "packaging": {
+    "native_build": "reused from v0.5.0; native sources and dependencies unchanged",
+    "native_base_archive_sha256": "9696ee511b2c9bf3f171a5dd5f87c4c24303cb2d220c9883eb0e1f4a16ffe81a",
+    "js": "fresh Expo export:embed, Hermes bytecode v99",
+    "metadata": "Info.plist and EXConstants app.config updated to 0.5.1 / 14",
+    "native_compile_rerun": false
+  }
+}
