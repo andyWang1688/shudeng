@@ -1,12 +1,12 @@
 # 快速开始
 
-当前版本为 v0.5.0（构建 13），采用新的 React Native 应用架构。
+当前版本为 v0.5.1（构建 14），采用 React Native 应用架构。
 
 ## 安装
 
 需要一台 Apple Silicon Mac 和 Xcode（使用它自带的 iOS 模拟器）。附件仅供 arm64 模拟器使用，不是 iPhone 安装包或 TestFlight 版本。最低构建目标为 iOS 16.4；当前设备操作记录来自 iOS 26.5 模拟器，不能据此保证所有旧系统兼容。
 
-1. 打开 [v0.5.0 下载页](https://github.com/andyWang1688/shudeng/releases/tag/v0.5.0)，下载 `Shudeng-v0.5.0-ios-simulator.zip`。
+1. 打开 [v0.5.1 下载页](https://github.com/andyWang1688/shudeng/releases/tag/v0.5.1)，下载 `Shudeng-v0.5.1-ios-simulator.zip`。
 2. 解压 `.zip`，得到 `Shudeng.app`。
 3. 打开 Xcode，菜单 Xcode → Open Developer Tool → Simulator，启动一台 iPhone 模拟器。
 4. 把 `Shudeng.app` 拖进模拟器窗口。也可以在终端执行：
