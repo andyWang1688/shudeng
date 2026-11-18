@@ -5,8 +5,10 @@
 ## 构建合同
 
 - 可用空间不足 **30 GiB** 禁止新增大型构建；固定复用 .build/rn-ios/derived，不散落 DerivedData 或把持久依赖放入系统临时目录。
-- 默认 .build 总量上限 20 GiB、artifact 上限 3 GiB，每个配置只留最新 app。临时目录通过 EXIT/INT/TERM 回收；失败或未完成产物不晋级 artifact。
+- 默认 .build 总量上限 20 GiB、artifact 上限 3 GiB，模拟器与真机分别按配置只留最新 app。临时目录通过 EXIT/INT/TERM 回收；失败或未完成产物不晋级 artifact。
 - 修改构建/清理脚本时，验证连续两轮与失败清理，确认空间不随轮数增长；中断路径共享 trap 时检查该接缝。过去的验收数字不能当本次通过证据。
+
+默认构建模拟器；真机构建使用 `IOS_DEVICE_UDID=<UDID> IOS_DEVELOPMENT_TEAM=<TEAM> KEEP_ARTIFACT=1 scripts/build-ios-rn.sh Release`，需要 Xcode 已登录对应开发团队。脚本使用设备目标与自动签名，产物名为 `Release-iphoneos-<时间戳>/app.app`；默认模拟器产物名保持不变。`latest.app` 指向最近保留的产物，安装前仍需核对目标平台、签名和授权有效期。开发签名安装不等于正式分发，不能承诺长期可启动。
 
 ## 清理合同
 

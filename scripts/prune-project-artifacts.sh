@@ -30,20 +30,20 @@ if [[ "$DEEP_BUILD_CACHE" == "1" ]]; then
     exit 3
   fi
 fi
-# 每个配置只清理完成的、内容仅为 app.app 的旧 artifact；根目录和未知目录保留。
+# 模拟器和真机各按配置保留最新完整 artifact；根目录和未知目录保留。
 artifact_root="$ROOT/.build/artifacts/rn-ios"
-for config in Debug Release; do
+for config in Debug Release Debug-iphoneos Release-iphoneos; do
   keep=""
   for candidate in "$artifact_root/$config-"*; do
     [[ -d "$candidate/app.app" && ! -L "$candidate" ]] || continue
-    [[ "${candidate##*/}" =~ ^(Debug|Release)-[0-9]{8}-[0-9]{6}$ ]] || continue
+    [[ "${candidate##*/}" =~ ^${config}-[0-9]{8}-[0-9]{6}$ ]] || continue
     contents=("$candidate"/* "$candidate"/.[!.]* "$candidate"/..?*)
     (( ${#contents[@]} == 1 )) || continue
     if [[ -z "$keep" || "$candidate" -nt "$keep" ]]; then keep="$candidate"; fi
   done
   for candidate in "$artifact_root/$config-"*; do
     [[ -d "$candidate/app.app" && ! -L "$candidate" ]] || continue
-    [[ "${candidate##*/}" =~ ^(Debug|Release)-[0-9]{8}-[0-9]{6}$ ]] || continue
+    [[ "${candidate##*/}" =~ ^${config}-[0-9]{8}-[0-9]{6}$ ]] || continue
     [[ "$candidate" == "$keep" ]] && continue
     contents=("$candidate"/* "$candidate"/.[!.]* "$candidate"/..?*)
     if (( ${#contents[@]} == 1 )); then remove "$candidate"; fi

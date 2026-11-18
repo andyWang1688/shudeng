@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 书灯 RN/Expo iOS 构建入口：固定复用 .build，失败/中断清理临时产物，限制常驻构建上限。
 # 用法：scripts/build-ios-rn.sh [Debug|Release] [--no-build]
+# 真机：IOS_DEVICE_UDID=<UDID> IOS_DEVELOPMENT_TEAM=<TEAM> scripts/build-ios-rn.sh Release
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,6 +20,18 @@ MIN_FREE_GIB="${MIN_FREE_GIB:-30}"
 MAX_BUILD_GIB="${MAX_BUILD_GIB:-20}"
 MAX_ARTIFACT_GIB="${MAX_ARTIFACT_GIB:-3}"
 KEEP_ARTIFACT="${KEEP_ARTIFACT:-0}"
+SDK=iphonesimulator
+DESTINATION="platform=iOS Simulator,id=${IOS_SIMULATOR_UDID:-1B9B9A35-F2D7-4D87-AB31-6B07D1B27D66}"
+SIGNING_ARGS=()
+if [[ -n "${IOS_DEVICE_UDID:-}" ]]; then
+  SDK=iphoneos
+  DESTINATION="platform=iOS,id=$IOS_DEVICE_UDID"
+  if [[ -z "${IOS_DEVELOPMENT_TEAM:-}" ]]; then
+    echo "IOS_DEVELOPMENT_TEAM is required for an iPhone build" >&2
+    exit 2
+  fi
+  SIGNING_ARGS=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration "DEVELOPMENT_TEAM=$IOS_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Automatic)
+fi
 
 free_gib() { df -Pk "$ROOT" | awk 'NR==2 {printf "%d", $4/1024/1024}'; }
 dir_gib() { du -sk "$1" 2>/dev/null | awk '{printf "%d", $1/1024/1024}' || echo 0; }
@@ -59,19 +72,20 @@ if [[ "$NO_BUILD" == "--no-build" ]]; then
   exit 0
 fi
 
-log "config=$CONFIG free=${available}GiB derived=$DERIVED"
+log "config=$CONFIG sdk=$SDK free=${available}GiB derived=$DERIVED"
 cd "$ROOT/apps/mobile/ios"
 xcodebuild \
   -workspace app.xcworkspace \
   -scheme app \
   -configuration "$CONFIG" \
-  -sdk iphonesimulator \
-  -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_UDID:-1B9B9A35-F2D7-4D87-AB31-6B07D1B27D66}" \
+  -sdk "$SDK" \
+  -destination "$DESTINATION" \
   -derivedDataPath "$DERIVED" \
+  ${SIGNING_ARGS[@]+"${SIGNING_ARGS[@]}"} \
   build
 
-APP="$(find "$DERIVED/Build/Products" -maxdepth 2 -name 'app.app' -type d | head -1)"
-if [[ -z "$APP" ]]; then
+APP="$DERIVED/Build/Products/$CONFIG-$SDK/app.app"
+if [[ ! -d "$APP" ]]; then
   log "构建成功但找不到 app.app" >&2
   exit 1
 fi
@@ -80,7 +94,12 @@ log "app=$APP size=$(du -sh "$APP" | awk '{print $1}')"
 if [[ "$KEEP_ARTIFACT" == "1" ]]; then
   mkdir -p "$ARTIFACT_ROOT"
   stamp="$(date +%Y%m%d-%H%M%S)"
-  dest="$ARTIFACT_ROOT/$CONFIG-$stamp"
+  if [[ "$SDK" == iphoneos ]]; then
+    artifact_prefix="$CONFIG-iphoneos"
+  else
+    artifact_prefix="$CONFIG"
+  fi
+  dest="$ARTIFACT_ROOT/$artifact_prefix-$stamp"
   rm -rf "$ARTIFACT_ROOT/.partial"
   mkdir -p "$ARTIFACT_ROOT/.partial"
   ditto "$APP" "$ARTIFACT_ROOT/.partial/app.app"
@@ -88,10 +107,10 @@ if [[ "$KEEP_ARTIFACT" == "1" ]]; then
   ln -sfn "$dest/app.app" "$ARTIFACT_ROOT/latest.app"
   # 只保留最新一份 artifact，且总量不超过 MAX_ARTIFACT_GIB；重复构建不累积。
   while IFS= read -r old; do rm -rf -- "$old"; done < <(
-    find "$ARTIFACT_ROOT" -maxdepth 1 -type d -name "$CONFIG-*" -print0 2>/dev/null       | xargs -0 ls -dt 2>/dev/null | tail -n +2
+    find "$ARTIFACT_ROOT" -maxdepth 1 -type d -name "$artifact_prefix-[0-9]*" -print0 2>/dev/null       | xargs -0 ls -dt 2>/dev/null | tail -n +2
   )
   while (( $(dir_gib "$ARTIFACT_ROOT") > MAX_ARTIFACT_GIB )); do
-    oldest="$(find "$ARTIFACT_ROOT" -maxdepth 1 -type d -name "$CONFIG-*" -print0 2>/dev/null | xargs -0 ls -dt 2>/dev/null | tail -1)"
+    oldest="$(find "$ARTIFACT_ROOT" -maxdepth 1 -type d -name "$artifact_prefix-[0-9]*" -print0 2>/dev/null | xargs -0 ls -dt 2>/dev/null | tail -1)"
     [[ -z "$oldest" ]] && break
     rm -rf -- "$oldest"
   done
