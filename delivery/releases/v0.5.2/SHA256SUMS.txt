@@ -1,0 +1,3 @@
+a03603711c45eff0e84ba7c5ac1fede60dba7f46a859cd66a4f8e390ca569532  Shudeng-v0.5.2-ios-simulator.zip
+6702b2ca99d3a2b209c3aaf75d416203303a9a500df8ce81d9a722ed25bdf830  INSTALL.md
+bebf3f0f40a8de7e9ab561b0da4dd58e328fd6fb2420871561789de1f3120dd1  release-manifest.json

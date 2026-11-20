@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.2",
+  "build": "15",
+  "release_date": "2026-11-20",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "0fcb5e96d4ac2770923b450f66bb5d54a0d9c72e",
+    "tag": "v0.5.2",
+    "mobile_tree": "b043c1ad70e5c50136c4f15752933030e5db8259",
+    "core_tree": "1ef830c07fc5c705937557dd11751b9e1dac7505",
+    "reader_web_tree": "7a5f93701c1e34e4a72daa92b223fa57be634823"
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": [
+      "arm64"
+    ],
+    "validated_runtime": "iOS 26.5",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "binary_sha256": "7e537c77f29c9a449fa8cb8d7c748f3688198d74e96d861c6cb56ed142414bf6",
+    "js_bundle_sha256": "0ed7c0cbd80983913f7ac06f47a56805192125b66ff73c51b673bf592feb64de",
+    "cdhash": "4d7c007b6c81d0f9acec4a6e5cbbffa4486a2412",
+    "signing": "Simulator ad hoc"
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.2-ios-simulator.zip",
+      "bytes": 29109915,
+      "sha256": "a03603711c45eff0e84ba7c5ac1fede60dba7f46a859cd66a4f8e390ca569532"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 918,
+      "sha256": "6702b2ca99d3a2b209c3aaf75d416203303a9a500df8ce81d9a722ed25bdf830"
+    }
+  ],
+  "packaging": {
+    "native_compile_rerun": false,
+    "native_base": "v0.5.1 simulator native components",
+    "js": "Fresh production export:embed, Hermes v99, matching third-party notices regenerated from source map"
+  },
+  "validation": {
+    "final_tests": {
+      "passed": 1147,
+      "skipped": 9,
+      "failed": 0
+    },
+    "typecheck": "four packages passed",
+    "website_build": "passed",
+    "package_audit": "passed",
+    "zip_integrity": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "bundled_npm_license_count": 127,
+    "simulator_smoke": "Installed the extracted final archive on the dedicated iOS 26.5 simulator, verified installed bundle identity and JS hash, cold launched to shelf."
+  },
+  "not_validated": [
+    "physical iPhone, TestFlight, App Store and older runtime operation",
+    "real model provider quality and billing"
+  ],
+  "evidence": [
+    "docs/validation/2026-11-20/chat-six-fixes.md"
+  ]
+}
