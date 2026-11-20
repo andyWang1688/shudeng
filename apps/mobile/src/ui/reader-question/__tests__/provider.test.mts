@@ -22,6 +22,7 @@ function harness(wrapRoot = false) {
   let slots: any[] = [];
   let cursor = 0;
   let queued: Array<() => void> = [];
+  const alerts: unknown[][] = [];
   const scopes = new Map<string, any[]>();
   const stack = StackRouter({ initialRouteName: 'book-chat' });
   let rootState: any = { type: 'stack', key: 'root', routeKeySeq: 0, index: 0, routeNames: ['book-chat', 'reader/[id]', 'settings/ai-service'], routes: [{ key: 'question', name: 'book-chat', params: {} }] };
@@ -47,7 +48,7 @@ function harness(wrapRoot = false) {
   compiled.require = (id: string) => {
     if (id === 'react') return react;
     if (id === 'react/jsx-runtime') return { jsx: (type: any, props: any) => ({ type, props }) };
-    if (id === 'react-native') return { Alert: { alert() {} }, Keyboard: { dismiss() {} } };
+    if (id === 'react-native') return { Alert: { alert: (...args: unknown[]) => { alerts.push(args); } }, Keyboard: { dismiss() {} } };
     if (id === 'expo-router') return { useRootNavigationState: () => wrapRoot ? {
       type: 'stack', key: 'expo-container', index: 0, routeNames: ['__root'],
       routes: [{ key: '__root:-0', name: '__root', state: rootState }],
@@ -73,6 +74,7 @@ function harness(wrapRoot = false) {
   return {
     get registry(): ReaderQuestionRegistry { return context.registry; },
     get state() { return rootState; },
+    get alerts(): readonly unknown[][] { return alerts; },
     render, action,
     unmount(id: string) {
       for (const cell of scopes.get(id) ?? []) if (typeof cell?.cleanup === 'function') cell.cleanup();
@@ -198,6 +200,58 @@ test('EPUB hook keeps bottom ask separate from the origin-restoring back action'
   assert.equal(h.registry.readerSnapshot(questions.readerSessionId).reference, null);
 });
 
+test('EPUB citation returns report an origin restore failure once and keep successful round trips silent', async () => {
+  const h = harness(wrapRoot); h.setReaderRoot();
+  const origin = { type: 'epub' as const, cfi: 'epubcfi(/6/2!/4)' };
+  const citations = [
+    { locator: { type: 'epub' as const, cfi: 'epubcfi(/6/8!/4)' }, quote: '引用原文一', ordinal: 1, id: 'E1' },
+    { locator: { type: 'epub' as const, cfi: 'epubcfi(/6/10!/4)' }, quote: '引用原文二', ordinal: 2, id: 'E2' },
+  ];
+  let failOrigin = false;
+  const questions = h.readerQuestions('source-return-alert', { bookId: 'book', format: 'epub', theme: 'light',
+    getLocator: () => origin, documentFailed: false, flushProgress: async () => true,
+    navigate: async (command: any) => command.citation || !failOrigin
+      ? { operationId: command.operationId, status: 'arrived' }
+      : { operationId: command.operationId, status: 'failed', message: '合成定位失败' },
+  });
+  questions.ask(); h.render();
+  const firstRoute = h.state.routes[h.state.index];
+  const presentation = h.registry.get(firstRoute.params.questionPresentationId)!;
+  presentation.update({ draft: '第一行合成草稿\n第二行粘贴', selection: { start: 2, end: 5 }, scroll: { offset: 312, anchorId: 'answer', anchorOffset: -18 }, referenceFocus: 'E1' });
+
+  const firstOpened = h.registry.openReference(presentation, firstRoute.key, citations[0]);
+  h.render(); h.transition(firstRoute.key, true);
+  assert.equal((await firstOpened).status, 'opened');
+  assert.equal(await questions.returnToQuestion(), true);
+  assert.deepEqual(h.alerts, [], 'a successful EPUB round trip must not alert');
+
+  h.render();
+  const secondRoute = h.state.routes[h.state.index];
+  failOrigin = true;
+  const secondOpened = h.registry.openReference(presentation, secondRoute.key, citations[1]);
+  h.render(); h.transition(secondRoute.key, true);
+  assert.equal((await secondOpened).status, 'opened');
+  assert.equal(await questions.returnToQuestion(), true);
+  assert.deepEqual(h.alerts, [['无法恢复原文位置', '合成定位失败']], 'the restored question reports the origin failure exactly once');
+
+  h.render();
+  const thirdRoute = h.state.routes[h.state.index];
+  assert.equal(thirdRoute.name, 'book-chat');
+  assert.equal(thirdRoute.params.questionPresentationId, presentation.id);
+  assert.deepEqual(presentation.getSnapshot(), {
+    draft: '第一行合成草稿\n第二行粘贴', selection: { start: 2, end: 5 }, selectionConsumed: false,
+    initialQuestionConsumed: false, scroll: { offset: 312, anchorId: 'answer', anchorOffset: -18 },
+    expandedSelection: [], expandedReasoning: [], expandedTools: [], reasoningStatus: {}, reasoningManual: [],
+    sheetDetent: 0, referenceFocus: 'E1', restoreReferenceFocus: true,
+  });
+  failOrigin = false;
+  const thirdOpened = h.registry.openReference(presentation, thirdRoute.key, citations[0]);
+  h.render(); h.transition(thirdRoute.key, true);
+  assert.equal((await thirdOpened).status, 'opened');
+  assert.equal(await questions.returnToQuestion(), true);
+  assert.equal(h.alerts.length, 1, 'repeated successful returns add no alert');
+});
+
 test('ordinary question reopens after route removal with retained effects', () => {
   const h = harness(wrapRoot); h.setReaderRoot();
   const origin = { type: 'epub' as const, cfi: 'epubcfi(/6/2!/4)' };
@@ -264,4 +318,3 @@ test('the citation hook dismisses the app question route and reaches the owning 
   assert.equal(h.registry.readerSnapshot(questions.readerSessionId).reference, presentation);
 });
 });
-

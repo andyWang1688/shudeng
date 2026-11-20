@@ -160,7 +160,23 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
+class ModelStepLimitError extends Error {
+  constructor() {
+    super('本次查书步骤已达到上限，请缩小问题范围或补充更具体的问题后重试。');
+    this.name = 'ModelStepLimitError';
+  }
+}
+
+function looksLikeAnswerEnvelope(text: string): boolean {
+  const trimmed = text.trim();
+  const startsLikeObject = /^(?:```(?:json)?\s*)?\{/.test(trimmed);
+  const hasAnswer = /"answer"\s*:/.test(text);
+  const hasCitations = /"citations"\s*:/.test(text);
+  return startsLikeObject ? hasAnswer || hasCitations : hasAnswer && hasCitations;
+}
+
 function failureCode(error: unknown): AgentFailureCode {
+  if (error instanceof ModelStepLimitError) return 'invalid-response';
   if (error instanceof ContextBudgetError) return 'capacity';
   if (providerBoundaryError(error)) return 'configuration';
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
@@ -291,6 +307,7 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
     ),
   ];
   const model = options.model.langChainModel as BaseChatModel;
+  const maxSteps = Math.max(1, options.maxSteps ?? 8);
   let contextSummary: string | undefined = options.historySummary;
   let contextEstimate: AgentContextEstimate | undefined;
   const runStartedAt = Date.now();
@@ -384,6 +401,7 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
           tools: [...request.tools.filter(item => !('type' in item && typeof item.type === 'string' && item.type.startsWith('web_search'))), ...webSearch.tools()],
           modelSettings: { ...request.modelSettings, shudengWebSearchBudget: webSearch.remaining },
         });
+        if (modelDispatches >= maxSteps) throw new ModelStepLimitError();
         modelDispatches += 1;
         let response;
         try { response = await handler(nextRequest()); }
@@ -493,7 +511,7 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
           streamMode: ['updates', 'values'],
           signal: controller.signal,
           callbacks: [deltaHandler],
-          recursionLimit: Math.max(8, (options.maxSteps ?? 8) * 2),
+          recursionLimit: maxSteps * 4 + 8,
         },
       )) as AsyncIterable<[string, unknown]>;
 
@@ -572,6 +590,14 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
         if (citations.length === 0 && payload.citations.length === 0) {
           warnings.push('未提供可核查的书内依据；一般解释与推断不等于本书结论。');
         }
+      } else if (looksLikeAnswerEnvelope(rawText)) {
+        queue.push({
+          type: 'failed',
+          code: 'invalid-response',
+          message: '模型返回的回答格式不完整，请重试。',
+        });
+        settle(null);
+        return;
       } else {
         answer = rawText.trim();
         warnings.push('回答未提供可核查格式；未显示有效书内引用。');

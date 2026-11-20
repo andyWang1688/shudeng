@@ -6,6 +6,20 @@ const turn = (patch = {}) => ({
 });
 
 describe('assistant-ui persisted book message boundary', () => {
+  it('removes orphaned citation metadata from old answers without changing questions or fenced code', () => {
+    const wire = '回答正文。","citations":[{"id":"E1","quote":"一段原文"}]}';
+    expect(bookTurnToAssistantMessage(turn({ text: wire })).content.at(-1).text).toBe('回答正文。');
+    const code = '格式示例：\n```text\n' + wire + '\n```';
+    expect(bookTurnToAssistantMessage(turn({ text: code })).content.at(-1).text).toBe(code);
+    expect(bookTurnToAssistantMessage(turn({ role: 'user', text: wire })).content[0].text).toBe(wire);
+  });
+  it('renders a readable error for both the historical failed turn and its failed tool', () => {
+    const error = 'Recursion limit of 16 reached without hitting a stop condition.';
+    const message = bookTurnToAssistantMessage(turn({ status: 'error', error,
+      tools: [{ callId: 'old', name: 'search_book', status: 'error', preview: error }] }));
+    expect(message.status.error).toContain('查书步骤已达到上限');
+    expect(message.content[0].result).toBe(message.status.error);
+  });
   it('shows the original user question instead of the Agent prompt and keeps the persisted id', () => {
     const message = bookTurnToAssistantMessage(turn({ role: 'user', text: '这段话为什么这样说？',
       agentQuestion: '附带了很长的检索指令', selectionQuote: '原文', selectionAttached: true }));

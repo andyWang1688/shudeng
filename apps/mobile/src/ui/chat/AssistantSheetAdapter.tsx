@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type EffectCallback, type PropsWithChildren } from 'react';
+import { createContext, useCallback, useContext, useMemo, type EffectCallback, type PropsWithChildren } from 'react';
 import { View, useWindowDimensions, type FlatListProps, type LayoutChangeEvent } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useAui, useAuiState, type ThreadMessage } from '@assistant-ui/react-native';
@@ -76,11 +76,8 @@ export function SheetComposerInput() {
   const text = useAuiState(state => state.composer.text);
   const disabled = useAuiState(state => state.thread.isDisabled || state.composer.dictation?.inputDisabled === true);
   const { fontScale } = useWindowDimensions();
-  // Layout measurement only; there is no second text/draft state.
-  const [contentHeight, setContentHeight] = useState(44);
   const minimumHeight = Math.max(44, Math.ceil(24 * fontScale + 16));
   const maximumHeight = Math.max(144, minimumHeight);
-  const height = text.length === 0 ? minimumHeight : Math.min(maximumHeight, Math.max(minimumHeight, contentHeight));
 
   return <SheetTextInput
     value={text}
@@ -90,9 +87,8 @@ export function SheetComposerInput() {
     placeholder="问问这本书…"
     {...(hydrated ? { placeholderTextColorClassName: 'accent-muted-foreground' } : {})}
     className="aui-composer-input text-foreground px-2 text-base leading-6"
-    style={{ height, paddingVertical: 8, textAlignVertical: 'top', includeFontPadding: false }}
-    onContentSizeChange={event => setContentHeight(Math.ceil(event.nativeEvent.contentSize.height))}
-    scrollEnabled={contentHeight > maximumHeight}
+    style={{ minHeight: minimumHeight, maxHeight: maximumHeight, paddingVertical: 8, textAlignVertical: 'top', includeFontPadding: false }}
+    scrollEnabled
     multiline
     submitBehavior="newline"
     allowFontScaling

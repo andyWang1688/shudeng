@@ -8,7 +8,7 @@ import {
   background, buttonStyle, clipShape, disabled, font, foregroundStyle, frame,
   lineLimit, listRowBackground, listRowInsets, listRowSeparator,
   listRowSeparatorTint, listStyle, padding, resizable, scrollContentBackground,
-  scrollDismissesKeyboard, tint,
+  scrollDismissesKeyboard, scrollEdgeEffectStyle, tint,
 } from "@expo/ui/swift-ui/modifiers";
 import { useAppearance } from "../appearance";
 import { bookSwatchTone, usePalette } from "../theme";
@@ -35,7 +35,7 @@ export function ConversationsList({ sections, searching, previewLimit, allBooks,
   const transition = Animation.easeInOut({ duration: reduceMotion ? 0 : 0.22 });
   return (
     <Host style={{ flex: 1 }} colorScheme={resolvedMode} seedColor={p.lampInk} ignoreSafeArea="container" pointerEvents={active ? "auto" : "none"}>
-      <List modifiers={[listStyle("plain"), scrollContentBackground("hidden"), background(p.paper), scrollDismissesKeyboard("interactively"), disabled(!active)]}>
+      <List modifiers={[listStyle("plain"), scrollContentBackground("hidden"), scrollEdgeEffectStyle("hard", "top"), background(p.paper), scrollDismissesKeyboard("interactively"), disabled(!active)]}>
         <List.ForEach data={[...sections]} keyExtractor={(section) => section.bookId} recycling={false}>
           {({ item: section }) => {
             const all = searching || allBooks.has(section.bookId);

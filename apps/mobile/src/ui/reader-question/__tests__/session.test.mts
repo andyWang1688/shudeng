@@ -354,11 +354,13 @@ test('a cancelled dismissal does not navigate and keeps the current question usa
   assert.equal(f.registry.readerSnapshot(f.owner.id).reference, null);
 });
 
-test('wrong operation receipts cannot count as arrival or reopen a question', async () => {
+test('wrong operation receipts never count as arrival, but the question remains returnable', async () => {
   const f = fixture(); f.control.navigate = async () => ({ operationId: 'old-operation', status: 'arrived' });
   assert.equal((await f.registry.openReference(f.presentation, 'question-route', citation)).status, 'failed');
-  assert.equal((await f.registry.returnToQuestion(f.owner.id)).status, 'failed');
-  assert.equal(f.shown.length, 1);
+  const returned = await f.registry.returnToQuestion(f.owner.id);
+  assert.equal(returned.status, 'returned');
+  assert.match(returned.message ?? '', /未能恢复提问位置/);
+  assert.equal(f.shown.at(-1), f.presentation);
 });
 
 test('disposing an in-flight source invalidates late receipts without resurrecting a sheet', async () => {
@@ -388,6 +390,35 @@ test('broken EPUB resource can return to the question without requiring a succes
   f.control.documentFailed = true;
   assert.equal((await f.registry.returnToQuestion(f.owner.id)).status, 'returned');
   assert.equal(f.navigated.length, 1);
+  assert.equal(f.shown.at(-1), f.presentation);
+});
+
+test('a failed origin receipt still reopens the same question so the reader can continue', async () => {
+  const f = fixture(); await f.registry.openReference(f.presentation, 'question-route', citation);
+  f.control.navigate = async command => ({ operationId: command.operationId, status: 'failed', message: '原文位置已失效' });
+  const result = await f.registry.returnToQuestion(f.owner.id);
+  assert.equal(result.status, 'returned');
+  assert.equal(result.message, '原文位置已失效');
+  assert.equal(f.shown.at(-1), f.presentation);
+  assert.equal(f.presentation.getSnapshot().restoreReferenceFocus, true);
+  assert.equal(f.registry.readerSnapshot(f.owner.id).busy, false);
+});
+
+test('an exception while restoring the origin still reopens the same question', async () => {
+  const f = fixture(); await f.registry.openReference(f.presentation, 'question-route', citation);
+  f.control.navigate = async () => { throw new Error('原文已关闭'); };
+  const result = await f.registry.returnToQuestion(f.owner.id);
+  assert.equal(result.status, 'returned');
+  assert.equal(result.message, '原文已关闭');
+  assert.equal(f.shown.at(-1), f.presentation);
+  assert.equal(f.registry.readerSnapshot(f.owner.id).busy, false);
+});
+
+test('a mismatched origin receipt does not block reopening the question', async () => {
+  const f = fixture(); await f.registry.openReference(f.presentation, 'question-route', citation);
+  f.control.navigate = async () => ({ operationId: 'stale-operation', status: 'arrived' });
+  const result = await f.registry.returnToQuestion(f.owner.id);
+  assert.equal(result.status, 'returned');
   assert.equal(f.shown.at(-1), f.presentation);
 });
 

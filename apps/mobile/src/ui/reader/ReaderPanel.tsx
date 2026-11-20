@@ -1,6 +1,8 @@
-import { useMemo, type ReactNode } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { useBottomSheetInternal } from "@gorhom/bottom-sheet";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { Maximize2, X } from "lucide-react-native";
 import { AppSheet } from "../components/AppSheet";
 import { usePalette, type Palette } from "../theme";
@@ -12,6 +14,16 @@ import {
 export type { ReaderPanelActions } from "./useReaderSheetLifecycle";
 type PanelContent = ReactNode | ((actions: ReaderPanelActions) => ReactNode);
 
+function VisiblePanelViewport({ children }: { children: ReactNode }) {
+  const { animatedPosition, animatedLayoutState, animatedKeyboardState } = useBottomSheetInternal();
+  const style = useAnimatedStyle(() => {
+    const { containerHeight, handleHeight } = animatedLayoutState.get();
+    return { height: Math.max(0, containerHeight - animatedPosition.get() - Math.max(0, handleHeight)
+      - Math.max(0, animatedKeyboardState.get().heightWithinContainer)) };
+  });
+  return <Animated.View style={style}>{children}</Animated.View>;
+}
+
 /** A native modal host also covers the tab bar when a panel opens from the shelf. */
 export function ReaderPanel({
   visible,
@@ -20,6 +32,7 @@ export function ReaderPanel({
   children,
   action,
   initialHeight = 70,
+  panFromContent = true,
   busy = false,
   testID,
 }: {
@@ -29,6 +42,7 @@ export function ReaderPanel({
   readonly children: PanelContent;
   readonly action?: PanelContent;
   readonly initialHeight?: number;
+  readonly panFromContent?: boolean;
   readonly busy?: boolean;
   readonly testID?: string;
 }) {
@@ -37,6 +51,7 @@ export function ReaderPanel({
   const { sheet, close, didClose, onAnimate, canInteract, blocked } =
     useReaderSheetLifecycle({ visible, busy, onClose });
   const actions: ReaderPanelActions = { blocked, canInteract };
+  const Viewport = panFromContent ? Fragment : VisiblePanelViewport;
   return (
     <Modal
       visible={visible}
@@ -55,10 +70,10 @@ export function ReaderPanel({
             onAnimate={onAnimate}
             enablePanDownToClose={!blocked}
             enableHandlePanningGesture={!blocked}
-            enableContentPanningGesture={!blocked}
+            enableContentPanningGesture={panFromContent && !blocked}
             backdropPressBehavior={blocked ? "none" : "close"}
           >
-            <View
+            <Viewport><View
               testID={testID}
               style={styles.body}
               pointerEvents={blocked ? "none" : "auto"}
@@ -92,7 +107,7 @@ export function ReaderPanel({
                 {typeof action === "function" ? action(actions) : action}
               </View>
               {typeof children === "function" ? children(actions) : children}
-            </View>
+            </View></Viewport>
           </AppSheet>
         ) : null}
       </GestureHandlerRootView>

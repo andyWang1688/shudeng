@@ -91,13 +91,12 @@ export function ReaderChrome({
             accessibilityRole="button"
             accessibilityLabel={referenceMode ? "返回问答" : "返回书架"}
             onPress={onBack}
-            style={styles.iconButton}
+            style={referenceMode ? styles.referenceBack : styles.iconButton}
           >
             <ChevronLeft size={20} color={palette.ink2} />
+            {referenceMode ? <Text style={styles.title} numberOfLines={1}>{"返回问答 · " + title}</Text> : null}
           </Pressable>
-          <Text style={styles.title} numberOfLines={1}>
-            {referenceMode ? "返回问答 · " + title : title}
-          </Text>
+          {!referenceMode && <Text style={styles.title} numberOfLines={1}>{title}</Text>}
           {onHelp ? (
             <Pressable
               accessibilityRole="button"
@@ -230,6 +229,13 @@ function makeStyles(palette: Palette) {
       lineHeight: 22,
       fontWeight: "600",
       color: palette.ink,
+    },
+    referenceBack: {
+      flex: 1,
+      minHeight: 44,
+      flexDirection: "row",
+      alignItems: "center",
+      paddingLeft: 12,
     },
     iconButton: {
       width: 44,

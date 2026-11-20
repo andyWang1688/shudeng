@@ -215,6 +215,7 @@ export function PdfReaderPanels({
       visible={panel !== null}
       title={panel === "settings" ? "阅读设置" : search ? "书内搜索" : title}
       initialHeight={panel === "settings" ? 46 : 70}
+      panFromContent={panel !== "contents"}
       busy={saving}
       onClose={onClose}
       action={({ canInteract }) =>
@@ -338,6 +339,7 @@ export function PdfReaderPanels({
                 </>
               ) : (
                 <BottomSheetFlatList<PanelRow>
+                  style={styles.viewport}
                   data={rows}
                   keyExtractor={(row: PanelRow) => row.id}
                   keyboardShouldPersistTaps="handled"
@@ -408,5 +410,6 @@ function makeStyles(palette: Palette) {
       fontSize: 12,
     },
     list: { paddingHorizontal: 16, paddingBottom: 40 },
+    viewport: { flex: 1 },
   });
 }

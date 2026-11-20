@@ -1,4 +1,5 @@
 import type { VerifiedCitation } from '@shudeng/core';
+import { splitCitationTail } from '@shudeng/core/agent/citation-tail';
 import type { AIConfig } from '../../platform/aiConfig';
 
 /** Swift BookType.serif 使用 PostScript 名 SongtiSC-*；family 名在 RN 会回退系统字体。 */
@@ -17,6 +18,9 @@ export function serviceName(config: Pick<AIConfig, 'name' | 'provider'> | null |
 
 export function friendlyError(message: string | undefined): string {
   if (!message) return '请稍后重试；问题与选文已保留。';
+  if (/Recursion limit (?:of )?\d+ reached without hitting a stop condition|\bGRAPH_RECURSION_LIMIT\b/i.test(message)) {
+    return '本次查书步骤已达到上限，请缩小问题范围后重试。';
+  }
   if (/fetch|network|network request|timeout|abort/i.test(message)) {
     return '暂时没能连接 AI 服务，问题与选文已保留，请重试。';
   }
@@ -57,13 +61,25 @@ export function locatorForCitation(citation: VerifiedCitation): string | undefin
 
 /** Extract a partial JSON answer string without exposing the response envelope. */
 export function streamingAnswer(raw: string): string {
+  const complete = raw.trim();
+  const tail = splitCitationTail(raw);
+  if (tail) return tail.answer;
+  if (complete.startsWith('"')) {
+    try {
+      const decoded: unknown = JSON.parse(complete);
+      if (typeof decoded === 'string') return streamingAnswer(decoded);
+    } catch {
+    }
+  }
   const start = /"answer"\s*:\s*"/.exec(raw);
-  if (!start) return /^\s*(?:```(?:json)?\s*)?\{/.test(raw) ? '' : raw;
+  if (!start) return /^\s*(?:```(?:json)?\s*)?[{"]/.test(raw) ? '' : raw;
   const value = raw.slice(start.index + start[0].length);
+  const citationBoundary = /"\s*,\s*"citations"\s*:\s*\[/.exec(value);
+  const limit = citationBoundary?.index ?? value.length;
   let answer = '';
-  for (let index = 0; index < value.length; index++) {
-    const char = value[index];
-    if (char === '"') break;
+  for (let index = 0; index < limit; index++) {
+    const char = value[index]!;
+    if (char === '"' && !citationBoundary) break;
     if (char !== '\\') {
       answer += char;
       continue;

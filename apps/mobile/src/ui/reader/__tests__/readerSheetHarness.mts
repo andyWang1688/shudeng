@@ -95,6 +95,7 @@ export function readerComponent(
     "react-native-gesture-handler": {
       GestureHandlerRootView: "GestureHandlerRootView",
     },
+    "react-native-reanimated": { __esModule: true, default: { View: "AnimatedView" } },
     "lucide-react-native": { Maximize2: "Maximize2", Trash2: "Trash2", X: "X" },
     "../theme": { usePalette: () => palette },
     "../components/BookNotice": { BookNotice: "BookNotice" },

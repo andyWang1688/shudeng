@@ -278,6 +278,35 @@ describe('streaming answer and citation contracts', () => {
     expect(streamingAnswer('{"ans')).toBe('');
     expect(streamingAnswer('{"answer":"回答","citations":[]}')).toBe('回答');
   });
+
+  it('keeps malformed-answer text usable while hiding citations and double encoding', () => {
+    expect(streamingAnswer('{"answer":"第一段。\n第二段。","citations":[]}')).toBe('第一段。\n第二段。');
+    expect(streamingAnswer('{"answer":"他说"你好"然后继续。","citations":[]}')).toBe('他说"你好"然后继续。');
+    expect(streamingAnswer(JSON.stringify('{"answer":"双重编码也要取出正文","citations":[]}'))).toBe('双重编码也要取出正文');
+  });
+
+  it('shows only the safe answer text for the CMP-3 truncated and null-citation payloads', () => {
+    expect(streamingAnswer('{"answer":"合成正文')).toBe('合成正文');
+    expect(streamingAnswer('{"answer":"合成正文","citations":[null]}')).toBe('合成正文');
+    expect(streamingAnswer('{"answer":42,"citations":[]}')).toBe('');
+    expect(streamingAnswer('{"answer":42')).toBe('');
+  });
+
+  it('persists the recovered answer without the response envelope', async () => {
+    const recovered = streamingAnswer('{"answer":"合成正文');
+    await appendBookChatTurn({
+      bookId: 'book-1',
+      conversationId: 'recovered-envelope',
+      assistantId: 'recovered-a',
+      question: '问题',
+      answer: recovered,
+      details: { status: 'done' },
+    });
+    const restored = await loadBookConversation('recovered-envelope');
+    expect(restored[1].text).toBe('合成正文');
+    expect(restored[1].text).not.toMatch(/"answer"|"citations"/);
+  });
+
   it('preserves href/progression anchors and direct CFI', () => {
     const raw = JSON.stringify({
       href: 'chapter.xhtml',

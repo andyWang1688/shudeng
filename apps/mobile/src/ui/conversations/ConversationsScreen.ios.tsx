@@ -73,7 +73,7 @@ export default function ConversationsScreen() {
   const dialog = state.dialog;
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: p.paper }]} edges={["top", "left", "right"]} testID="conversations-surface">
-      <Stack.Screen options={{ headerShown: false }} />
+      <Stack.Screen options={{ headerShown: false, scrollEdgeEffects: { top: "hidden" } }} />
       <PageHeading title="对话" />
       <PageSearch value={query} onChange={changeQuery} placeholder="搜索问题或书名" testID="conversations-search" />
       {sections.length ? <ConversationsList key={query} sections={sections} searching={searching} previewLimit={previewLimit} allBooks={allBooks} active={active} reduceMotion={reduceMotion}

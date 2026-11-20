@@ -55,6 +55,7 @@ export function EpubNavigationPanel(props: Props) {
   return (
     <ReaderPanel
       visible={props.visible}
+      panFromContent={false}
       title={snapshot.searchOpen ? "书内搜索" : props.title}
       onClose={props.onClose}
       action={({ canInteract }) => (
@@ -151,6 +152,7 @@ export function EpubNavigationPanel(props: Props) {
             />
           ) : (
             <BottomSheetFlatList<NavigationRow>
+              style={styles.viewport}
               data={rows}
               keyExtractor={(row: NavigationRow) => row.selectionKey ?? row.id}
               keyboardShouldPersistTaps="handled"
@@ -232,5 +234,6 @@ function makeStyles(palette: Palette) {
       paddingBottom: 8,
     },
     list: { paddingHorizontal: 16, paddingBottom: 40 },
+    viewport: { flex: 1 },
   });
 }

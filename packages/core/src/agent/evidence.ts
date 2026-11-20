@@ -4,6 +4,7 @@
  * 且 id 必须是本轮登记过的证据 id；否则剔除并记录 warning。绝不“放宽到任意文本”。
  */
 import type { BookExcerpt } from './book-source.js';
+import { splitCitationTail } from './citation-tail.js';
 import type { VerifiedCitation } from './events.js';
 
 export interface RegisteredEvidence extends BookExcerpt {
@@ -104,18 +105,38 @@ interface AnswerPayload {
 
 /** 从模型最终输出里解析 `{answer, citations}`；允许 markdown 代码块与前后说明。 */
 export function parseAnswerPayload(text: string): AnswerPayload | null {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  const candidate = text.slice(start, end + 1);
-  const parsed = safeParse(candidate);
-  if (!parsed || typeof parsed.answer !== 'string' || !Array.isArray(parsed.citations)) {
-    return null;
+  const unwrapped = unwrapJsonString(text.trim());
+  const tail = splitCitationTail(unwrapped);
+  if (tail) {
+    const array = readJsonArray(tail.references, 0);
+    return { answer: tail.answer, citations: array ? safeCitations(array) : [] };
   }
-  return {
-    answer: parsed.answer,
-    citations: parsed.citations as ReadonlyArray<{ id?: unknown; quote?: unknown }>,
-  };
+  const start = unwrapped.indexOf('{');
+  if (start < 0) return null;
+  const end = unwrapped.lastIndexOf('}');
+  const candidate = end > start ? unwrapped.slice(start, end + 1) : unwrapped.slice(start);
+  const parsed = safeParse(candidate);
+  if (parsed && typeof parsed.answer === 'string' && Array.isArray(parsed.citations)) {
+    return {
+      answer: parsed.answer,
+      citations: parsed.citations as ReadonlyArray<{ id?: unknown; quote?: unknown }>,
+    };
+  }
+  return salvageAnswerPayload(candidate);
+}
+
+function unwrapJsonString(text: string): string {
+  let value = text;
+  for (let depth = 0; depth < 3 && value.startsWith('"'); depth += 1) {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed !== 'string') break;
+      value = parsed.trim();
+    } catch {
+      break;
+    }
+  }
+  return value;
 }
 
 function safeParse(text: string): { answer?: unknown; citations?: unknown } | null {
@@ -126,6 +147,105 @@ function safeParse(text: string): { answer?: unknown; citations?: unknown } | nu
   } catch {
     return null;
   }
+}
+
+function salvageAnswerPayload(candidate: string): AnswerPayload | null {
+  const marker = /"answer"\s*:\s*"/.exec(candidate);
+  if (!marker) return null;
+  const answerStart = marker.index + marker[0].length;
+  const citationPattern = /"\s*,\s*"citations"\s*:\s*\[/g;
+  citationPattern.lastIndex = answerStart;
+  let boundary: RegExpExecArray | null = null;
+  for (let match = citationPattern.exec(candidate); match; match = citationPattern.exec(candidate)) {
+    boundary = match;
+  }
+  if (!boundary) return salvageTruncatedAnswer(candidate.slice(answerStart));
+  const arrayStart = candidate.indexOf('[', boundary.index);
+  const arrayText = arrayStart >= 0 ? readJsonArray(candidate, arrayStart) : null;
+  const citations = arrayText ? safeCitations(arrayText) : [];
+  return {
+    answer: decodeJsonStringFragment(candidate.slice(answerStart, boundary.index)),
+    citations,
+  };
+}
+
+/**
+ * Recover only when the answer string has an unambiguous end: the response stops
+ * inside the answer string, or its closing quote is followed by the object end or
+ * the citations key. Other malformed objects remain format errors.
+ */
+function salvageTruncatedAnswer(answerText: string): AnswerPayload | null {
+  let escaped = false;
+  for (let index = 0; index < answerText.length; index += 1) {
+    const char = answerText[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char !== '"') continue;
+    const after = answerText.slice(index + 1);
+    if (!/^\s*(?:}\s*)?$/.test(after) && !/^\s*,\s*"citations"\s*:/.test(after)) return null;
+    return { answer: decodeJsonStringFragment(answerText.slice(0, index)), citations: [] };
+  }
+  return { answer: decodeJsonStringFragment(answerText), citations: [] };
+}
+
+function safeCitations(text: string): ReadonlyArray<{ id?: unknown; quote?: unknown }> {
+  try {
+    const value: unknown = JSON.parse(text);
+    return Array.isArray(value) ? value as ReadonlyArray<{ id?: unknown; quote?: unknown }> : [];
+  } catch {
+    return [];
+  }
+}
+
+function readJsonArray(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === '[') depth += 1;
+    else if (char === ']') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+  return null;
+}
+
+function decodeJsonStringFragment(text: string): string {
+  let answer = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (char !== '\\') {
+      answer += char;
+      continue;
+    }
+    const escaped = text[++index];
+    if (escaped === undefined) break;
+    if (escaped === 'u') {
+      const code = text.slice(index + 1, index + 5);
+      if (code.length < 4 || !/^[0-9a-f]{4}$/i.test(code)) continue;
+      answer += String.fromCharCode(parseInt(code, 16));
+      index += 4;
+    } else {
+      answer +=
+        ({ n: '\n', r: '\r', t: '\t', b: '\b', f: '\f' } as Record<string, string>)[escaped] ?? escaped;
+    }
+  }
+  return answer;
 }
 
 export interface CitationCheckOutcome {
@@ -147,6 +267,10 @@ export function verifyCitations(
   const droppedIds: string[] = [];
   const seen = new Set<string>();
   for (const reference of payload.citations) {
+    if (typeof reference !== 'object' || reference === null || Array.isArray(reference)) {
+      droppedIds.push('(invalid-citation)');
+      continue;
+    }
     const id = typeof reference.id === 'string' ? reference.id : '';
     const quote = typeof reference.quote === 'string' ? reference.quote : '';
     const evidence = id ? registry.get(id) : undefined;

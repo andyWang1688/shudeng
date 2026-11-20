@@ -84,6 +84,7 @@ export function ChatSheet({
           topSafeInset={topInset}
           initialHeight={76}
           initialIndex={initialIndex}
+          enableContentPanningGesture={false}
           backdropLabel="收起问答，继续阅读"
           {...(footer ? { footerComponent: SheetFooter } : {})}
           onAnimate={lifecycle.onAnimate}

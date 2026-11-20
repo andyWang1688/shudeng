@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { EvidenceRegistry, verifyCitations } from './evidence.js';
+import { EvidenceRegistry, parseAnswerPayload, verifyCitations } from './evidence.js';
 
 const excerpt = { context: '前段 中段 尾段', quote: '前段 中段 尾段', chapter: '一章', locator: 'chapter:1' };
+it('recovers a plain answer followed by an orphaned citation envelope', () => {
+  expect(parseAnswerPayload('可核对的正文。","citations":[{"id":"E1","quote":"原文"}]}')).toEqual({
+    answer: '可核对的正文。', citations: [{ id: 'E1', quote: '原文' }],
+  });
+});
 const check = (registry: EvidenceRegistry, id: string, quote: string) =>
   verifyCitations({ answer: '回答', citations: [{ id, quote }] }, registry);
 
@@ -37,5 +42,72 @@ describe('citations require original text actually dispatched in this run', () =
     const next = nextRun.register(excerpt);
     expect(next.id).toBe(first.id);
     expect(check(nextRun, next.id, '尾段').citations).toEqual([]);
+  });
+
+  it('skips a null citation instead of throwing and keeps a trusted citation in the same batch', () => {
+    const registry = new EvidenceRegistry();
+    const evidence = registry.register(excerpt);
+    registry.recordTransmitted(evidence.id, excerpt.quote);
+    const outcome = verifyCitations(
+      { answer: '回答', citations: [null as never, { id: evidence.id, quote: '尾段' }] },
+      registry,
+    );
+    expect(outcome.citations.map((citation) => citation.id)).toEqual([evidence.id]);
+    expect(outcome.droppedIds).toHaveLength(1);
+  });
+});
+
+describe('answer payload parsing tolerates model formatting without exposing the envelope', () => {
+  it('accepts an answer string containing literal newlines', () => {
+    const raw = '{"answer":"第一段。\n第二段。","citations":[{"id":"E1","quote":"原文"}]}';
+    expect(parseAnswerPayload(raw)).toEqual({
+      answer: '第一段。\n第二段。',
+      citations: [{ id: 'E1', quote: '原文' }],
+    });
+  });
+
+  it('accepts an unescaped quote inside the answer and keeps the envelope out of the answer', () => {
+    const raw = '{"answer":"他说"你好"然后继续。","citations":[{"id":"E1","quote":"原文"}]}';
+    expect(parseAnswerPayload(raw)).toEqual({
+      answer: '他说"你好"然后继续。',
+      citations: [{ id: 'E1', quote: '原文' }],
+    });
+  });
+
+  it('unwraps a whole response that the model JSON-encoded a second time', () => {
+    const raw = JSON.stringify('{"answer":"双重编码也要取出正文","citations":[]}');
+    expect(parseAnswerPayload(raw)).toEqual({ answer: '双重编码也要取出正文', citations: [] });
+  });
+
+  it('extracts a valid answer around markdown fencing and surrounding prose', () => {
+    const raw = '这是说明。\n```json\n{"answer":"正文含 `code` 与 **Markdown**","citations":[{"id":"E1","quote":"原文"}]}\n```\n结束。';
+    expect(parseAnswerPayload(raw)?.answer).toBe('正文含 `code` 与 **Markdown**');
+  });
+
+  it('preserves a legitimate code answer exactly', () => {
+    const answer = '示例：\n```ts\nconst value = "book";\nconsole.log(value);\n```';
+    const raw = JSON.stringify({ answer, citations: [] });
+    expect(parseAnswerPayload(raw)?.answer).toBe(answer);
+  });
+
+  it('keeps the answer when only the citation array is malformed', () => {
+    expect(parseAnswerPayload('{"answer":"正文仍可读","citations":[{"id":')).toEqual({
+      answer: '正文仍可读',
+      citations: [],
+    });
+  });
+
+  it('recovers a truncated answer at a safe boundary instead of exposing the envelope', () => {
+    expect(parseAnswerPayload('{"answer":"合成正文')).toEqual({ answer: '合成正文', citations: [] });
+    expect(parseAnswerPayload('{"answer":"合成正文"')).toEqual({ answer: '合成正文', citations: [] });
+    expect(parseAnswerPayload('{"answer":"合成正文","citations":')).toEqual({
+      answer: '合成正文',
+      citations: [],
+    });
+  });
+
+  it('returns null rather than treating an unrelated JSON object as an answer', () => {
+    expect(parseAnswerPayload('{"citations":[],"answer":42}')).toBeNull();
+    expect(parseAnswerPayload('{"citations":[]}')).toBeNull();
   });
 });

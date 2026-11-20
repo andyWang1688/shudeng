@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./agent": "./src/agent/index.ts",
+    "./agent/citation-tail": "./src/agent/citation-tail.ts",
     "./domain": "./src/domain/types.ts",
     "./rag": "./src/rag/index.ts",
     "./db": "./src/db/index.ts",

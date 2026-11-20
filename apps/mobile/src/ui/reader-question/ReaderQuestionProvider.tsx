@@ -3,7 +3,7 @@ import { Alert, Keyboard } from 'react-native';
 import { useRootNavigationState, useRouter } from 'expo-router';
 import { createBookConversationId } from '../../platform/library/conversations';
 import type { StoredReaderLocator } from '../../platform/library/types';
-import { QuestionPresentation, ReaderQuestionRegistry, type CitationTarget, type QuestionLaunch, type ReaderReferencePort, type ReferenceRoute } from './session';
+import { QuestionPresentation, ReaderQuestionRegistry, type CitationTarget, type QuestionLaunch, type ReaderReferencePort, type ReferenceResult, type ReferenceRoute } from './session';
 
 type Transition = Readonly<{ target?: string; data: Readonly<{ closing: boolean }> }>;
 type PendingTransition = { finish: (completed: boolean) => void };
@@ -17,6 +17,11 @@ type QuestionContext = Readonly<{
   subscribeAppearance: (presentationId: string, listener: () => void) => () => void;
 }>;
 const Context = createContext<QuestionContext | null>(null);
+
+function reportReturnFailure(result: ReferenceResult): void {
+  if (result.status === 'failed') Alert.alert('无法返回问答', result.message);
+  else if (result.status === 'returned' && result.message) Alert.alert('无法恢复原文位置', result.message);
+}
 
 export function ReaderQuestionProvider({ children }: { readonly children: ReactNode }) {
   const router = useRouter();
@@ -185,12 +190,10 @@ export function useReaderQuestions(options: ReaderQuestionOptions) {
       Alert.alert('位置与设置尚未保存', result.message, [
         { text: '留在阅读页', style: 'cancel' },
         { text: '仍然返回问答', style: 'destructive', onPress: () => {
-          void registry.returnToQuestion(owner.id, true).then(value => {
-            if (value.status === 'failed') Alert.alert('无法返回问答', value.message);
-          });
+          void registry.returnToQuestion(owner.id, true).then(reportReturnFailure);
         } },
       ]);
-    } else if (result.status === 'failed') Alert.alert('无法返回问答', result.message);
+    } else reportReturnFailure(result);
     return result.status === 'returned';
   }, [owner.id, registry]);
   const ask = useCallback((selection?: Readonly<{ quote: string; locator: StoredReaderLocator }>) => {

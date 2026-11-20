@@ -3,7 +3,7 @@ import type { BookIdentity } from '../domain/types.js';
 import { runBookAgent } from './agent.js';
 import { InMemoryBookSource, type InMemoryBook } from './book-source.js';
 import type { AgentEvent, AgentRunSession } from './events.js';
-import { createScriptedModel, ScriptedChatModel } from './testing.js';
+import { createScriptedModel, ScriptedChatModel, type ScriptedTurn } from './testing.js';
 
 const book: BookIdentity = { id: 'book-1', title: '测试书', format: 'epub', sourceHash: 'hash-1' };
 
@@ -270,6 +270,143 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
     expect(events.some((event) => event.type === 'cancelled')).toBe(true);
     expect(events.some((event) => event.type === 'completed')).toBe(false);
     expect(await session.result).toBeNull();
+  });
+
+  it('default step budget allows several tool rounds and a final answer', async () => {
+    const turns: ScriptedTurn[] = Array.from({ length: 5 }, (_, index) => ({
+      chunks: [{ toolCalls: [{ id: `call_${index}`, name: 'search_book', args: { query: '灯' } }] }],
+    }));
+    turns.push({ chunks: [{ text: '{"answer":"多轮查书后的回答","citations":[]}' }] });
+    const model = createScriptedModel(turns);
+    const session = runBookAgent({ model, source: source(), book, question: '问' });
+    const events = await collect(session);
+    expect(events.some((event) => event.type === 'failed')).toBe(false);
+    expect((await session.result)?.answer).toBe('多轮查书后的回答');
+  });
+
+  it('stops a runaway tool loop with a readable message instead of leaking the runtime limit', async () => {
+    const turns = Array.from({ length: 12 }, (_, index) => ({
+      chunks: [{ toolCalls: [{ id: `call_${index}`, name: 'search_book', args: { query: '灯' } }] }],
+    }));
+    const model = createScriptedModel(turns);
+    const session = runBookAgent({ model, source: source(), book, question: '问', maxSteps: 4 });
+    const events = await collect(session);
+    const failed = events.find((event) => event.type === 'failed');
+    expect(failed?.type).toBe('failed');
+    expect((failed as Extract<AgentEvent, { type: 'failed' }>).message).toContain('查书步骤');
+    expect((failed as Extract<AgentEvent, { type: 'failed' }>).message).not.toMatch(/recursion|model call|GRAPH_/i);
+    expect(JSON.stringify(events)).not.toMatch(/recursion|model call|GRAPH_/i);
+    expect((model.langChainModel as ScriptedChatModel).calls.length).toBeLessThanOrEqual(4);
+  });
+
+  it('a malformed envelope with literal newlines never becomes the visible answer', async () => {
+    const model = createScriptedModel([
+      { chunks: [{ text: '{"answer":"第一段。\n第二段。","citations":[]}' }] },
+    ]);
+    const session = runBookAgent({ model, source: source(), book, question: '问' });
+    await collect(session);
+    const result = await session.result;
+    expect(result?.answer).toBe('第一段。\n第二段。');
+    expect(result?.answer).not.toContain('"citations"');
+    expect(result?.warnings.join('')).toContain('未提供可核查的书内依据');
+  });
+
+  it('fails safely instead of showing an unrecoverable answer envelope', async () => {
+    const model = createScriptedModel([
+      { chunks: [{ text: '{"answer":42,"citations":[]}' }] },
+    ]);
+    const session = runBookAgent({ model, source: source(), book, question: '问' });
+    const events = await collect(session);
+    const failed = events.find((event) => event.type === 'failed');
+    expect(failed?.type === 'failed' && failed.message).toContain('格式不完整');
+    expect(failed?.type === 'failed' && failed.message).not.toContain('citations');
+    expect(await session.result).toBeNull();
+  });
+
+  it('recovers a safe truncated answer instead of showing the envelope (CMP-3 regression)', async () => {
+    const model = createScriptedModel([{ chunks: [{ text: '{"answer":"合成正文' }] }]);
+    const session = runBookAgent({ model, source: source(), book, question: '问' });
+    const events = await collect(session);
+    const result = await session.result;
+    expect(events.some((event) => event.type === 'failed')).toBe(false);
+    expect(result?.answer).toBe('合成正文');
+    expect(result?.answer).not.toContain('"answer"');
+    expect(result?.citations).toEqual([]);
+  });
+
+  it('fails safely when a truncated envelope has no recoverable answer string', async () => {
+    const model = createScriptedModel([{ chunks: [{ text: '{"answer":42' }] }]);
+    const session = runBookAgent({ model, source: source(), book, question: '问' });
+    const events = await collect(session);
+    const failed = events.find((event) => event.type === 'failed');
+    expect(failed?.type === 'failed' && failed.message).toContain('格式不完整');
+    expect(failed?.type === 'failed' && failed.message).not.toContain('answer');
+    expect(events.some((event) => event.type === 'completed')).toBe(false);
+    expect(await session.result).toBeNull();
+  });
+
+  it('fails safely instead of showing an object that has only the citations field', async () => {
+    const model = createScriptedModel([{ chunks: [{ text: '{"citations":[null]}' }] }]);
+    const session = runBookAgent({ model, source: source(), book, question: '问' });
+    const events = await collect(session);
+    const failed = events.find((event) => event.type === 'failed');
+    expect(failed?.type === 'failed' && failed.message).toContain('格式不完整');
+    expect(events.some((event) => event.type === 'completed')).toBe(false);
+    expect(await session.result).toBeNull();
+  });
+
+  it('keeps the answer when a citation entry is null (CMP-3 regression)', async () => {
+    const model = createScriptedModel([
+      { chunks: [{ text: '{"answer":"合成正文","citations":[null]}' }] },
+    ]);
+    const session = runBookAgent({ model, source: source(), book, question: '问' });
+    const events = await collect(session);
+    const result = await session.result;
+    expect(events.some((event) => event.type === 'failed')).toBe(false);
+    expect(result?.answer).toBe('合成正文');
+    expect(result?.citations).toEqual([]);
+    expect(result?.droppedCitationIds).toHaveLength(1);
+  });
+
+  it('skips null citations while retaining trusted citations in the same batch', async () => {
+    const model = createScriptedModel([
+      { chunks: [{ toolCalls: [{ id: 'call_1', name: 'search_book', args: { query: '灯' } }] }] },
+      {
+        chunks: [
+          {
+            text:
+              '{"answer":"合成正文","citations":[' +
+              'null,{"id":"E1","quote":"灯把书页照亮"}]}',
+          },
+        ],
+      },
+    ]);
+    const session = runBookAgent({ model, source: source(), book, question: '灯是什么意思' });
+    const events = await collect(session);
+    const result = await session.result;
+    expect(events.some((event) => event.type === 'failed')).toBe(false);
+    expect(result?.answer).toBe('合成正文');
+    expect(result?.citations.map((citation) => citation.id)).toEqual(['E1']);
+    expect(result?.warnings.join('')).toContain('未通过本次原文核验');
+    expect(events.filter((event) => event.type === 'citation')).toHaveLength(1);
+  });
+
+  it('keeps a plain Markdown answer and code block readable without an envelope', async () => {
+    const answer = '**原文**\n\n```ts\nconst value = "book";\n```';
+    const model = createScriptedModel([{ chunks: [{ text: answer }] }]);
+    const session = runBookAgent({ model, source: source(), book, question: '问' });
+    await collect(session);
+    const result = await session.result;
+    expect(result?.answer).toBe(answer);
+    expect(result?.warnings.join('')).toContain('未提供可核查格式');
+  });
+
+  it('keeps a legitimate code block in the answer', async () => {
+    const answer = '示例：\n```ts\nconst value = "book";\n```';
+    const model = createScriptedModel([{ chunks: [{ text: JSON.stringify({ answer, citations: [] }) }] }]);
+    const session = runBookAgent({ model, source: source(), book, question: '问' });
+    await collect(session);
+    expect((await session.result)?.answer).toBe(answer);
   });
 
   it('history 以 Human/AI 消息回放给模型', async () => {

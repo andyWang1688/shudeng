@@ -322,19 +322,30 @@ export class ReaderQuestionRegistry {
       if (reader.owner.format === 'epub' && !allowUnsaved && !await reader.port.flushProgress()) return { status: 'save-failed', message: '返回问答后，未保存的阅读位置或设置可能丢失。' };
       if (!this.valid(reader, epoch)) return { status: 'failed', message: '阅读会话已关闭' };
       // Native PDF reopens activeQuestion at the citation page. Only EPUB restores origin.
+      let originMessage: string | undefined;
       if (reader.owner.format === 'epub' && presentation.origin && !reader.port.documentFailed()) {
         const operationId = this.makeId();
-        const receipt = await this.navigate(reader, { operationId, locator: presentation.origin, quote: '', ordinal: 0, id: '', citation: false }, abort.signal);
+        let receipt: NavigationReceipt | undefined;
+        try {
+          receipt = await this.navigate(reader, { operationId, locator: presentation.origin, quote: '', ordinal: 0, id: '', citation: false }, abort.signal);
+        } catch (cause) {
+          if (!this.valid(reader, epoch)) return { status: 'failed', message: '阅读会话已关闭' };
+          originMessage = cause instanceof Error ? cause.message : String(cause);
+        }
         if (!this.valid(reader, epoch)) return { status: 'failed', message: '阅读会话已关闭' };
-        if (receipt.operationId !== operationId || receipt.status !== 'arrived') return { status: 'failed', message: receipt.message ?? '未能恢复提问位置，请重试' };
-        // Arrival must update the port's current locator before resolving its receipt.
-        if (!allowUnsaved && !await reader.port.flushProgress()) return { status: 'save-failed', message: '提问位置尚未保存。' };
+        if (receipt) {
+          if (receipt.operationId !== operationId || receipt.status !== 'arrived') {
+            originMessage = receipt.message ?? '未能恢复提问位置，请重试';
+          } else if (!allowUnsaved && !await reader.port.flushProgress()) {
+            return { status: 'save-failed', message: '提问位置尚未保存。' };
+          }
+        }
       }
       if (!this.valid(reader, epoch)) return { status: 'failed', message: '阅读会话已关闭' };
       presentation.update({ restoreReferenceFocus: true }, false);
       this.present(presentation);
       this.publish(reader, IDLE);
-      return { status: 'returned' };
+      return originMessage ? { status: 'returned', message: originMessage } : { status: 'returned' };
     } catch (cause) { return { status: 'failed', message: cause instanceof Error ? cause.message : String(cause) }; }
     finally { if (this.valid(reader, epoch) && reader.state.busy) this.publish(reader, { reference: presentation, busy: false }); }
   }
