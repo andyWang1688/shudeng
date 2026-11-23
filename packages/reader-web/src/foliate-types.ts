@@ -5,6 +5,7 @@ export interface FoliateContent { doc: Document; index: number; overlayer?: { hi
 export interface NavigationTarget { index: number; anchor?: number | ((doc: Document) => Range | Element | number) }
 export interface FoliateSearchResult { label?: string; cfi?: string; excerpt?: { pre: string; match: string; post: string }; subitems?: FoliateSearchResult[]; progress?: number }
 export interface FoliateView extends HTMLElement {
+  isFixedLayout?: boolean
   book?: { metadata?: { language?: string | readonly string[] }; dir?: string; sections?: FoliateSection[]; toc?: TocEntry[]; resolveHref?: (href: string) => NavigationTarget; destroy?: () => void }
   renderer?: HTMLElement & { primaryIndex?: number; page?: number; pages?: number; start?: number; end?: number; viewSize?: number; scrollProp?: string; atStart?: boolean; atEnd?: boolean; getPageTurnKey?: (delta?: number) => string | null; getViewportState?: () => Record<string, unknown> | null; getContents?: () => FoliateContent[]; setStyles?: (styles: string | readonly [string, string]) => void; render?: () => void; goTo: (target: NavigationTarget) => Promise<void> }
   lastLocation?: FoliateLocation

@@ -59,9 +59,8 @@ export function AIServiceEditor({
     setWebSearchEnabled,
   } = useAIServiceDraft();
   const serviceProvider = service?.provider ?? provider;
-  const supportsWebSearch =
-    resolveWebSearchPolicy(serviceProvider, baseUrl, { enabled: true }).state
-      .status === "enabled";
+  const searchPolicy = resolveWebSearchPolicy(serviceProvider, baseUrl, { enabled: true }, model).state;
+  const supportsWebSearch = searchPolicy.status === "enabled";
   const [status, setStatus] = useState("");
   const [changingKey, setChangingKey] = useState(!service || !!key);
   const [requiresNewKey, setRequiresNewKey] = useState(!service);
@@ -324,6 +323,8 @@ export function AIServiceEditor({
       : presetLabel(serviceProvider, baseUrl),
     contextWindowLabel: windowAutomatic ? "自动" : windowSize.trim() || "手动",
     supportsWebSearch,
+    ...(searchPolicy.status === "unsupported" && searchPolicy.message
+      ? { webSearchUnavailableReason: searchPolicy.message } : {}),
     webSearchEnabled: supportsWebSearch && webSearchEnabled,
     onFieldChange: (field, value) => {
       if (!editable()) return;

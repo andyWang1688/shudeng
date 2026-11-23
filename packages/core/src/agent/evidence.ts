@@ -5,7 +5,7 @@
  */
 import type { BookExcerpt } from './book-source.js';
 import { splitCitationTail } from './citation-tail.js';
-import type { VerifiedCitation } from './events.js';
+import type { VerifiedCitation, WebSource } from './events.js';
 
 export interface RegisteredEvidence extends BookExcerpt {
   /** 本轮运行内的稳定证据 id（E1、E2…）。 */
@@ -98,9 +98,37 @@ export function normalizeWhitespace(text: string): string {
   return text.trim().replace(/\s+/g, ' ');
 }
 
+type AnswerCitation = { id?: unknown; quote?: unknown; url?: unknown; after?: unknown };
+
 interface AnswerPayload {
   answer: string;
-  citations: ReadonlyArray<{ id?: unknown; quote?: unknown }>;
+  citations: ReadonlyArray<AnswerCitation>;
+}
+
+function answerAnchor(answer: string, value: unknown): string | undefined {
+  if (typeof value !== 'string') return;
+  const anchor = value.trim();
+  if (!anchor || anchor.length > 160 || /[\r\n]/.test(anchor)) return;
+  const start = answer.indexOf(anchor);
+  if (start >= 0 && answer.indexOf(anchor, start + 1) < 0) return anchor;
+}
+
+export function placeWebSources(payload: AnswerPayload, sources: readonly WebSource[]): readonly WebSource[] {
+  if (!sources.length) return sources;
+  const anchors = new Map<string, string>();
+  for (const citation of payload.citations) {
+    if (typeof citation?.url !== 'string' || citation.id !== undefined) continue;
+    const anchor = answerAnchor(payload.answer, citation.after);
+    if (!anchor) continue;
+    try {
+      const url = new URL(citation.url).href;
+      if (!anchors.has(url)) anchors.set(url, anchor);
+    } catch { /* Only real provider URLs can receive a placement. */ }
+  }
+  return sources.map(source => {
+    const anchor = anchors.get(source.url);
+    return anchor ? { ...source, answerAnchor: anchor } : source;
+  });
 }
 
 /** 从模型最终输出里解析 `{answer, citations}`；允许 markdown 代码块与前后说明。 */
@@ -119,7 +147,7 @@ export function parseAnswerPayload(text: string): AnswerPayload | null {
   if (parsed && typeof parsed.answer === 'string' && Array.isArray(parsed.citations)) {
     return {
       answer: parsed.answer,
-      citations: parsed.citations as ReadonlyArray<{ id?: unknown; quote?: unknown }>,
+      citations: parsed.citations as ReadonlyArray<AnswerCitation>,
     };
   }
   return salvageAnswerPayload(candidate);
@@ -194,10 +222,10 @@ function salvageTruncatedAnswer(answerText: string): AnswerPayload | null {
   return { answer: decodeJsonStringFragment(answerText), citations: [] };
 }
 
-function safeCitations(text: string): ReadonlyArray<{ id?: unknown; quote?: unknown }> {
+function safeCitations(text: string): ReadonlyArray<AnswerCitation> {
   try {
     const value: unknown = JSON.parse(text);
-    return Array.isArray(value) ? value as ReadonlyArray<{ id?: unknown; quote?: unknown }> : [];
+    return Array.isArray(value) ? value as ReadonlyArray<AnswerCitation> : [];
   } catch {
     return [];
   }
@@ -271,6 +299,7 @@ export function verifyCitations(
       droppedIds.push('(invalid-citation)');
       continue;
     }
+    if (typeof reference.url === 'string' && reference.id === undefined) continue;
     const id = typeof reference.id === 'string' ? reference.id : '';
     const quote = typeof reference.quote === 'string' ? reference.quote : '';
     const evidence = id ? registry.get(id) : undefined;
@@ -285,10 +314,12 @@ export function verifyCitations(
       continue;
     }
     seen.add(id);
+    const anchor = answerAnchor(payload.answer, reference.after);
     const citation: VerifiedCitation = {
       id,
       quote,
       locator: evidence.locator,
+      ...(anchor ? { answerAnchor: anchor } : {}),
       ...(evidence.chunkId ? { chunkId: evidence.chunkId } : {}),
       ...(evidence.readRef ? { readRef: evidence.readRef } : {}),
       ...(evidence.sourceVersion ? { sourceVersion: evidence.sourceVersion } : {}),

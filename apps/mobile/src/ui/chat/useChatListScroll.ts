@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, type ElementRef } from 'react';
-import { AccessibilityInfo, FlatList, View } from 'react-native';
+import { AccessibilityInfo, FlatList, Text, View } from 'react-native';
 import type { CitationTarget, QuestionPresentation, QuestionScroll } from '../reader-question/session';
 import { useQuestionAppearance } from '../reader-question/ReaderQuestionProvider';
 
@@ -28,7 +28,7 @@ export function useChatListScroll<T extends { readonly id: string }>(presentatio
   const list = useRef<FlatList<T>>(null);
   const viewport = useRef<ElementRef<typeof View>>(null);
   const rows = useRef(new Map<string, ElementRef<typeof View>>());
-  const citations = useRef(new Map<string, ElementRef<typeof View>>());
+  const citations = useRef(new Map<string, ElementRef<typeof View> | ElementRef<typeof Text>>());
   const data = useRef<readonly T[]>([]);
   const live = useRef(true);
   const appeared = useRef(false);
@@ -131,7 +131,7 @@ export function useChatListScroll<T extends { readonly id: string }>(presentatio
   const update = useCallback((turns: readonly T[], ready: boolean) => {
     data.current = turns; finalReady.current = ready; restoreFocus();
   }, [restoreFocus]);
-  const registerCitation = useCallback((key: string, element: ElementRef<typeof View> | null) => {
+  const registerCitation = useCallback((key: string, element: ElementRef<typeof View> | ElementRef<typeof Text> | null) => {
     if (element) citations.current.set(key, element); else citations.current.delete(key); restoreFocus();
   }, [restoreFocus]);
   const openCitation = useCallback((target: CitationTarget) => {

@@ -16,13 +16,16 @@ export function parseWebSources(value: unknown): WebSource[] {
   for (const item of value.slice(0, 100)) {
     if (!record(item) || typeof item.id !== 'string' || !item.id || ids.has(item.id) ||
       typeof item.url !== 'string' || typeof item.title !== 'string' ||
-      (item.provider !== 'openai' && item.provider !== 'anthropic')) continue;
+      (item.provider !== 'openai' && item.provider !== 'anthropic' && item.provider !== 'deepseek')) continue;
     try {
       const url = new URL(item.url);
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue;
     } catch { continue; }
     ids.add(item.id);
-    sources.push({ id: item.id, url: item.url, title: item.title, provider: item.provider });
+    sources.push({ id: item.id, url: item.url, title: item.title, provider: item.provider,
+      ...(typeof item.answerAnchor === 'string' && item.answerAnchor.length > 0 && item.answerAnchor.length <= 160
+        ? { answerAnchor: item.answerAnchor } : {}),
+    });
   }
   return sources;
 }

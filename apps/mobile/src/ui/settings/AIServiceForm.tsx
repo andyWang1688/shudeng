@@ -36,6 +36,7 @@ export type AIServiceFormProps = {
   provider: AIProvider;
   canChooseProtocol: boolean;
   supportsWebSearch: boolean;
+  webSearchUnavailableReason?: string;
   webSearchEnabled: boolean;
   onFieldChange: (field: keyof AIServiceFields, value: string) => void;
   onChoosePreset: () => void;
@@ -157,7 +158,9 @@ export function AIServiceForm(props: AIServiceFormProps) {
               />
             }
           />
-        ) : null}
+        ) : (
+          <SettingsRow title="联网搜索" detail={props.webSearchUnavailableReason ?? "当前服务未确认支持"} />
+        )}
         <SettingsRow
           title="上下文窗口"
           detail={props.contextWindowLabel}

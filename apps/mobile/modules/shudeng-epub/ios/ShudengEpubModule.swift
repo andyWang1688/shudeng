@@ -500,7 +500,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
         let message = pending.removeFirst()
         let type = message["type"] as? String ?? ""
         if type == "reader:open" { appliedCurl = nil }
-        if ["reader:open", "reader:theme", "reader:fontSize", "reader:flow", "reader:goTo", "reader:navigate", "reader:annotation:add", "reader:annotation:remove"].contains(type) {
+        if ["reader:open", "reader:theme", "reader:fontSize", "reader:spacing", "reader:flow", "reader:goTo", "reader:navigate", "reader:annotation:add", "reader:annotation:remove"].contains(type) {
           clearCache()
           // Keep the displayed page in place while the live document repaginates.
           if let current, cover == nil { showCover(current.page.image) }

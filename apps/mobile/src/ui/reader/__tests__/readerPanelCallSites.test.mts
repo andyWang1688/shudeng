@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { find, readerComponent, readerSheet } from "./readerSheetHarness.mts";
 
 const palette = new Proxy({}, { get: (_target, key) => key });
-const preferences = { flow: "paginated", theme: "light", fontScale: 1 };
+const preferences = { flow: "paginated", theme: "light", fontScale: 1, letterSpacing: 0, lineSpacing: 175 };
 const navigation = {
   ReaderNavigationTabs: "ReaderNavigationTabs",
   ReaderNavigationRow: "ReaderNavigationRow",
@@ -43,6 +43,9 @@ function mount(
 function nodes(tree: any, type: string): any[] {
   if (!tree || typeof tree !== "object") return [];
   if (Array.isArray(tree)) return tree.flatMap((child) => nodes(child, type));
+  if (["ReaderValueStepper", "ReaderSpacingControls"].includes(tree.type?.name)) {
+    return nodes(tree.type(tree.props), type);
+  }
   return [
     ...(tree.type === type ? [tree] : []),
     ...nodes(tree.props?.children, type),

@@ -1,12 +1,13 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useMemo,
   useSyncExternalStore,
   type PropsWithChildren,
 } from "react";
-import { Alert, Pressable, Text, View } from "react-native";
-import { useAuiState, type ThreadMessage } from "@assistant-ui/react-native";
+import { Alert, Pressable, Text, View, type TextStyle } from "react-native";
+import { useAuiState, type TextMessagePartProps, type ThreadMessage } from "@assistant-ui/react-native";
 import { useRouter } from "expo-router";
 import {
   ChevronDownIcon,
@@ -31,12 +32,16 @@ import {
   storedLocatorFromUnknown,
 } from "../../platform/library/pure";
 import { locatorForCitation } from "./format";
+import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
+import { citationPresentation } from "./inlineCitations";
+import { splitCitationTail } from "@shudeng/core/agent/citation-tail";
 import { questionMaterials } from "./materialsPresentation";
 import {
   contextRingSource,
   contextUsagePresentation,
 } from "./contextPresentation";
-import { AssistantWebSources } from "./AssistantWebSources";
+import { AssistantWebSources, openWebSource } from "./AssistantWebSources";
+import type { ChatTurn } from "./types";
 import type { useBookChat } from "./useBookChat";
 import type { useChatListScroll } from "./useChatListScroll";
 
@@ -245,17 +250,10 @@ export function ReaderComposerTools() {
   );
 }
 
-/** Sources are the book-specific content appended to the official answer. */
-export function ReaderAssistantFooter() {
-  const id = useAuiState((s) => s.message.id);
-  const { chat, presentation, scroll } = useReaderAssistant();
-  const router = useRouter();
-  const turn = chat.turns.find((item) => item.id === id);
-  if (!turn) return null;
+function openBookCitation({ chat, presentation, scroll }: ReaderAssistantContextValue, turn: ChatTurn, index: number) {
   const sourceAvailable = Boolean(
     chat.availability?.book && chat.availability.book.removedAt === null,
   );
-  const openCitation = (index: number) => {
     const citation = turn.citations[index];
     if (!citation) return;
     if (!sourceAvailable) {
@@ -284,7 +282,7 @@ export function ReaderAssistantFooter() {
       return;
     }
     presentation.update(
-      { referenceFocus: `${id}:${citation.id}`, restoreReferenceFocus: false },
+      { referenceFocus: turn.id + ':' + citation.id, restoreReferenceFocus: false },
       false,
     );
     scroll.openCitation({
@@ -293,7 +291,46 @@ export function ReaderAssistantFooter() {
       ordinal: index + 1,
       id: citation.id,
     } satisfies CitationTarget);
-  };
+}
+
+function useAssistantCitationPresentation() {
+  const id = useAuiState((s) => s.message.id);
+  const reader = useReaderAssistant();
+  const turn = reader.chat.turns.find(item => item.id === id);
+  const sources = useMemo(() => turn && citationPresentation(turn, splitCitationTail(turn.text)?.answer ?? turn.text), [turn]);
+  return { reader, turn, sources };
+}
+
+export function ReaderAssistantText(props: TextMessagePartProps) {
+  const { reader, turn, sources } = useAssistantCitationPresentation();
+  const renderInlineLink = useCallback((href: string, key: string, style?: TextStyle) => {
+    const link = sources?.links.get(href);
+    if (!turn || !link) return undefined;
+    const label = '〔' + link.label + '〕';
+    if (link.kind === 'web') {
+      const source = turn.webSources?.[link.index];
+      if (!source) return undefined;
+      return <Text key={key} style={style} className="text-link text-sm underline" accessibilityRole="link"
+        accessibilityLabel={'打开网页来源 ' + source.title} onPress={() => openWebSource(source)}>{label}</Text>;
+    }
+    const citation = turn.citations[link.index];
+    if (!citation) return undefined;
+    return <Text key={key} style={style} className="text-link text-sm underline" accessibilityRole="link"
+      accessibilityLabel={'查看原文 ' + link.label}
+      ref={node => { reader.scroll.registerCitation(turn.id + ':' + citation.id, node); }}
+      onLongPress={() => Alert.alert('保存的原文片段', citation.quote)}
+      onPress={() => openBookCitation(reader, turn, link.index)}>{label}</Text>;
+  }, [reader, turn, sources]);
+  return <MarkdownText {...props} text={sources?.markdown ?? props.text} renderInlineLink={renderInlineLink} />;
+}
+
+/** Older references with no reliable placement stay available here. */
+export function ReaderAssistantFooter() {
+  const { reader, turn, sources } = useAssistantCitationPresentation();
+  const { chat, presentation, scroll } = reader;
+  const router = useRouter();
+  if (!turn || !sources) return null;
+  const id = turn.id;
   const recoverable =
     turn.status === "error" ||
     turn.status === "cancelled" ||
@@ -306,9 +343,9 @@ export function ReaderAssistantFooter() {
           {turn.warnings.join("\n")}
         </Text>
       ) : null}
-      {turn.citations.length ? (
+      {turn.citations.length > sources.placedBooks.size ? (
         <View className="mt-2">
-          {turn.citations.map((citation, index) => (
+          {turn.citations.map((citation, index) => sources.placedBooks.has(index) ? null : (
             <Pressable
               key={citation.id}
               ref={(node) =>
@@ -317,7 +354,7 @@ export function ReaderAssistantFooter() {
               accessibilityRole="button"
               accessibilityLabel={`查看原文：${citation.chapter ?? "原文"}`}
               onLongPress={() => Alert.alert("保存的原文片段", citation.quote)}
-              onPress={() => openCitation(index)}
+              onPress={() => openBookCitation(reader, turn, index)}
               className="active:bg-muted min-h-11 flex-row items-center gap-2 rounded-lg py-2"
             >
               <Text className="bg-primary/10 text-link size-5 overflow-hidden rounded-[5px] text-center text-[11px] leading-5 font-semibold">
@@ -338,7 +375,7 @@ export function ReaderAssistantFooter() {
           ))}
         </View>
       ) : null}
-      <AssistantWebSources turn={turn} />
+      <AssistantWebSources turn={turn} placed={sources.placedWeb} />
       {turn.saveError ? (
         <Text className="text-destructive mt-2 text-sm leading-5">
           对话未保存：{turn.saveError}

@@ -1,4 +1,5 @@
 import type { ReadiumLocator } from '@shudeng/core/domain'
+import type { ReaderSpacing } from '@shudeng/core/domain/reader-spacing'
 import type { EpubArchiveDescriptor } from '@shudeng/core'
 
 export type ReaderFormat = 'epub' | 'pdf'
@@ -44,6 +45,7 @@ export interface OpenPayload {
   initialLocation?: string
   theme?: ReaderTheme
   fontSize?: number
+  spacing?: ReaderSpacing
   flow?: ReaderFlow
   selectionActionsEnabled?: boolean
 }
@@ -87,6 +89,7 @@ export type HostToReader =
   | { type: 'reader:open'; payload: OpenPayload }
   | { type: 'reader:theme'; payload: { theme: ReaderTheme } }
   | { type: 'reader:fontSize'; payload: { fontSize: number } }
+  | { type: 'reader:spacing'; payload: ReaderSpacing }
   | { type: 'reader:flow'; payload: { flow: ReaderFlow } }
   | { type: 'reader:goTo'; payload: { locator: string } }
   | { type: 'reader:navigate'; payload: NavigationCommand }
@@ -107,7 +110,7 @@ export type ReaderToHost =
   | { type: 'reader:hostReady' }
   | { type: 'reader:tap' }
   | { type: 'reader:turnRequested'; payload: { direction: -1 | 1 } }
-  | { type: 'reader:ready'; payload: { format: ReaderFormat; title: string; totalPages?: number; flow: ReaderFlow } }
+  | { type: 'reader:ready'; payload: { format: ReaderFormat; title: string; totalPages?: number; flow: ReaderFlow; fixedLayout?: true } }
   | { type: 'reader:selection'; payload: SelectionPayload }
   | { type: 'reader:selectionCleared' }
   | { type: 'reader:progress'; payload: ProgressPayload }

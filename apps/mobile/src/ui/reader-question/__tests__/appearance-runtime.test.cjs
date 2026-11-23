@@ -73,7 +73,7 @@ test("PDF stays on one presentation through live app changes, close/reopen and d
   }
 });
 
-test("PDF citation/return deduplicates and keeps origin/state while following the current app mode", async () => {
+test("PDF inline citation/return deduplicates and keeps origin/state while following the current app mode", async () => {
   const h = createRuntime();
   try {
     await h.mount();
@@ -87,6 +87,7 @@ test("PDF citation/return deduplicates and keeps origin/state while following th
         ordinal: 2,
         id: "E2",
       },
+      true,
       true,
     );
     assert.equal(h.navigated.length, 1);

@@ -110,6 +110,7 @@ export type ThreadComponents = {
   MessageWrapper?: ComponentType<PropsWithChildren> | undefined;
   UserHeader?: ComponentType | undefined;
   AssistantFooter?: ComponentType | undefined;
+  AssistantText?: TextMessagePartComponent | undefined;
   ComposerBefore?: ComponentType | undefined;
   ComposerTools?: ComponentType | undefined;
   ComposerFooter?: ComponentType | undefined;
@@ -896,6 +897,7 @@ const AssistantMessage: FC = () => {
     ToolFallback: CustomToolFallback,
     TaskGroup: TaskGroupComponent,
     AssistantFooter,
+    AssistantText = MarkdownText,
   } = useContext(ThreadComponentsContext);
   const ToolFallbackComponent = CustomToolFallback ?? ToolFallback;
   const groupBy = TaskGroupComponent ? taskAwareGroupBy : messageGroupBy;
@@ -928,7 +930,7 @@ const AssistantMessage: FC = () => {
                 );
               }
               case "text":
-                return <MarkdownText {...part} />;
+                return <AssistantText {...part} />;
               case "image":
                 return <Image {...part} />;
               case "file":

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Real hook + runtime + writer; native adapters and React scheduling are isolated.
-const h = vi.hoisted(() => ({ slots: [], cursor: 0, effects: [], append: vi.fn(), start: vi.fn(), load: vi.fn(), config: null, configError: undefined, indexAvailable: true }));
+const h = vi.hoisted(() => ({ slots: [], cursor: 0, effects: [], append: vi.fn(), start: vi.fn(), load: vi.fn(), beginBackground: vi.fn(), config: null, configError: undefined, indexAvailable: true }));
 vi.mock('react', () => {
   const equal = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const memo = (factory, deps) => {
@@ -26,6 +26,7 @@ vi.mock('react', () => {
 });
 vi.mock('expo-router', () => ({ useFocusEffect: () => {} }));
 vi.mock('react-native', () => ({ AppState: { addEventListener: () => ({ remove() {} }) } }));
+vi.mock('../../../platform/ai/bookChatBackground', () => ({ beginBookChatBackgroundTask: h.beginBackground }));
 vi.mock('../../../platform/ai', () => ({
   getBookChatAvailability: async () => ({
     book: { id: 'unsaved-book', title: '原书名', format: 'epub', removedAt: null },
@@ -53,6 +54,7 @@ function unmount() { for (const slot of h.slots) slot.cleanup?.(); h.slots = [];
 
 beforeEach(() => {
   h.slots = []; h.cursor = 0; h.effects = []; h.append.mockReset(); h.start.mockReset();
+  h.beginBackground.mockReset();
   h.config = { name: '本机', provider: 'openai', model: 'test', apiKey: 'synthetic' };
   h.indexAvailable = true;
   h.configError = undefined;
@@ -67,6 +69,34 @@ beforeEach(() => {
 afterEach(() => { unmount(); discardConversationRun('unsaved-hook'); vi.unstubAllGlobals(); });
 
 describe('unsaved conversation run boundary', () => {
+  it('saves a partial answer as interrupted and releases the iOS background task on expiration', async () => {
+    const end = vi.fn();
+    h.beginBackground.mockReturnValue(end);
+    let cancelRun;
+    const cancelled = new Promise(resolve => { cancelRun = resolve; });
+    const cancel = vi.fn(cancelRun);
+    let receivedText;
+    const partial = new Promise(resolve => { receivedText = resolve; });
+    h.start.mockResolvedValue({ session: { cancel, result: cancelled, events: (async function* () {
+      yield { type: 'textDelta', delta: '已经收到的正文。' };
+      receivedText();
+      await cancelled;
+      yield { type: 'cancelled' };
+    })() } });
+    const chat = await open();
+    const sent = chat.send('后台测试');
+    await partial;
+    expect(h.beginBackground).toHaveBeenCalledOnce();
+    h.beginBackground.mock.calls[0][0]();
+    await sent;
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(h.append).toHaveBeenLastCalledWith(expect.objectContaining({ answer: '已经收到的正文。',
+      details: expect.objectContaining({ status: 'error', error: expect.stringContaining('系统后台') }) }));
+    expect(end).toHaveBeenCalledOnce();
+    expect(end.mock.invocationCallOrder[0]).toBeGreaterThan(h.append.mock.invocationCallOrder.at(-1));
+  });
+
   it('opens saved history without send consent and only shows the config error when sending', async () => {
     h.config = null;
     h.configError = '请先确认此服务的发送说明';

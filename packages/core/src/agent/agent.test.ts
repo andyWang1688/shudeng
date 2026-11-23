@@ -272,7 +272,7 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
     expect(await session.result).toBeNull();
   });
 
-  it('default step budget allows several tool rounds and a final answer', async () => {
+  it('allows several tool rounds followed by an answer', async () => {
     const turns: ScriptedTurn[] = Array.from({ length: 5 }, (_, index) => ({
       chunks: [{ toolCalls: [{ id: `call_${index}`, name: 'search_book', args: { query: '灯' } }] }],
     }));
@@ -284,19 +284,16 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
     expect((await session.result)?.answer).toBe('多轮查书后的回答');
   });
 
-  it('stops a runaway tool loop with a readable message instead of leaking the runtime limit', async () => {
-    const turns = Array.from({ length: 12 }, (_, index) => ({
-      chunks: [{ toolCalls: [{ id: `call_${index}`, name: 'search_book', args: { query: '灯' } }] }],
-    }));
-    const model = createScriptedModel(turns);
-    const session = runBookAgent({ model, source: source(), book, question: '问', maxSteps: 4 });
+  it('never treats a preamble from an earlier tool round as the final answer', async () => {
+    const model = createScriptedModel([
+      { chunks: [{ text: '我先查一下。', toolCalls: [{ id: 'call_1', name: 'search_book', args: { query: '灯' } }] }] },
+      { chunks: [{ text: '' }] },
+    ]);
+    const session = runBookAgent({ model, source: source(), book, question: '问' });
     const events = await collect(session);
-    const failed = events.find((event) => event.type === 'failed');
-    expect(failed?.type).toBe('failed');
-    expect((failed as Extract<AgentEvent, { type: 'failed' }>).message).toContain('查书步骤');
-    expect((failed as Extract<AgentEvent, { type: 'failed' }>).message).not.toMatch(/recursion|model call|GRAPH_/i);
-    expect(JSON.stringify(events)).not.toMatch(/recursion|model call|GRAPH_/i);
-    expect((model.langChainModel as ScriptedChatModel).calls.length).toBeLessThanOrEqual(4);
+    expect(events.find(event => event.type === 'failed')).toMatchObject({ code: 'invalid-response', message: '模型没有返回可用的回答，请重试。' });
+    expect(events.some(event => event.type === 'completed')).toBe(false);
+    expect(await session.result).toBeNull();
   });
 
   it('a malformed envelope with literal newlines never becomes the visible answer', async () => {

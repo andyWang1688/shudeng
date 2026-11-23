@@ -32,6 +32,7 @@ export interface VerifiedCitation extends EvidenceRef {
   chunkId?: string;
   readRef?: string;
   sourceVersion?: string;
+  answerAnchor?: string;
 }
 
 /** A source URL emitted by the provider's search protocol, never parsed from answer prose. */
@@ -39,7 +40,8 @@ export interface WebSource {
   id: string;
   url: string;
   title: string;
-  provider: 'openai' | 'anthropic';
+  provider: 'openai' | 'anthropic' | 'deepseek';
+  answerAnchor?: string;
 }
 
 export interface WebSearchState {

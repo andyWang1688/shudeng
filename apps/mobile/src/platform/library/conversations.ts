@@ -75,6 +75,7 @@ export interface ConversationTurnDetails {
   readonly sentMaterials?: readonly AgentSentMaterial[];
   readonly webSources?: readonly WebSource[];
   readonly webSearchStatus?: WebSearchPresentation;
+  readonly citationAnchors?: Readonly<Record<string, string>>;
   readonly legacyNative?: LegacyNativeSnapshot;
 }
 
@@ -127,6 +128,7 @@ export async function appendBookChatTurn(input: {
     readonly locator: string;
     readonly chapter?: string;
     readonly page?: number;
+    readonly answerAnchor?: string;
   }>;
 }): Promise<void> {
   const layer = await getDataLayer();
@@ -141,6 +143,9 @@ export async function appendBookChatTurn(input: {
     ? legacyConversationMetadata().get(conversationId)?.bookTitle : undefined;
   const bookTitle = priorTitle ?? legacyTitle ?? input.details?.bookTitle ?? (await layer.store.getBook(input.bookId))?.title;
   const details = { ...(input.details ?? { status: 'done' as const }) };
+  delete details.citationAnchors;
+  const citationAnchors = Object.fromEntries((input.citations ?? []).flatMap(citation =>
+    citation.answerAnchor ? [[citation.id, citation.answerAnchor]] : []));
   if (!validModelSteps(details.modelSteps)) delete details.modelSteps;
   await layer.driver.transaction(async (tx) => {
     if (deletedConversations.has(conversationId)) throw new Error('这段对话已删除');
@@ -166,7 +171,8 @@ export async function appendBookChatTurn(input: {
     );
     await tx.run(
       'INSERT INTO conversation_turn_details (message_id,details_json) VALUES (?,?) ON CONFLICT(message_id) DO UPDATE SET details_json=excluded.details_json',
-      [assistantId, JSON.stringify({ ...details, ...(bookTitle !== undefined ? { bookTitle } : {}) })],
+      [assistantId, JSON.stringify({ ...details, ...(Object.keys(citationAnchors).length ? { citationAnchors } : {}),
+        ...(bookTitle !== undefined ? { bookTitle } : {}) })],
     );
     await tx.run('DELETE FROM citations WHERE message_id = ?', [assistantId]);
     for (const citation of input.citations ?? []) {
@@ -338,6 +344,9 @@ function parseTurnDetails(raw: string | undefined): ConversationTurnDetails {
     const materials = parseSentMaterials(value.sentMaterials);
     const webSources = parseWebSources(value.webSources);
     const webSearchStatus = parseWebSearchPresentation(value.webSearchStatus);
+    const citationAnchors = isRecord(value.citationAnchors)
+      ? Object.fromEntries(Object.entries(value.citationAnchors).filter((entry): entry is [string, string] =>
+        typeof entry[1] === 'string' && entry[1].length > 0 && entry[1].length <= 160)) : undefined;
     return {
       status,
       tools,
@@ -349,6 +358,7 @@ function parseTurnDetails(raw: string | undefined): ConversationTurnDetails {
       ...(estimate ? { contextEstimate: estimate } : {}),
       ...(materials ? { sentMaterials: materials } : {}),
       ...(webSources.length ? { webSources } : {}),
+      ...(citationAnchors ? { citationAnchors } : {}),
       ...(webSearchStatus ? { webSearchStatus: webSearchStatus.status === 'searching'
         ? status === 'done' && webSources.length > 0
           ? { status: 'complete' as const }
@@ -406,6 +416,8 @@ export async function loadBookConversation(conversationId: string): Promise<Stor
             id: citation.evidenceId,
             quote: citation.quote,
             locator: citation.locatorJson,
+            ...(Object.hasOwn(turnDetails.citationAnchors ?? {}, citation.evidenceId)
+              ? { answerAnchor: turnDetails.citationAnchors![citation.evidenceId]! } : {}),
             ...(citation.chapter ? { chapter: citation.chapter } : {}),
             ...(citation.page !== null ? { page: citation.page } : {}),
           })),

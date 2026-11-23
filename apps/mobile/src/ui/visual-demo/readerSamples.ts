@@ -1,4 +1,5 @@
 import type { DemoBook } from "./demoBooks";
+import { defaultReaderSpacing, type ReaderSpacing } from "@shudeng/core/domain/reader-spacing";
 
 /** Illustrative chapters, not a parsed EPUB or original quotations. */
 const additionalChapters: Record<
@@ -107,7 +108,7 @@ export type DemoReadingState = {
   bookmarks: number[];
   annotations: DemoAnnotation[];
 };
-export type DemoReadingPreferences = {
+export type DemoReadingPreferences = ReaderSpacing & {
   flow: "paginated" | "scrolled";
   pdfFlow: "paginated" | "scrolled";
   fontSize: number;
@@ -121,6 +122,7 @@ export const defaultReadingPreferences: DemoReadingPreferences = {
   flow: "paginated",
   pdfFlow: "scrolled",
   fontSize: 20,
+  ...defaultReaderSpacing,
 };
 
 export function initialReadingState(book: DemoBook): DemoReadingState {

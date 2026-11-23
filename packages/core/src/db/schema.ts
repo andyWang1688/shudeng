@@ -110,6 +110,9 @@ export const readerPreferences = sqliteTable('reader_preferences', {
     .notNull()
     .default('light'),
   fontScale: real('font_scale').notNull().default(1),
+  // Text affinity accepts both the original preset names and numeric settings.
+  letterSpacing: text('letter_spacing').notNull().default('standard'),
+  lineSpacing: text('line_spacing').notNull().default('standard'),
   flow: text('flow', { enum: ['paginated', 'scrolled', 'curl'] })
     .notNull()
     .default('paginated'),

@@ -117,13 +117,13 @@ const source = {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#FAF9F6;color:#292722}
-body{font-family:'Songti SC',serif;-webkit-text-size-adjust:100%;--size:20px}
+body{font-family:'Songti SC',serif;-webkit-text-size-adjust:100%;--size:20px;--line:1.85;--letter:normal}
 #content{width:100%;height:100%;overflow:auto;overscroll-behavior:contain;scrollbar-width:none}
 #content::-webkit-scrollbar{display:none}
 #content.scrolled{padding-top:76px;padding-bottom:calc(100vh - 76px)}
 article{padding:0 28px;max-width:700px;margin:auto}
 h1{font-size:28px;line-height:40px;font-weight:400;margin:16px 0 30px}
-p{font-size:var(--size);line-height:1.85;margin:0 0 24px;white-space:pre-wrap;overflow-wrap:anywhere}
+p{font-size:var(--size);line-height:var(--line);letter-spacing:var(--letter);margin:0 0 24px;white-space:pre-wrap;overflow-wrap:anywhere}
 .paginated{display:flex;scroll-snap-type:x mandatory}
 .paginated article{flex:0 0 100%;width:100%;height:100%;max-width:none;padding:76px 28px 110px;overflow-y:auto;scroll-snap-align:start}
 .note{text-decoration:underline wavy #AA7A44;text-underline-offset:5px}
@@ -196,9 +196,11 @@ mark{color:inherit;border-radius:2px}
   }
   function update(message){
     var position=state.position,changed=JSON.stringify(state.annotations)!==JSON.stringify(message.annotations);
-    var layoutChanged=state.preferences.flow!==message.preferences.flow||state.preferences.fontSize!==message.preferences.fontSize;
+    var layoutChanged=['flow','fontSize','letterSpacing','lineSpacing'].some(function(key){return state.preferences[key]!==message.preferences[key];});
     state.preferences=message.preferences;state.annotations=message.annotations;
     root.className=state.preferences.flow;document.body.style.setProperty('--size',state.preferences.fontSize+'px');
+    document.body.style.setProperty('--line',state.preferences.lineSpacing/100);
+    document.body.style.setProperty('--letter',state.preferences.letterSpacing/100+'em');
     root.querySelectorAll('h1').forEach(function(h){h.hidden=state.preferences.flow==='scrolled'&&h.dataset.first!=='yes';});
     restore.hidden=!message.focused;
     if(changed)renderText();

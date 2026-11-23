@@ -18,6 +18,7 @@ import { ReaderSelectionBar } from './ReaderSelectionBar';
 import { NativeEpubSurface } from './NativeEpubSurface';
 import { openReaderEpubArchive, closeReaderEpubArchive } from '../platform/epubArchive';
 import type { EpubArchiveDescriptor } from '@shudeng/core';
+import { defaultReaderSpacing, type ReaderSpacing } from '@shudeng/core/domain/reader-spacing';
 
 export type { ReaderEvent };
 
@@ -39,6 +40,8 @@ export type ReaderWebViewProps = {
   /** 阅读器主题；深色模式传 dark 让 reader-web 正文/背景切换。 */
   readonly theme?: 'light' | 'dark';
   readonly fontScale?: number;
+  readonly letterSpacing?: ReaderSpacing['letterSpacing'];
+  readonly lineSpacing?: ReaderSpacing['lineSpacing'];
   readonly flow?: 'paginated' | 'scrolled' | 'curl';
   readonly onTap?: () => void;
   readonly onEvent: (event: ReaderEvent) => void;
@@ -66,7 +69,7 @@ type SelectionState = {
  * Expo Web 使用 ReaderWebView.web.tsx 的 iframe 实现；这里只在 iOS/Android 生效。
  */
 export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView(
-  { bookId, initialLocation, openOverride, initialAnnotations, selectionBar = true, selectionActionsEnabled = true, theme = 'light', fontScale = 1, flow = 'paginated', onTap, onEvent },
+  { bookId, initialLocation, openOverride, initialAnnotations, selectionBar = true, selectionActionsEnabled = true, theme = 'light', fontScale = 1, letterSpacing = defaultReaderSpacing.letterSpacing, lineSpacing = defaultReaderSpacing.lineSpacing, flow = 'paginated', onTap, onEvent },
   ref,
 ) {
   const palette = usePalette();
@@ -78,7 +81,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
   const [archive, setArchive] = useState<EpubArchiveDescriptor | null>(null);
   const archiveOwner = useRef<{ archive: EpubArchiveDescriptor; fileUri: string; nativeOwnsClose: boolean } | null>(null);
   const sentAnnotations = useRef(new Map<string, string>());
-  const sentPreferences = useRef<{ theme: 'light' | 'dark'; fontSize: number; flow?: 'paginated' | 'scrolled' } | null>(null);
+  const sentPreferences = useRef<{ theme: 'light' | 'dark'; fontSize: number; flow?: 'paginated' | 'scrolled'; spacing?: ReaderSpacing } | null>(null);
   const initializedBook = useRef<string | null>(null);
   const nativeCommandId = useRef(0);
   const nativeAcknowledgedId = useRef(0);
@@ -149,8 +152,10 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
     if (fileUri && !archive) return;
     openSent.current = true;
     const payload = { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, ...('dataBase64' in openOverride ? { dataBase64: openOverride.dataBase64 } : { archive }), mimeType: openOverride.mimeType, theme, fontSize, flow: engineFlow, ...(initialLocation ? { initialLocation } : {}) } };
-    const opening = { ...payload, payload: { ...payload.payload, selectionActionsEnabled } };
-    sentPreferences.current = { theme, fontSize, ...(opening.payload.format === 'epub' ? { flow: engineFlow } : {}) };
+    const spacing = { letterSpacing, lineSpacing };
+    const isEpub = payload.payload.format === 'epub';
+    const opening = { ...payload, payload: { ...payload.payload, selectionActionsEnabled, ...(isEpub ? { spacing } : {}) } };
+    sentPreferences.current = { theme, fontSize, ...(isEpub ? { flow: engineFlow, spacing } : {}) };
     if (nativeSurface) { send(opening); return; }
     const message = JSON.stringify(opening);
     // HTML 的 module 脚本可能晚于 onLoadEnd 执行，注入前轮询等待 __readerHost 就绪。
@@ -165,7 +170,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
         deliver();
       })(); true;
     `);
-  }, [archive, engineFlow, fileUri, fontSize, hasSource, initialLocation, nativeSurface, openOverride, selectionActionsEnabled, send, theme]);
+  }, [archive, engineFlow, fileUri, fontSize, hasSource, initialLocation, letterSpacing, lineSpacing, nativeSurface, openOverride, selectionActionsEnabled, send, theme]);
 
   useImperativeHandle(ref, () => ({
     highlightSelection: (locator: ReaderLocator, quote: string) => { if (selectionActionsEnabled) onEvent({ type: 'annotationAdded', locator, quote }); },
@@ -230,9 +235,13 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
     const previous = sentPreferences.current;
     if (previous?.theme !== theme) send({ type: 'reader:theme', payload: { theme } });
     if (previous?.fontSize !== fontSize) send({ type: 'reader:fontSize', payload: { fontSize } });
+    const spacing = previous?.spacing ? { letterSpacing, lineSpacing } : undefined;
+    if (spacing && (previous?.spacing?.letterSpacing !== letterSpacing || previous.spacing.lineSpacing !== lineSpacing)) {
+      send({ type: 'reader:spacing', payload: spacing });
+    }
     if (previous?.flow !== engineFlow) send({ type: 'reader:flow', payload: { flow: engineFlow } });
-    sentPreferences.current = { theme, fontSize, flow: engineFlow };
-  }, [bookId, engineFlow, fontSize, ready, send, theme]);
+    sentPreferences.current = { theme, fontSize, flow: engineFlow, ...(spacing ? { spacing } : {}) };
+  }, [bookId, engineFlow, fontSize, letterSpacing, lineSpacing, ready, send, theme]);
 
   const highlightSelection = useCallback(() => {
     if (selectionActionsEnabled && selection) onEvent({ type: 'annotationAdded', locator: selection.locator, quote: selection.quote });

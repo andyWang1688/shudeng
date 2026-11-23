@@ -231,6 +231,8 @@ function ReaderContent({
             selectionActionsEnabled={!viewingReference}
             theme={reader.readerTheme}
             fontScale={reader.preferences.fontScale}
+            letterSpacing={reader.preferences.letterSpacing}
+            lineSpacing={reader.preferences.lineSpacing}
             flow={reader.preferences.flow}
             onTap={toggleChrome}
             onEvent={reader.onReaderEvent}
@@ -296,6 +298,7 @@ function ReaderContent({
       <ReaderSettingsPanel
         visible={settingsOpen}
         preferences={reader.preferences}
+        spacingAvailable={!reader.fixedLayout}
         curlAvailable={NativeEpubSurface !== null}
         onClose={() => setSettingsOpen(false)}
         onApply={reader.applyPreferences}

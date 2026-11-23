@@ -124,7 +124,7 @@ async function open(payload: OpenPayload): Promise<void> {
             { type: payload.mimeType ?? 'application/epub+zip' },
           )
         : payload.url)
-      await epub.open(epubSource, currentTitle, { theme: currentTheme, fontSize: currentFontSize, flow: currentFlow })
+      await epub.open(epubSource, currentTitle, { theme: currentTheme, fontSize: currentFontSize, flow: currentFlow, ...(payload.spacing ? { spacing: payload.spacing } : {}) })
       if (payload.initialLocation) await epub.goTo(payload.initialLocation)
     } else {
       if (!PdfReaderClassRef) throw new Error('此构建不包含 PDF 阅读器')
@@ -135,7 +135,7 @@ async function open(payload: OpenPayload): Promise<void> {
       await pdf.setTheme(currentTheme)
     }
     window.__readerReady = true
-    if (payload.format === 'epub') send({ type: 'reader:ready', payload: { format: 'epub', title: currentTitle, flow: currentFlow } })
+    if (payload.format === 'epub') send({ type: 'reader:ready', payload: { format: 'epub', title: currentTitle, flow: currentFlow, ...(epubReader()?.fixedLayout ? { fixedLayout: true } : {}) } })
     updateMeta()
     send({
       type: 'reader:state',
@@ -166,6 +166,9 @@ async function dispatch(message: HostToReader): Promise<void> {
       case 'reader:fontSize':
         currentFontSize = message.payload.fontSize
         if (epubReader()) await epubReader()!.setFontSize(currentFontSize)
+        break
+      case 'reader:spacing':
+        await epubReader()?.setSpacing(message.payload)
         break
       case 'reader:flow':
         currentFlow = message.payload.flow

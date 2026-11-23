@@ -192,6 +192,13 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       'CREATE INDEX IF NOT EXISTS rag_chunks_reading_order ON rag_chunks (book_id, chapter_ordinal, start_offset, end_offset, id)',
     ],
   },
+  {
+    id: '0006_reader_spacing',
+    statements: [
+      "ALTER TABLE reader_preferences ADD COLUMN letter_spacing TEXT NOT NULL DEFAULT 'standard'",
+      "ALTER TABLE reader_preferences ADD COLUMN line_spacing TEXT NOT NULL DEFAULT 'standard'",
+    ],
+  },
 ];
 
 export interface MigrateResult {

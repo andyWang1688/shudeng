@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
-import { epubTypography, prepareTypographyDocument, EPUB_GUTTER } from '../src/epub-typography.ts';
+import { defaultReaderSpacing, normalizeReaderSpacing } from '@shudeng/core/domain/reader-spacing';
+import { epubSpacing, epubTypography, prepareTypographyDocument, EPUB_GUTTER } from '../src/epub-typography.ts';
 import * as location from '../src/epub-location.ts';
 import * as viewport from '../src/epub-viewport.ts';
 import * as selection from '../src/epub-selection.ts';
@@ -21,7 +22,7 @@ function loadSource(path, imports) {
 
 const element = () => ({ style: { setProperty() {} }, dataset: {}, addEventListener() {}, replaceChildren() {}, append() {} });
 
-export function readerHarness({ language, loadDocument, onProgress = () => {}, onMessage = () => {} } = {}) {
+export function readerHarness({ language, loadDocument, fixedLayout, onProgress = () => {}, onMessage = () => {} } = {}) {
   const log = [], attributes = new Map(), listeners = new Map(), rendererListeners = [];
   const renderer = {
     style: {}, addEventListener(name, callback, options) { rendererListeners.push({ name, callback, capture: options?.capture === true }); }, getContents: () => [],
@@ -33,6 +34,7 @@ export function readerHarness({ language, loadDocument, onProgress = () => {}, o
     start: 0, end: 600, size: 600, viewSize: 1800, scrollProp: 'scrollTop',
   };
   const view = {
+    isFixedLayout: fixedLayout,
     addEventListener(name, callback, options) {
       const registered = listeners.get(name) ?? [];
       registered.push({ callback, once: options?.once === true });
@@ -69,7 +71,8 @@ export function readerHarness({ language, loadDocument, onProgress = () => {}, o
     'foliate-js/epub.js': {}, 'foliate-js/overlayer.js': { Overlayer: {} },
     './foliate-resource-loader': {}, './epub-sandbox': { securePublication() {} }, './bridge': { bridge: { send: onMessage } },
     './epub-location': location, './note-wave': {}, './epub-selection': selection, './epub-bookmarks': bookmarks,
-    './epub-typography': { epubTypography, prepareTypographyDocument, EPUB_GUTTER },
+    './epub-typography': { epubSpacing, epubTypography, prepareTypographyDocument, EPUB_GUTTER },
+    '@shudeng/core/domain/reader-spacing': { defaultReaderSpacing, normalizeReaderSpacing },
     './epub-viewport': viewport,
   });
   return { reader: new EpubReader(host, onProgress), log, host, renderer, emitRenderer(name, event) {
@@ -92,6 +95,7 @@ export function appHarness() {
     open(...args) { calls.push(['open', ...args]); return Promise.resolve(); }
     setTheme(value) { calls.push(['theme', value]); }
     setFontSize(value) { calls.push(['font', value]); }
+    setSpacing(value) { calls.push(['spacing', value]); }
     setFlow(value) { calls.push(['flow', value]); }
     goTo(value) { calls.push(['goTo', value]); }
     bookmarkContext(...args) { calls.push(['bookmarkContext', ...args]); }

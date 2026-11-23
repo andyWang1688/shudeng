@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EvidenceRegistry, parseAnswerPayload, verifyCitations } from './evidence.js';
+import { EvidenceRegistry, parseAnswerPayload, placeWebSources, verifyCitations } from './evidence.js';
 
 const excerpt = { context: '前段 中段 尾段', quote: '前段 中段 尾段', chapter: '一章', locator: 'chapter:1' };
 it('recovers a plain answer followed by an orphaned citation envelope', () => {
@@ -11,6 +11,28 @@ const check = (registry: EvidenceRegistry, id: string, quote: string) =>
   verifyCitations({ answer: '回答', citations: [{ id, quote }] }, registry);
 
 describe('citations require original text actually dispatched in this run', () => {
+  it('binds exact, unique answer anchors only to verified book evidence and provider URLs', () => {
+    const registry = new EvidenceRegistry();
+    const evidence = registry.register(excerpt);
+    const other = registry.register({ ...excerpt, locator: 'chapter:2' });
+    registry.recordTransmitted(evidence.id, excerpt.quote);
+    registry.recordTransmitted(other.id, excerpt.quote);
+    const payload = {
+      answer: '书内结论。补充背景。重复。重复。',
+      citations: [
+        { id: evidence.id, quote: '尾段', after: '书内结论。' },
+        { id: other.id, quote: '中段', after: '重复。' },
+        { id: 'E99', quote: '尾段', after: '书内结论。' },
+        { url: 'https://example.com/source', after: '补充背景。' },
+        { url: 'https://example.com/invented', after: '书内结论。' },
+      ],
+    };
+    const verified = verifyCitations(payload, registry);
+    expect(verified.citations.map(item => item.answerAnchor)).toEqual(['书内结论。', undefined]);
+    expect(verified.droppedIds).toEqual(['E99']);
+    const source = { id: 'W1', url: 'https://example.com/source', title: '背景', provider: 'deepseek' as const };
+    expect(placeWebSources(payload, [source])).toEqual([{ ...source, answerAnchor: '补充背景。' }]);
+  });
   it('rejects registered or rendered material that has never been dispatched', () => {
     const registry = new EvidenceRegistry();
     const evidence = registry.register(excerpt);

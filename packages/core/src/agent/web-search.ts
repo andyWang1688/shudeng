@@ -5,9 +5,11 @@ import type { ServerTool } from '@langchain/core/tools';
 import type { AgentEvent, WebSearchState, WebSource } from './events.js';
 import type { AgentProvider } from './providers.js';
 
+export const DEEPSEEK_WEB_SEARCH_TOOL = 'deepseek_web_search';
+
 export interface AgentWebSearchConfig {
   enabled: boolean;
-  /** Total server searches across this Agent run. Clamped to 1–5, default 3. */
+  /** Total server searches for providers exposing a search limit. Clamped to 1–5, default 3. */
   maxUses?: number;
   /** Explicitly confirmed gateway protocol; model names never establish gateway support. */
   capability?: 'openai-responses' | 'anthropic-server';
@@ -19,19 +21,26 @@ export interface WebSearchPolicy {
   readonly maxUses: number;
 }
 
-export function resolveWebSearchPolicy(provider: AgentProvider, address: string | undefined, config?: AgentWebSearchConfig): WebSearchPolicy {
+export function resolveWebSearchPolicy(provider: AgentProvider, address: string | undefined, config?: AgentWebSearchConfig, model?: string): WebSearchPolicy {
   const maxUses = Math.max(1, Math.min(5, Math.floor(Number.isFinite(config?.maxUses) ? config!.maxUses! : 3)));
   if (!config?.enabled) return { state: { status: 'disabled' }, maxUses };
-  let origin: string | undefined;
+  let url: URL | undefined;
   try {
-    origin = new URL(address ?? (provider === 'anthropic' ? 'https://api.anthropic.com' : provider === 'deepseek' ? 'https://api.deepseek.com' : 'https://api.openai.com')).origin;
+    url = new URL(address ?? (provider === 'anthropic' ? 'https://api.anthropic.com' : provider === 'deepseek' ? 'https://api.deepseek.com' : 'https://api.openai.com'));
   } catch {
     // Endpoint validation owns the user-facing configuration error.
   }
-  const supported = provider === 'openai' && (origin === 'https://api.openai.com' || config.capability === 'openai-responses') ||
+  const origin = url?.origin;
+  const officialDeepSeek = provider !== 'anthropic' && origin === 'https://api.deepseek.com' &&
+    /^\/(?:v1(?:\/chat\/completions)?|chat\/completions)?\/?$/.test(url!.pathname);
+  if (officialDeepSeek && model?.trim() !== 'deepseek-flash') {
+    return { state: { status: 'unsupported', message: '需使用 deepseek-flash' }, maxUses };
+  }
+  const supported = officialDeepSeek ||
+    provider === 'openai' && (origin === 'https://api.openai.com' || config.capability === 'openai-responses') ||
     provider === 'anthropic' && (origin === 'https://api.anthropic.com' || config.capability === 'anthropic-server');
-  if (!supported) return { state: { status: 'unsupported', message: '当前 AI 服务尚未确认支持内置联网搜索，本次仅使用书内资料。' }, maxUses };
-  return { state: { status: 'enabled', message: '已允许服务商内置搜索；是否实际搜索取决于本次问题。' }, provider: provider as WebSource['provider'], maxUses };
+  if (!supported) return { state: { status: 'unsupported', message: '当前服务未确认支持' }, maxUses };
+  return { state: { status: 'enabled', message: '已允许服务商内置搜索；是否实际搜索取决于本次问题。' }, provider: officialDeepSeek ? 'deepseek' : provider, maxUses };
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -53,6 +62,7 @@ export class ProviderWebSearch {
   private readonly sources = new Map<string, WebSource>();
   private budgetError?: Error;
   private unavailable = false;
+  private deepSeekSearchStarted = false;
 
   constructor(readonly policy: WebSearchPolicy, private readonly emit: (event: AgentEvent) => void) {
     this.state = { ...policy.state };
@@ -72,6 +82,9 @@ export class ProviderWebSearch {
 
   tools(): ServerTool[] {
     if (!this.policy.provider || this.unavailable || this.remaining === 0) return [];
+    // DeepSeek sets its own per-request search limit. Once it searches, don't offer the tool again in this turn.
+    if (this.policy.provider === 'deepseek')
+      return this.deepSeekSearchStarted ? [] : [{ type: DEEPSEEK_WEB_SEARCH_TOOL }];
     return [this.policy.provider === 'openai'
       ? openAITools.webSearch({ search_context_size: 'low' })
       : anthropicTools.webSearch_20250305({ maxUses: this.remaining })];
@@ -90,7 +103,7 @@ export class ProviderWebSearch {
     if (value?.status !== 400) return false;
     const message = error instanceof Error ? error.message : String(value.message ?? '');
     return /web[_ -]?search/i.test(message) &&
-      /unsupported|not supported|does not support|not (?:yet )?available|not enabled|not permitted|unknown tool|invalid tool/i.test(message);
+      /unsupported|not supported|does not support|only support|not (?:yet )?available|not enabled|not permitted|unknown tool|invalid tool/i.test(message);
   }
 
   disableUnsupported(): void {
@@ -109,11 +122,50 @@ export class ProviderWebSearch {
     this.emit({ type: 'webSource', source });
   }
 
+  private observeDeepSeek(kwargs: Record<string, unknown> | undefined): void {
+    if (kwargs?.deepseekSearchStarted === true) {
+      this.deepSeekSearchStarted = true;
+      if (this.state.status === 'enabled') this.update({ status: 'searching' });
+    }
+    let completed = false;
+    let failure: string | undefined;
+    const steps = kwargs?.server_tool_calls;
+    for (const step of Array.isArray(steps) ? steps : []) {
+      const calls = record(step)?.calls;
+      for (const entry of Array.isArray(calls) ? calls : []) {
+        const call = record(entry);
+        if (call?.type !== DEEPSEEK_WEB_SEARCH_TOOL || typeof call.id !== 'string' || !call.id) continue;
+        this.deepSeekSearchStarted = true;
+        if (call.status === 'completed') completed = true;
+        if (call.status === 'failed') {
+          const code = record(call.error)?.code;
+          failure ??= typeof code === 'string' ? code.slice(0, 160) : '未知错误';
+        }
+      }
+    }
+    if (completed) this.update({ status: 'complete' });
+    else if (failure) {
+      this.unavailable = true;
+      this.update({ status: 'failed', message: '服务商内置搜索未成功：' + failure });
+    }
+    const annotations = kwargs?.annotations;
+    for (const entry of Array.isArray(annotations) ? annotations : []) {
+      const annotation = record(entry);
+      const source = record(annotation?.url_citation);
+      if (annotation?.type === 'url_citation' && source) this.addSource(source);
+    }
+  }
+
   /** Inspect only protocol fields, never model-written JSON/text or application tool results. */
   observeMessage(message: unknown): void {
     if (!this.policy.provider) return;
     const msg = record(message);
     if (!msg) return;
+    const kwargs = record(msg.additional_kwargs);
+    if (this.policy.provider === 'deepseek') {
+      this.observeDeepSeek(kwargs);
+      return;
+    }
     const walk = (value: unknown, depth = 0): void => {
       if (depth > 8) return;
       if (Array.isArray(value)) { for (const child of value) walk(child, depth + 1); return; }
@@ -139,7 +191,6 @@ export class ProviderWebSearch {
       for (const key of ['annotations', 'citations', 'content', 'results']) if (item[key] !== undefined) walk(item[key], depth + 1);
     };
     walk(msg.content);
-    const kwargs = record(msg.additional_kwargs);
     const metadata = record(msg.response_metadata);
     walk(kwargs?.tool_outputs);
     walk(metadata?.output);
@@ -152,6 +203,10 @@ export class ProviderWebSearch {
   }
 
   finish(): void {
+    if (this.policy.provider === 'deepseek') {
+      if (this.state.status === 'searching') this.update({ status: 'failed', message: '服务商没有返回完整的联网结果。' });
+      return;
+    }
     if (this.calls.size && this.state.status !== 'failed') this.update({ status: 'complete' });
   }
 }

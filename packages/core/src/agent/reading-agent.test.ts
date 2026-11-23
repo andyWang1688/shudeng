@@ -99,7 +99,11 @@ describe('reading Agent official infrastructure', () => {
   it('does not infer gateway search support from an OpenAI model name', () => {
     const model = createChatModel({ provider: 'openai', model: 'gpt-5', apiKey: 'test', baseUrl: 'https://gateway.example/v1', webSearch: { enabled: true } });
     expect(model.webSearch?.state.status).toBe('unsupported');
-    expect(resolveWebSearchPolicy('deepseek', undefined, { enabled: true }).state.status).toBe('unsupported');
+    expect(resolveWebSearchPolicy('deepseek', undefined, { enabled: true }, 'deepseek-chat').state).toEqual({
+      status: 'unsupported', message: '需使用 deepseek-flash',
+    });
+    expect(resolveWebSearchPolicy('deepseek', 'https://gateway.example/v1', { enabled: true }, 'deepseek-flash').state.status).toBe('unsupported');
+    expect(resolveWebSearchPolicy('openai', 'https://api.deepseek.com/v1', { enabled: true }, 'deepseek-flash').provider).toBe('deepseek');
     expect(resolveWebSearchPolicy('openai', undefined, { enabled: false }).state.status).toBe('disabled');
     expect(() => createChatModel({ provider: 'openai', model: 'test', apiKey: 'test', baseUrl: 'invalid-url', webSearch: { enabled: true } })).toThrow('AI 服务地址无效');
   });
@@ -121,6 +125,39 @@ describe('reading Agent official infrastructure', () => {
     expect((requests[0]?.body.tools as Array<{ type: string }>).every(item => item.type === 'function')).toBe(true);
     expect((await session.result)?.webSources).toEqual([]);
     expect((await session.result)?.webSearch?.status).toBe('disabled');
+  });
+
+  it('lets the model decide when to answer after more than the old budget and framework default', async () => {
+    const requests: Record<string, unknown>[] = [];
+    const toolRounds = 16;
+    const model = createChatModel({ provider: 'openai', model: 'test-model', apiKey: 'test',
+      fetch: async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        requests.push(body);
+        const needsEvidence = requests.length <= toolRounds;
+        const delta = needsEvidence && body.tools?.length
+          ? { role: 'assistant', tool_calls: [{ index: 0, id: 'call_' + requests.length, type: 'function',
+            function: { name: 'search_book', arguments: JSON.stringify({ query: requests.length === toolRounds ? '灯' : '没有匹配的线索' }) } }] }
+          : { role: 'assistant', content: JSON.stringify({ answer: needsEvidence ? '资料还不够。' : '灯照亮纸上的文字。',
+            citations: [{ id: 'E1', quote: '灯照亮纸上的文字' }] }) };
+        const chunk = { id: 'chat_' + requests.length, object: 'chat.completion.chunk', created: 1, model: 'test-model',
+          choices: [{ index: 0, delta, finish_reason: delta.tool_calls ? 'tool_calls' : 'stop' }] };
+        return new Response('data: ' + JSON.stringify(chunk) + '\n\ndata: [DONE]\n\n',
+          { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    (model.langChainModel as { getNumTokens(text: string): Promise<number> }).getNumTokens = async text => Math.ceil(text.length / 4);
+    const session = runBookAgent({ model, source: source(), book, question: '为什么会这样？' });
+    const events = await collect(session);
+    expect(events.filter(event => event.type === 'failed')).toEqual([]);
+    expect(events.filter(event => event.type === 'toolFinished')).toHaveLength(toolRounds);
+    expect(requests).toHaveLength(toolRounds + 1);
+    expect(requests.at(-1)?.tools).toContainEqual(expect.objectContaining({ function: expect.objectContaining({ name: 'search_book' }) }));
+    expect(await session.result).toMatchObject({
+      answer: '灯照亮纸上的文字。',
+      citations: [expect.objectContaining({ id: 'E1', quote: '灯照亮纸上的文字' })],
+      warnings: [],
+    });
   });
 
   it('uses the official Responses search tool, forwards a bounded budget and streams actual annotations', async () => {

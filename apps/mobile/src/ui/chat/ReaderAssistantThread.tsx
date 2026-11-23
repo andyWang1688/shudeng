@@ -9,11 +9,11 @@ import type { ChatTurn } from './types';
 import { bookTurnToAssistantMessage, submittedQuestion } from './assistantRuntimeAdapter';
 import { useChatListScroll } from './useChatListScroll';
 import { AssistantSheetLayoutProvider, AssistantSheetThreadFrame, renderSheetScrollComponent, SheetComposerInput, SheetWelcome } from './AssistantSheetAdapter';
-import { ReaderAssistantContext, ReaderAssistantFooter, ReaderComposerContext, ReaderComposerTools, ReaderMessageWrapper, ReaderUserSelection } from './ReaderAssistantParts';
+import { ReaderAssistantContext, ReaderAssistantFooter, ReaderAssistantText, ReaderComposerContext, ReaderComposerTools, ReaderMessageWrapper, ReaderUserSelection } from './ReaderAssistantParts';
 
 const bookAdditions: ThreadComponents = {
   MessageWrapper: ReaderMessageWrapper, UserHeader: ReaderUserSelection,
-  AssistantFooter: ReaderAssistantFooter, ComposerBefore: ReaderComposerContext, ComposerTools: ReaderComposerTools,
+  AssistantFooter: ReaderAssistantFooter, AssistantText: ReaderAssistantText, ComposerBefore: ReaderComposerContext, ComposerTools: ReaderComposerTools,
   ComposerInput: SheetComposerInput,
   Welcome: SheetWelcome,
 };

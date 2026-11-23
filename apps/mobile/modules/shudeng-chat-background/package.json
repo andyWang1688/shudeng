@@ -1,0 +1,6 @@
+{
+  "name": "shudeng-chat-background",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bounded iOS background time for in-flight reading answers"
+}

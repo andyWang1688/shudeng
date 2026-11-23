@@ -1,4 +1,5 @@
 import { sameEpubSelection } from '@shudeng/core/domain';
+import { defaultReaderSpacing } from '@shudeng/core/domain/reader-spacing';
 /** Owns persisted EPUB state. SQLite annotation IDs are also the renderer IDs. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AppState } from 'react-native';
@@ -37,6 +38,7 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
   const preferredColor = useRef('yellow');
   const [editingAnnotation, setEditingAnnotation] = useState<ShelfAnnotation | null>(null);
   const [readerReady, setReaderReady] = useState(false);
+  const [fixedLayout, setFixedLayout] = useState(false);
   const [readerError, setReaderError] = useState<string | null>(null);
   const [readerReload, setReaderReload] = useState(0);
   const [noteBody, setNoteBody] = useState('');
@@ -59,7 +61,7 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const searchRequest = useRef(0);
-  const [preferences, setPreferences] = useState<ReaderPreferences>({ format: 'epub', theme: 'light', fontScale: 1, flow: 'paginated' });
+  const [preferences, setPreferences] = useState<ReaderPreferences>({ format: 'epub', theme: 'light', fontScale: 1, flow: 'paginated', ...defaultReaderSpacing });
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const latestProgress = useRef<{ locator: StoredReaderLocator; percent: number; chapter: string | null } | null>(null);
   const openingProgress = useRef<typeof latestProgress.current>(null);
@@ -258,6 +260,7 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
       }
       case 'ready':
         readyRef.current = true;
+        setFixedLayout(event.fixedLayout === true);
         if (openingProgress.current) {
           latestProgress.current = openingProgress.current;
           openingProgress.current = null;
@@ -435,7 +438,7 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
 
   return {
     readerRef, readerTheme: preferences.theme, preferences, preferencesLoaded, applyPreferences,
-    annotations, replaceAnnotations, notice, error, setError, selection, readerReady, readerError, readerReload,
+    annotations, replaceAnnotations, notice, error, setError, selection, readerReady, fixedLayout, readerError, readerReload,
     noteBody, setNoteBody, savingNote, saveBookmark, saveNote, beginNoteSelection, removeAnnotation, changeHighlightColor,
     highlightSelection, cancelSelection, setSelectionActionsEnabled, retryReader, getLatestLocator, seedAnnotations, onReaderEvent,
     selectedAnnotation, setSelectedAnnotation, editingAnnotation, setEditingAnnotation,

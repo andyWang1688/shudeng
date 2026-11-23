@@ -7,25 +7,32 @@ const initialPreferences = {
   flow: "paginated",
   theme: "light",
   fontScale: 1,
+  letterSpacing: 0,
+  lineSpacing: 175,
 };
 
 function nodes(tree: any, type: string): any[] {
   if (!tree || typeof tree !== "object") return [];
   if (Array.isArray(tree)) return tree.flatMap((child) => nodes(child, type));
+  if (typeof tree.type === "function") return nodes(tree.type(tree.props), type);
   return [
     ...(tree.type === type ? [tree] : []),
     ...nodes(tree.props?.children, type),
   ];
 }
 
-function setting(tree: any, label: string) {
+function settingControl(tree: any, label: string) {
   const control = nodes(tree, "Pressable").find(
     (node) =>
       node.props.accessibilityLabel === label ||
       nodes(node, "Text").some((text) => text.props.children === label),
   );
   assert.ok(control, "setting is available: " + label);
-  return control.props.onPress;
+  return control.props;
+}
+
+function setting(tree: any, label: string) {
+  return settingControl(tree, label).onPress;
 }
 
 function epub(onApply: (next: any) => Promise<boolean>) {
@@ -76,6 +83,43 @@ test("a queued EPUB theme change preserves the font size already confirmed by st
     { ...initialPreferences, fontScale: 1.25 },
     { ...initialPreferences, fontScale: 1.25, theme: "dark" },
   ]);
+  ui.unmount();
+});
+
+test("EPUB line and letter spacing persist independently with the other confirmed preferences", async () => {
+  const writes: any[] = [];
+  const ui = epub(async (next) => { writes.push(next); return true; });
+  const { body } = ui.render();
+  const wider = setting(body, "增大字距");
+  wider();
+  await Promise.resolve();
+  wider();
+  await Promise.resolve();
+  setting(body, "缩小行距")();
+  await Promise.resolve();
+  setting(body, "增大字号")();
+  await Promise.resolve();
+  assert.deepEqual(writes, [
+    { ...initialPreferences, letterSpacing: 0.5 },
+    { ...initialPreferences, letterSpacing: 1 },
+    { ...initialPreferences, letterSpacing: 1, lineSpacing: 170 },
+    { ...initialPreferences, letterSpacing: 1, lineSpacing: 170, fontScale: 1.25 },
+  ]);
+  const oldLimit = ui.render({ preferences: { ...initialPreferences, lineSpacing: 140 } }).body;
+  assert.equal(settingControl(oldLimit, "缩小行距").disabled, false);
+  setting(oldLimit, "缩小行距")();
+  await Promise.resolve();
+  assert.deepEqual(writes.at(-1), { ...initialPreferences, lineSpacing: 135 });
+  const labels = nodes(oldLimit, "Text").map(node => node.props.children);
+  assert.ok(!labels.some(label => typeof label === "string" && label.endsWith("%")), "排版控件不显示数值");
+  const atLimits = ui.render({ preferences: { ...initialPreferences, letterSpacing: 10, lineSpacing: 100 } }).body;
+  assert.equal(settingControl(atLimits, "增大字距").disabled, true);
+  assert.equal(settingControl(atLimits, "缩小行距").disabled, true);
+  setting(atLimits, "增大字距")();
+  setting(atLimits, "缩小行距")();
+  assert.equal(writes.length, 5);
+  const fixed = ui.render({ spacingAvailable: false }).body;
+  assert.equal(nodes(fixed, "Pressable").some(node => node.props.accessibilityLabel === "增大字距"), false);
   ui.unmount();
 });
 

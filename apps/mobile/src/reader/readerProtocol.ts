@@ -41,7 +41,7 @@ export type ReaderNavigationReceipt = { readonly operationId: string; readonly s
 export type ReaderEvent =
   | { readonly type: 'navigated'; readonly receipt: ReaderNavigationReceipt }
   | { readonly type: 'bookmarkContext'; readonly context: ReaderBookmarkContext }
-  | { readonly type: 'ready'; readonly format: ReaderFormat }
+  | { readonly type: 'ready'; readonly format: ReaderFormat; readonly fixedLayout?: true }
   | {
       readonly type: 'selection';
       readonly quote: string;
@@ -61,7 +61,7 @@ export type IncomingMessage =
   | { readonly type: 'reader:navigated'; readonly payload: ReaderNavigationReceipt }
   | { readonly type: 'reader:bookmark-context'; readonly payload: ReaderBookmarkContext }
   | { readonly type: 'reader:selectionCleared' }
-  | { readonly type: 'reader:ready'; readonly payload: { readonly format: ReaderFormat; readonly title: string; readonly flow?: string } }
+  | { readonly type: 'reader:ready'; readonly payload: { readonly format: ReaderFormat; readonly title: string; readonly flow?: string; readonly fixedLayout?: true } }
   | {
       readonly type: 'reader:selection';
       readonly payload: {
@@ -106,7 +106,7 @@ export function mapIncomingToReaderEvent(message: IncomingMessage): ReaderEvent 
     case 'reader:bookmark-context': return { type: 'bookmarkContext', context: message.payload };
     case 'reader:selectionCleared': return { type: 'selectionCleared' };
     case 'reader:ready':
-      return { type: 'ready', format: message.payload.format };
+      return { type: 'ready', format: message.payload.format, ...(message.payload.fixedLayout === true ? { fixedLayout: true } : {}) };
     case 'reader:selection':
       return {
         type: 'selection',

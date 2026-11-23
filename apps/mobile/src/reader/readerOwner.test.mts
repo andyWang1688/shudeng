@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
+import { defaultReaderSpacing } from "@shudeng/core/domain/reader-spacing";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
@@ -53,6 +54,7 @@ async function mount(io: Record<string, any> = {}, initialAnnotations: any[] = [
   const stubs: Record<string, any> = {
     react: React,
     "@shudeng/core/domain": { sameEpubSelection: (left: any, right: any) => !!left?.cfi && left.cfi === right?.cfi },
+    "@shudeng/core/domain/reader-spacing": { defaultReaderSpacing },
     "react-native": {
       Alert: { alert: (...args: any[]) => alerts.push(args) },
       AppState: { addEventListener: () => ({ remove() {} }) },
@@ -74,6 +76,7 @@ async function mount(io: Record<string, any> = {}, initialAnnotations: any[] = [
         theme: "light",
         fontScale: 1,
         flow: "paginated",
+        ...defaultReaderSpacing,
       }),
       saveReaderPreferences: async () => {},
       ...io,

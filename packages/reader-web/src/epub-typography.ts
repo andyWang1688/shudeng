@@ -1,12 +1,23 @@
 import type { ReaderTheme } from './protocol'
+import { defaultReaderSpacing, type ReaderSpacing } from '@shudeng/core/domain/reader-spacing'
 
 const FONT_BASE = 16 / 14
 export const EPUB_GUTTER = 28
+const INLINE_PROSE = 'span,font,b,strong,i,em,a'
+const PROSE_BLOCKS = 'p,li,div,dd,h1,h2,h3,h4,h5,h6'
+const OUTSIDE_SPECIAL_TEXT = ':not(:is(pre,code,math,svg,rt,rp) *)'
+
+export function epubSpacing(spacing: ReaderSpacing = defaultReaderSpacing) {
+  return {
+    letterSpacing: spacing.letterSpacing === defaultReaderSpacing.letterSpacing ? undefined : String(spacing.letterSpacing / 100) + 'em',
+    lineHeight: spacing.lineSpacing === defaultReaderSpacing.lineSpacing ? undefined : spacing.lineSpacing / 100,
+  }
+}
 
 /** Match the existing reader's percentage-to-rem cascade, including typeScale=1.
  * Its 18.5/14 percentage is relative to WebKit's 16px initial root font, while
  * normalized paragraphs use 1rem rather than the CJK body's 87.5% font size. */
-export function epubTypography(size: number, theme: ReaderTheme, publication: { language?: string | readonly string[] | undefined; dir?: string | undefined } = {}): readonly [string, string] {
+export function epubTypography(size: number, theme: ReaderTheme, publication: { language?: string | readonly string[] | undefined; dir?: string | undefined } = {}, spacing?: ReaderSpacing): readonly [string, string] {
   const paper = theme === 'dark' ? '#1B1A17' : '#FAF7F1'
   const ink = theme === 'dark' ? '#F3EEE3' : '#211E18'
   const selection = theme === 'dark' ? '#5A4A2A' : '#F2DBA6'
@@ -18,6 +29,7 @@ export function epubTypography(size: number, theme: ReaderTheme, publication: { 
   const automaticHyphens = !cjk && !rightToLeft
   // Both Readium CJK variants leave authored paragraph indentation untouched.
   const paragraphIndent = cjk ? '' : 'text-indent: 2rem !important;'
+  const { letterSpacing, lineHeight } = epubSpacing(spacing)
   const defaults = `/* shudeng-reader-typography */
     html { text-rendering: optimizeLegibility; -webkit-text-size-adjust: 100%; }
     h1, h2, h3 { line-height: normal; }
@@ -55,8 +67,16 @@ export function epubTypography(size: number, theme: ReaderTheme, publication: { 
     :root body, :root p, :root li, :root div { line-height: inherit; }
     :root body, :root p, :root li { text-align: justify !important; }
     ${automaticHyphens ? ':root body { -webkit-hyphens: auto; hyphens: auto; }' : ''}
-    :root p, :root li, :root div, :root pre, :root dd,
-    :root h1, :root h2, :root h3, :root h4, :root h5, :root h6 { font-size: 1rem !important; }
+    :root :is(pre,${PROSE_BLOCKS}) { font-size: 1rem !important; }
+    :root:not([data-shudeng-unstyled]) body,
+    :root :is(${INLINE_PROSE})${OUTSIDE_SPECIAL_TEXT} { font-size: inherit !important; }
+    ${lineHeight === undefined ? '' : `
+      :root :is(body,p,li,div,dt,dd,blockquote,td,th,${INLINE_PROSE})${OUTSIDE_SPECIAL_TEXT} { line-height: ${lineHeight} !important; }
+    `}
+    ${letterSpacing === undefined ? '' : `
+      :root :is(body,p,li,div,dt,dd,blockquote,td,th,${INLINE_PROSE})${OUTSIDE_SPECIAL_TEXT} { letter-spacing: ${letterSpacing} !important; }
+      :root :is(pre,code,math,svg,rt,rp) { letter-spacing: normal; }
+    `}
     :root p { ${paragraphIndent} margin-top: 1.5rem !important; margin-bottom: 1.5rem !important; }
     ::selection { background: ${selection} !important; color: ${ink} !important; }
   `
@@ -65,7 +85,7 @@ export function epubTypography(size: number, theme: ReaderTheme, publication: { 
 
 /** Run before Foliate fills html.lang, retaining Native's body-language priority.
  * Foliate's two empty style ports already exist; authored CSS suppresses defaults. */
-export function prepareTypographyDocument(doc: Document, publicationLanguage?: string | readonly string[]): (() => void) | undefined {
+export function prepareTypographyDocument(doc: Document, publicationLanguage?: string | readonly string[], fixedLayout = false): (() => void) | undefined {
   const language = typeof publicationLanguage === 'string' ? publicationLanguage : publicationLanguage?.[0]
   const cjk = /^(ja|ko)$/i.test(language ?? '') || /^zh(-|_|$)/i.test(language ?? '')
   const root = doc.documentElement
@@ -82,10 +102,20 @@ export function prepareTypographyDocument(doc: Document, publicationLanguage?: s
     || Array.from(doc.querySelectorAll('style')).some(style => style !== doc.head?.firstElementChild
       && style !== doc.head?.lastElementChild)
   if (!authored) doc.documentElement.setAttribute('data-shudeng-unstyled', '')
+  // Inline !important declarations win over the injected reader stylesheet.
+  // Update only the rendered document; the EPUB and its text anchors stay intact.
+  if (!fixedLayout) normalizeInlineFontSizes(doc)
   // Foliate fills even an authored empty html.lang. Restore its original state
   // after the view load event, keeping Native's xml:lang/explicit-empty contract.
   return cjk ? () => {
     if (authoredLanguage === null) root.removeAttribute('lang')
     else root.setAttribute('lang', authoredLanguage)
   } : undefined
+}
+
+function normalizeInlineFontSizes(doc: Document): void {
+  const selector = `:is(html,body,${PROSE_BLOCKS},${INLINE_PROSE})[style]${OUTSIDE_SPECIAL_TEXT}`
+  for (const element of doc.querySelectorAll<HTMLElement>(selector)) {
+    if (element.style?.getPropertyPriority('font-size') === 'important') element.style.removeProperty('font-size')
+  }
 }

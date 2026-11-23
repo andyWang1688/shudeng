@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createNodeSQLiteDriver, type NodeSQLiteDriver } from '../db/testing/node-sqlite-driver.js';
-import { migrate } from '../db/migrations.js';
+import { MIGRATIONS, migrate } from '../db/migrations.js';
 import { ParagraphTextChunker } from './chunker.js';
 import { SqliteSearchIndex } from './search-index.js';
 import { assertNotAborted, type EmbeddingProvider, type RagBook } from './types.js';
@@ -80,10 +80,12 @@ describe('SQLite RAG 索引（迁移/FTS5/向量/混合检索）', () => {
     const driver = createNodeSQLiteDriver();
     setups.push({ driver, index: new SqliteSearchIndex(driver, new KeywordEmbeddingProvider()), embedding: new KeywordEmbeddingProvider(), chunks: [] });
     const first = await migrate(driver);
-    expect(first.applied).toEqual(['0001_initial', '0002_rag', '0003_conversations_reader_preferences', '0004_book_file_operations', '0005_rag_keyset_indexes']);
+    const ids = MIGRATIONS.map(({ id }) => id);
+    expect(first.applied).toEqual(ids);
+    expect(first.applied).toContain('0002_rag');
     const second = await migrate(driver);
     expect(second.applied).toEqual([]);
-    expect(second.skipped).toEqual(['0001_initial', '0002_rag', '0003_conversations_reader_preferences', '0004_book_file_operations', '0005_rag_keyset_indexes']);
+    expect(second.skipped).toEqual(ids);
 
     const rows = await driver.all<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name",

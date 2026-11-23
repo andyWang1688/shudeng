@@ -2,6 +2,7 @@ import { Alert, Linking, Pressable, Text, View } from "react-native";
 import { ExternalLinkIcon } from "lucide-react-native";
 import { Icon } from "@/components/ui/icon";
 import type { Palette } from "../theme";
+import type { WebSource } from "@shudeng/core";
 import type { ChatTurn } from "./types";
 
 const searchLabels = {
@@ -13,14 +14,34 @@ const searchLabels = {
   failed: "联网搜索未完成",
 } as const;
 
+function webSourceURL(source: WebSource): URL | undefined {
+  try {
+    const url = new URL(source.url);
+    if ((url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password) return url;
+  } catch { /* Invalid saved URLs remain inspectable. */ }
+}
+
+export function openWebSource(source: WebSource) {
+  const target = webSourceURL(source);
+  if (!target) {
+    Alert.alert("无法打开来源", "这条来源没有有效的网页链接。");
+    return;
+  }
+  void Linking.openURL(target.toString()).catch(() => {
+    Alert.alert("无法打开来源", "请检查网络后重试。");
+  });
+}
+
 /** Native Elements has no sources component; book-specific links use its tokens. */
 export function AssistantWebSources({
   turn,
+  placed,
 }: {
   readonly turn: ChatTurn;
   readonly palette?: Palette;
+  readonly placed?: ReadonlySet<number>;
 }) {
-  const sources = turn.webSources ?? [];
+  const sources = turn.webSources?.filter((_, index) => !placed?.has(index)) ?? [];
   const status = turn.webSearchStatus;
   if (
     !sources.length &&
@@ -43,28 +64,13 @@ export function AssistantWebSources({
         </Text>
       ) : null}
       {sources.map((source) => {
-        let target: URL | undefined;
-        try {
-          const url = new URL(source.url);
-          if (url.protocol === "https:" || url.protocol === "http:")
-            target = url;
-        } catch {
-          /* Invalid saved URLs remain inspectable. */
-        }
+        const target = webSourceURL(source);
         return (
           <Pressable
             key={source.id}
             accessibilityRole="link"
             accessibilityLabel={`打开网页来源：${source.title || source.url}`}
-            onPress={() => {
-              if (!target) {
-                Alert.alert("无法打开来源", "这条来源没有有效的网页链接。");
-                return;
-              }
-              void Linking.openURL(target.toString()).catch(() =>
-                Alert.alert("无法打开来源", "请检查网络后重试。"),
-              );
-            }}
+            onPress={() => openWebSource(source)}
             className="active:bg-muted min-h-11 flex-row items-center gap-2 rounded-lg py-2"
           >
             <Icon

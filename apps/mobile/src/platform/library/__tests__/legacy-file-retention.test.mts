@@ -33,7 +33,7 @@ vi.mock('../bookCovers', () => ({ loadBookCover: async () => undefined, saveBook
 vi.mock('../conversations', () => ({ listConversationIdsForBook: async () => [], markConversationsDeleted: () => () => {}, cancelConversationRun: () => {} }));
 import { migrateLegacyLibraryIfNeeded } from '../legacyMigration';
 import { deleteShelfBook } from '../import';
-import { loadReaderPreferences } from '../readerPreferences';
+import { loadReaderPreferences, saveReaderPreferences } from '../readerPreferences';
 
 let driver: NodeSQLiteDriver;
 beforeEach(async () => {
@@ -49,6 +49,18 @@ beforeEach(async () => {
   await driver.run('UPDATE books SET removed_at = 1 WHERE id = ?', ['removed']);
 });
 afterEach(async () => { await driver.close(); });
+
+it('converts previous spacing presets and preserves custom values per book', async () => {
+  const defaults = { format: 'epub' } as const;
+  await driver.run('INSERT INTO reader_preferences (book_id, format, theme, font_scale, flow, updated_at, letter_spacing, line_spacing) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ['active', 'epub', 'dark', 1.25, 'scrolled', 1, 'compact', 'loose']);
+  const previous = await loadReaderPreferences('active', defaults);
+  expect(previous).toEqual({ ...defaults, theme: 'dark', fontScale: 1.25, flow: 'scrolled', letterSpacing: -2.5, lineSpacing: 210 });
+  const next = { ...previous, letterSpacing: 3.5, lineSpacing: 165 };
+  await saveReaderPreferences('active', next);
+  expect(await loadReaderPreferences('active', defaults)).toEqual(next);
+  expect(await loadReaderPreferences('removed', defaults)).toMatchObject({ letterSpacing: 0, lineSpacing: 175 });
+});
 
 describe('legacy publication retention after migration', () => {
   it('repairs an active missing publication but never resurrects removed/deleted books on later launches', async () => {

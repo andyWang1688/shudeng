@@ -3,6 +3,7 @@ import { makeBook } from 'foliate-js/view.js'
 import { Overlayer } from 'foliate-js/overlayer.js'
 import { EPUB } from 'foliate-js/epub.js'
 import type { EpubArchiveDescriptor } from '@shudeng/core'
+import { defaultReaderSpacing, normalizeReaderSpacing, type ReaderSpacing } from '@shudeng/core/domain/reader-spacing'
 import { foliateResourceLoader } from './foliate-resource-loader'
 import { securePublication } from './epub-sandbox'
 import { bridge } from './bridge'
@@ -12,7 +13,7 @@ import { epubChapterTitle, epubTarget, paintedEpubAnchor, publicationStartFracti
 import { drawNoteWave } from './note-wave'
 import { readiumSelection, rangeFromReadium } from './epub-selection'
 import { visibleBookmark, bookmarkRange, rangeIsVisible } from './epub-bookmarks'
-import { EPUB_GUTTER, epubTypography, prepareTypographyDocument } from './epub-typography'
+import { EPUB_GUTTER, epubSpacing, epubTypography, prepareTypographyDocument } from './epub-typography'
 import { restoreTerminalLayout, stabilizeEmptyAnchorBox, stabilizeEmptyTerminalBlock, terminalRecoveryForAnchor, visibleDocumentViewport } from './epub-viewport'
 
 export interface NativePage {
@@ -28,6 +29,7 @@ export interface NativePage {
 export interface EpubOpenOptions {
   theme?: ReaderTheme
   fontSize?: number
+  spacing?: ReaderSpacing
   flow?: ReaderFlow
 }
 
@@ -44,6 +46,7 @@ export class EpubReader {
   private title = ''
   private theme: ReaderTheme = 'light'
   private fontSize = 18.5
+  private spacing: ReaderSpacing = defaultReaderSpacing
   private flow: ReaderFlow = 'paginated'
   private annotations = new Map<string, AnnotationPayload>()
   private annotationByCfi = new Map<string, AnnotationPayload>()
@@ -97,10 +100,18 @@ export class EpubReader {
     return this.view
   }
 
+  get fixedLayout(): boolean {
+    return this.view.isFixedLayout === true
+  }
+
   async open(source: string | Blob | EpubArchiveDescriptor, title: string, options: EpubOpenOptions = {}): Promise<void> {
     this.title = title
     this.theme = options.theme ?? this.theme
     this.fontSize = Math.max(13.875, Math.min(37, options.fontSize ?? this.fontSize))
+    this.spacing = {
+      letterSpacing: normalizeReaderSpacing('letterSpacing', options.spacing?.letterSpacing),
+      lineSpacing: normalizeReaderSpacing('lineSpacing', options.spacing?.lineSpacing),
+    }
     this.flow = options.flow ?? this.flow
     this.applyTheme()
     if (typeof source === 'object' && !(source instanceof Blob)) {
@@ -118,7 +129,7 @@ export class EpubReader {
     // body language can take priority over the publication's default language.
     this.view.renderer?.addEventListener('load', event => {
       const detail = (event as CustomEvent<{ doc: Document }>).detail
-      const restoreLanguage = prepareTypographyDocument(detail.doc, this.view.book?.metadata?.language)
+      const restoreLanguage = prepareTypographyDocument(detail.doc, this.view.book?.metadata?.language, this.view.isFixedLayout)
       if (restoreLanguage) this.view.addEventListener('load', restoreLanguage, { once: true })
     }, { capture: true })
     this.view.renderer?.addEventListener('relocate', event => {
@@ -235,6 +246,9 @@ export class EpubReader {
     page.style.fontSize = `${this.fontSize}px`
     const body = document.createElement('div')
     body.className = 'reader-terminal-recovery-body'
+    const { letterSpacing, lineHeight } = epubSpacing(this.spacing)
+    if (letterSpacing !== undefined) body.style.letterSpacing = letterSpacing
+    if (lineHeight !== undefined) body.style.lineHeight = String(lineHeight)
     for (const block of recovery.blocks) {
       const paragraph = document.createElement('p')
       const matchAt = block.target && recovery.match ? block.text.indexOf(recovery.match) : -1
@@ -528,6 +542,17 @@ export class EpubReader {
     if (location) await this.goTo(location)
   }
 
+  async setSpacing(spacing: ReaderSpacing): Promise<void> {
+    if (this.fixedLayout) return
+    const letterSpacing = normalizeReaderSpacing('letterSpacing', spacing?.letterSpacing)
+    const lineSpacing = normalizeReaderSpacing('lineSpacing', spacing?.lineSpacing)
+    if (this.spacing.letterSpacing === letterSpacing && this.spacing.lineSpacing === lineSpacing) return
+    const location = this.currentLocation()
+    this.spacing = { letterSpacing, lineSpacing }
+    this.applyStyles()
+    if (location) await this.goTo(location)
+  }
+
   async setFlow(flow: ReaderFlow): Promise<void> {
     if (this.flow === flow) return
     const location = this.currentLocation()
@@ -674,6 +699,7 @@ export class EpubReader {
       flow: this.flow,
       theme: this.theme,
       fontSize: this.fontSize,
+      ...this.spacing,
       currentCfi: this.lastProgress?.locator.type === 'epub' ? this.lastProgress.locator.cfi : null,
       fraction: this.lastProgress?.fraction ?? 0,
       chapter: this.lastProgress?.chapter ?? null,
@@ -864,7 +890,7 @@ export class EpubReader {
     this.scrollRevision += 1
     const paper = this.theme === 'dark' ? '#1B1A17' : '#FAF7F1'
     const ink = this.theme === 'dark' ? '#F3EEE3' : '#211E18'
-    this.view.renderer?.setStyles?.(epubTypography(this.fontSize, this.theme, { language: this.view.book?.metadata?.language, dir: this.view.book?.dir }))
+    this.view.renderer?.setStyles?.(epubTypography(this.fontSize, this.theme, { language: this.view.book?.metadata?.language, dir: this.view.book?.dir }, this.spacing))
     // Keep the renderer canvas themed through reflow and adjacent loads.
     if (this.view.renderer) this.view.renderer.style.background = paper
     this.host.style.setProperty('--reader-paper', paper)

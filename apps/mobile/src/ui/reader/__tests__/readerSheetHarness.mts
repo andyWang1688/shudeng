@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import Module, { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeReaderSpacing, readerSpacingSettings } from "@shudeng/core/domain/reader-spacing";
 
 const require = createRequire(
   new URL("../../../../package.json", import.meta.url),
@@ -73,6 +74,7 @@ export function readerComponent(
   const palette = new Proxy({}, { get: (_target, key) => key });
   const jsx = (type: any, props: any) => ({ type, props });
   const mocks: Record<string, any> = {
+    "@shudeng/core/domain/reader-spacing": { normalizeReaderSpacing, readerSpacingSettings },
     react: { ...hooks, useLayoutEffect: hooks.useEffect },
     "react/jsx-runtime": { jsx, jsxs: jsx },
     "react-native": {
@@ -110,7 +112,10 @@ export function readerComponent(
     modules.set(file, compiled);
     compiled.require = (id: string) => {
       if (id in mocks) return mocks[id];
-      if (id.startsWith(".")) return load(resolve(dirname(file), id + ".ts"));
+      if (id.startsWith(".")) {
+        const source = resolve(dirname(file), id);
+        return load(source + (existsSync(source + ".ts") ? ".ts" : ".tsx"));
+      }
       throw Error("Unmocked " + id);
     };
     const code = ts.transpileModule(readFileSync(file, "utf8"), {

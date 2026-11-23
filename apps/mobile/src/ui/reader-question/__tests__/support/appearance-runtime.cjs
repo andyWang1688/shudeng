@@ -80,7 +80,9 @@ function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat' } = 
     return React.createElement(ThreadHost, props, messages.map((message, index) =>
       React.createElement(coreReact.MessageByIndexProvider, { key: message.id, index },
         React.createElement(components.MessageWrapper, null,
-          message.role === 'user' ? React.createElement(components.UserHeader) : React.createElement(components.AssistantFooter)))));
+          message.role === 'user' ? React.createElement(components.UserHeader) : React.createElement(React.Fragment, null,
+            React.createElement(components.AssistantText, { text: message.content.find(part => part.type === 'text')?.text ?? '' }),
+            React.createElement(components.AssistantFooter))))));
   }
   function ComposerInput() {
     const client = aui.useAui();
@@ -92,6 +94,11 @@ function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat' } = 
       React.createElement(components.ComposerTools), React.createElement(components.ComposerInput));
   }
   stubs['@/components/assistant-ui/elements/thread.aui'] = { Thread: RegistryThread, ThreadComposer: RegistryComposer };
+  stubs['react-native-marked'] = { MarkedLexer: Module.createRequire(mobile.resolve('react-native-marked'))('marked').lexer };
+  stubs['@/components/assistant-ui/elements/markdown-text'] = { MarkdownText: ({ text, renderInlineLink }) => {
+    const links = stubs['react-native-marked'].MarkedLexer(text).flatMap(block => block.tokens ?? []).filter(token => token.type === 'link');
+    return React.createElement(native.View, { testID: 'markdown-body', value: text }, links.map((link, index) => renderInlineLink?.(link.href, String(index))));
+  } };
   // Native geometry is separate from this route/appearance acceptance harness.
   stubs['./AssistantSheetAdapter'] = {
     AssistantSheetLayoutProvider: React.Fragment, AssistantSheetThreadFrame: React.Fragment,
@@ -173,11 +180,19 @@ function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat' } = 
     async openMaterials() { await act(() => find('Pressable', record => record.props.testID === 'question-more-answer-1').props.onPress()); },
     async editDraft(value) { await act(() => find('TextInput', record => record.props.testID === 'runtime-composer-input').props.onChangeText(value)); },
     draft() { return find('TextInput', record => record.props.testID === 'runtime-composer-input').props.value; },
-    async citation(target, twice = false) {
+    async citation(target, twice = false, inline = false) {
       const key = stack.routes[stack.index].key;
       const prior = Array.from({ length: target.ordinal - 1 }, (_, index) => ({ id: 'prior-' + index, quote: 'Earlier citation', locator: JSON.stringify(target.locator), chapter: '其他原文' }));
-      await act(() => publishTurns([{ ...turn, citations: [...prior, { id: target.id, quote: target.quote, locator: JSON.stringify(target.locator), chapter: '目标原文' }] }]));
-      await act(() => { const press = find('Pressable', record => record.routeKey === key && record.props.accessibilityLabel === '查看原文：目标原文').props.onPress; press(); if (twice) press(); });
+      const answer = inline ? { text: '相关结论。接着解释。' } : {};
+      const placement = inline ? { answerAnchor: '相关结论。' } : {};
+      await act(() => publishTurns([{ ...turn, ...answer, citations: [...prior, { id: target.id, quote: target.quote, locator: JSON.stringify(target.locator), chapter: '目标原文', ...placement }] }]));
+      if (inline) {
+        assert.match(find('View', record => record.props.testID === 'markdown-body').props.value, /相关结论。.*shudengcitation:0.*接着解释。/);
+        assert(!all().some(record => record.kind === 'Pressable' && record.props.accessibilityLabel === '查看原文：目标原文'));
+      }
+      const button = inline ? 'Text' : 'Pressable';
+      const label = inline ? '查看原文 目标原文' : '查看原文：目标原文';
+      await act(() => { const press = find(button, record => record.routeKey === key && record.props.accessibilityLabel === label).props.onPress; press(); if (twice) press(); });
       await act(() => transition({ target: key, data: { closing: true } }));
     },
     async returned(twice = false) { await act(async () => { const promise = question.returnToQuestion(); if (twice) question.returnToQuestion(); await promise; }); },

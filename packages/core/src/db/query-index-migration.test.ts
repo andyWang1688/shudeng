@@ -26,7 +26,7 @@ describe('0005 keyset query indexes', () => {
   it('upgrades an existing 0004 database without changing any chunk/vector/FTS data', async () => {
     const driver = await through0004(), tables = ['rag_chunks', 'rag_chunk_vectors', 'rag_chunks_fts'];
     const before = await Promise.all(tables.map(table => driver.all('SELECT * FROM ' + table)));
-    expect(await migrate(driver)).toMatchObject({ applied: ['0005_rag_keyset_indexes'], skipped: MIGRATIONS.slice(0, 4).map(item => item.id) });
+    expect(await migrate(driver)).toMatchObject({ applied: MIGRATIONS.slice(4).map(item => item.id), skipped: MIGRATIONS.slice(0, 4).map(item => item.id) });
     expect(await names(driver)).toEqual(indexNames);
     expect(await Promise.all(tables.map(table => driver.all('SELECT * FROM ' + table)))).toEqual(before);
   });
@@ -35,7 +35,7 @@ describe('0005 keyset query indexes', () => {
     const failing: SQLiteDriver = { exec: driver.exec.bind(driver), run: driver.run.bind(driver), all: driver.all.bind(driver), transaction: task => driver.transaction(tx => task({ exec: async sql => { if (sql.includes('CREATE INDEX IF NOT EXISTS rag_chunks_reading_order')) throw new Error('simulated index DDL failure'); await tx.exec(sql); }, run: tx.run.bind(tx), all: tx.all.bind(tx), transaction: tx.transaction.bind(tx) })) };
     await expect(migrate(failing)).rejects.toThrow('simulated index DDL failure');
     expect(await names(driver)).toEqual([]); expect(await driver.all('SELECT * FROM _migrations WHERE id = ?', ['0005_rag_keyset_indexes'])).toEqual([]);
-    expect((await migrate(driver)).applied).toEqual(['0005_rag_keyset_indexes']); expect(await names(driver)).toEqual(indexNames);
+    expect((await migrate(driver)).applied).toEqual(MIGRATIONS.slice(4).map(item => item.id)); expect(await names(driver)).toEqual(indexNames);
     expect((await driver.all('SELECT * FROM rag_chunks')).length).toBe(1);
   });
 });

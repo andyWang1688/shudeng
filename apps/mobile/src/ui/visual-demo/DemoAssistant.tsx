@@ -11,7 +11,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   ArrowUp,
   BookOpen,
-  ChevronDown,
   Maximize2,
   X,
 } from "lucide-react-native";
@@ -96,6 +95,8 @@ export function DemoAssistant({
     { id: 0, question: initialQuestion || book.question },
   ]);
   const [reference, setReference] = useState<string | null>(null);
+  const firstPeriod = book.answer.indexOf("。");
+  const citationAt = firstPeriod < 0 ? book.answer.length : firstPeriod + 1;
   const [selectionExpanded, setSelectionExpanded] = useState(false);
   const send = () => {
     if (!value.trim()) return;
@@ -174,50 +175,24 @@ export function DemoAssistant({
                 <Text style={styles.questionText}>{message.question}</Text>
               </View>
               <View style={styles.answer}>
-                <Text style={styles.answerText}>{book.answer}</Text>
-                <View style={styles.references}>
-                  {[{ chapter: book.chapter, text: book.paragraphs[0] }].map(
-                    (item, index) => {
-                      const key = `${message.id}-${index}`;
-                      const expanded = reference === key;
-                      return (
-                        <View key={key} style={styles.reference}>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel={`查看引用${index + 1}：${item.chapter}`}
-                            accessibilityState={{ expanded }}
-                            onPress={() => setReference(expanded ? null : key)}
-                            style={styles.referenceButton}
-                          >
-                            <Text style={styles.referenceNumber}>
-                              {index + 1}
-                            </Text>
-                            <Text style={styles.referenceTitle}>
-                              {item.chapter}
-                            </Text>
-                            <ChevronDown
-                              size={13}
-                              color={c.muted}
-                              style={{
-                                transform: [
-                                  { rotate: expanded ? "180deg" : "0deg" },
-                                ],
-                              }}
-                            />
-                          </Pressable>
-                          {expanded && (
-                            <View style={styles.quote}>
-                              <Text style={styles.quoteText}>{item.text}</Text>
-                              <Text style={styles.quoteCaption}>
-                                《{book.title}》
-                              </Text>
-                            </View>
-                          )}
-                        </View>
-                      );
-                    },
-                  )}
-                </View>
+                <Text style={styles.answerText}>
+                  {book.answer.slice(0, citationAt)}
+                  <Text
+                    style={styles.inlineReference}
+                    accessibilityRole="link"
+                    accessibilityLabel={"查看原文 " + book.chapter}
+                    onPress={() => setReference(reference === String(message.id) ? null : String(message.id))}
+                  >
+                    {"〔" + book.chapter + "〕"}
+                  </Text>
+                  {book.answer.slice(citationAt)}
+                </Text>
+                {reference === String(message.id) && (
+                  <View style={styles.quote}>
+                    <Text style={styles.quoteText}>{book.paragraphs[0]}</Text>
+                    <Text style={styles.quoteCaption}>《{book.title}》</Text>
+                  </View>
+                )}
               </View>
             </View>
           ))}
@@ -273,27 +248,7 @@ const styles = StyleSheet.create({
   selectionText: { color: c.secondary, fontSize: 14, lineHeight: 23 },
   answer: { gap: 16 },
   answerText: { color: c.ink, fontSize: 17, lineHeight: 30 },
-  references: { gap: 4, paddingTop: 2 },
-  reference: { alignSelf: "stretch" },
-  referenceButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    minHeight: 44,
-  },
-  referenceNumber: {
-    width: 20,
-    height: 20,
-    textAlign: "center",
-    lineHeight: 20,
-    fontSize: 11,
-    fontWeight: "600",
-    color: c.accent,
-    backgroundColor: c.accentWash,
-    borderRadius: 5,
-    overflow: "hidden",
-  },
-  referenceTitle: { color: c.secondary, fontSize: 13, lineHeight: 20 },
+  inlineReference: { color: c.accent, fontSize: 14, textDecorationLine: "underline" },
   quote: {
     borderLeftWidth: 2,
     borderLeftColor: c.gold,

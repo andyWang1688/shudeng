@@ -186,7 +186,11 @@ export function AIServiceForm(props: AIServiceFormProps) {
             onIsOnChange={props.onWebSearchChange}
             modifiers={[disabled(props.busy)]}
           />
-        ) : null}
+        ) : (
+          <LabeledContent label="联网搜索">
+            <Text>{props.webSearchUnavailableReason ?? "当前服务未确认支持"}</Text>
+          </LabeledContent>
+        )}
         {disclosure("上下文窗口", props.onAdvanced, props.contextWindowLabel)}
       </Section>
       <Section footer={<Text>发送测试短文，可能产生费用。</Text>}>

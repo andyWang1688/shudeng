@@ -22,7 +22,7 @@ import { resolveProviderEndpoint } from './provider-endpoint.js';
 import { createProviderFetch, type ProviderFetch } from './provider-transport.js';
 import { ProviderAsyncCaller } from './provider-retry.js';
 import { observeResponseActivity } from './response-activity.js';
-import { resolveWebSearchPolicy, type AgentWebSearchConfig, type WebSearchPolicy } from './web-search.js';
+import { DEEPSEEK_WEB_SEARCH_TOOL, resolveWebSearchPolicy, type AgentWebSearchConfig, type WebSearchPolicy } from './web-search.js';
 
 export type AgentProvider = 'openai' | 'anthropic' | 'deepseek';
 
@@ -102,18 +102,16 @@ export function injectReasoningContent(
   openAIMessages: ReadonlyArray<Record<string, unknown>>,
   langChainMessages: ReadonlyArray<BaseMessage>,
 ): Array<Record<string, unknown>> {
-  const reasoning: string[] = [];
-  for (const message of langChainMessages) {
-    const value = reasoningOf(message);
-    if (value) reasoning.push(value);
-  }
-  if (!reasoning.length) return openAIMessages.map((message) => ({ ...message }));
+  const assistantMessages = langChainMessages.filter(message => message.getType() === 'ai');
   let cursor = 0;
   return openAIMessages.map((message) => {
     const copy = { ...message };
-    if (copy.role === 'assistant' && cursor < reasoning.length) {
-      const value = reasoning[cursor++];
+    if (copy.role === 'assistant' && cursor < assistantMessages.length) {
+      const assistant = assistantMessages[cursor++]!;
+      const value = reasoningOf(assistant);
       if (value && copy.reasoning_content === undefined) copy.reasoning_content = value;
+      const serverCalls = assistant.additional_kwargs.server_tool_calls;
+      if (Array.isArray(serverCalls)) copy.server_tool_calls = serverCalls;
     }
     return copy;
   });
@@ -159,6 +157,30 @@ class DeepSeekChatOpenAI extends ChatOpenAICompletions {
     this.#state = state;
   }
 
+  protected override _convertChatOpenAIToolToCompletionsTool(
+    ...args: Parameters<ChatOpenAICompletions['_convertChatOpenAIToolToCompletionsTool']>
+  ): ReturnType<ChatOpenAICompletions['_convertChatOpenAIToolToCompletionsTool']> {
+    const [tool] = args;
+    // The OpenAI SDK's tool union omits DeepSeek's Chat Completions extension.
+    if ('type' in tool && tool.type === DEEPSEEK_WEB_SEARCH_TOOL)
+      return tool as ReturnType<ChatOpenAICompletions['_convertChatOpenAIToolToCompletionsTool']>;
+    return super._convertChatOpenAIToolToCompletionsTool(...args);
+  }
+
+  protected override _convertCompletionsDeltaToBaseMessageChunk(
+    ...args: Parameters<ChatOpenAICompletions['_convertCompletionsDeltaToBaseMessageChunk']>
+  ) {
+    const [delta, response] = args;
+    const message = super._convertCompletionsDeltaToBaseMessageChunk(...args);
+    const choice = response.choices[0] as { server_tool_event?: { type?: string; call?: { type?: string } } } | undefined;
+    const event = choice?.server_tool_event;
+    if (event?.type === 'call_started' && event.call?.type === DEEPSEEK_WEB_SEARCH_TOOL)
+      message.additional_kwargs.deepseekSearchStarted = true;
+    if (Array.isArray(delta.server_tool_calls)) message.additional_kwargs.server_tool_calls = delta.server_tool_calls;
+    if (Array.isArray(delta.annotations)) message.additional_kwargs.annotations = delta.annotations;
+    return message;
+  }
+
   override async _generate(
     messages: BaseMessage[],
     options: this['ParsedCallOptions'],
@@ -188,9 +210,10 @@ function requireApiKey(config: AgentModelConfig): string {
 export function createChatModel(config: AgentModelConfig): AgentModelHandle {
   const apiKey = requireApiKey(config);
   const maxTokens = config.maxTokens ?? 8_192;
-  const webSearch = resolveWebSearchPolicy(config.provider, config.baseUrl, config.webSearch);
+  const webSearch = resolveWebSearchPolicy(config.provider, config.baseUrl, config.webSearch, config.model);
+  const provider = webSearch.provider === 'deepseek' ? 'deepseek' : config.provider;
   const address = webSearch.provider === 'openai' ? config.baseUrl?.replace(/\/responses\/?$/, '') : config.baseUrl;
-  const textEndpoint = resolveProviderEndpoint(config.provider, address);
+  const textEndpoint = resolveProviderEndpoint(provider, address);
   const endpoint = webSearch.provider === 'openai' ? { ...textEndpoint,
     endpoint: textEndpoint.endpoint.replace(/\/chat\/completions$/, '/responses'),
     sdkEndpoint: textEndpoint.sdkEndpoint.replace(/\/chat\/completions$/, '/responses'),
@@ -208,7 +231,7 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
     return observeResponseActivity(response, notifyActivity);
   };
   const subscribeActivity = (listener: () => void) => { activity.add(listener); return () => { activity.delete(listener); }; };
-  switch (config.provider) {
+  switch (provider) {
     case 'openai': {
       if (webSearch.provider === 'openai') {
         const model = new BudgetedOpenAIResponses({
@@ -268,7 +291,7 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
       return { provider: 'deepseek', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch };
     }
     default: {
-      const exhaustive: never = config.provider;
+      const exhaustive: never = provider;
       throw new Error(`不支持的 provider: ${String(exhaustive)}`);
     }
   }

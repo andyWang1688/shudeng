@@ -151,10 +151,12 @@ const CodeBlock: FC<{ code: string; language: string | undefined }> = ({
 // One renderer per parse: the constructor takes the text it renders so the
 // memo that creates it stays keyed on that text under React Compiler, and the
 // key ordinal restarts with each instance.
+type RenderInlineLink = (href: string, key: string, styles?: Parameters<Renderer['link']>[2]) => ReactNode | undefined;
+
 class MarkdownRenderer extends Renderer {
   keyIndex = 0;
 
-  constructor(_source: string) {
+  constructor(_source: string, private readonly renderInlineLink?: RenderInlineLink) {
     super();
   }
 
@@ -164,6 +166,12 @@ class MarkdownRenderer extends Renderer {
 
   override code(text: string, language?: string): ReactNode {
     return <CodeBlock key={this.getKey()} code={text} language={language} />;
+  }
+
+  override link(...args: Parameters<Renderer['link']>): ReactNode {
+    const [children, href, styles] = args;
+    if (href.startsWith('shudengcitation:')) return this.renderInlineLink?.(href, this.getKey(), styles) ?? children;
+    return super.link(...args);
   }
 }
 
@@ -271,10 +279,10 @@ const useMarkdownOptions = (
 // only the block it touched; reference-style link definitions therefore do not
 // resolve across blocks.
 const MarkdownBlock = memo(
-  ({ raw, options }: { raw: string; options: useMarkdownHookOptions }) => {
+  ({ raw, options, renderInlineLink }: { raw: string; options: useMarkdownHookOptions; renderInlineLink?: RenderInlineLink | undefined }) => {
     // A fresh renderer per parse keeps keys unique among siblings and identical
     // across the re-parses of a streaming block instead of remounting it.
-    const renderer = useMemo(() => new MarkdownRenderer(raw), [raw]);
+    const renderer = useMemo(() => new MarkdownRenderer(raw, renderInlineLink), [raw, renderInlineLink]);
     const blockOptions = useMemo(
       () => ({ ...options, renderer }),
       [options, renderer],
@@ -287,9 +295,10 @@ MarkdownBlock.displayName = "MarkdownBlock";
 
 type MarkdownTextProps = TextMessagePartProps & {
   variant?: MarkdownTextVariant;
+  renderInlineLink?: RenderInlineLink;
 };
 
-const MarkdownTextImpl: FC<MarkdownTextProps> = ({ text, variant }) => {
+const MarkdownTextImpl: FC<MarkdownTextProps> = ({ text, variant, renderInlineLink }) => {
   const throttledText = useThrottledValue(text, STREAM_INTERVAL_MS);
   const deferredText = useDeferredValue(throttledText);
   const options = useMarkdownOptions(variant);
@@ -304,7 +313,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ text, variant }) => {
   return (
     <View className="aui-md-root">
       {blocks.map((token, index) => (
-        <MarkdownBlock key={index} raw={token.raw} options={options} />
+        <MarkdownBlock key={index} raw={token.raw} options={options} renderInlineLink={renderInlineLink} />
       ))}
     </View>
   );

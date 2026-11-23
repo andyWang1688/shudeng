@@ -4,6 +4,7 @@ import Module, { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { test } from "node:test";
+import { defaultReaderSpacing } from "@shudeng/core/domain/reader-spacing";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
@@ -39,6 +40,7 @@ async function mount(native: boolean, initial: Record<string, unknown> = {}) {
     return null;
   };
   const stubs: Record<string, any> = {
+    "@shudeng/core/domain/reader-spacing": { defaultReaderSpacing },
     react: React,
     "react/jsx-runtime": require("react/jsx-runtime"),
     "react-native": { View: (props: any) => props.children, StyleSheet: { create: (value: any) => value } },
@@ -103,7 +105,7 @@ async function mount(native: boolean, initial: Record<string, unknown> = {}) {
       return messages.splice(0);
     },
     async preferences() {
-      return (await this.drain()).filter(message => /^reader:(theme|fontSize|flow)$/.test(message.type));
+      return (await this.drain()).filter(message => /^reader:(theme|fontSize|spacing|flow)$/.test(message.type));
     },
     async unmount() {
       await act(() => root.unmount());
@@ -150,7 +152,7 @@ for (const native of [true, false]) {
   });
 
   test(`${native ? "native EPUB" : "WebView EPUB"} opens with its requested preferences and only sends the changed setting`, async () => {
-    const reader = await mount(native, { theme: "dark", fontScale: 1.2, flow: "scrolled", initialLocation: "epubcfi(/6/2)" });
+    const reader = await mount(native, { theme: "dark", fontScale: 1.2, letterSpacing: -2.5, flow: "scrolled", initialLocation: "epubcfi(/6/2)" });
     try {
       await reader.loaded();
       const [opening] = await reader.drain();
@@ -159,6 +161,7 @@ for (const native of [true, false]) {
       assert.equal(opening.payload.dataBase64, "AA==");
       assert.equal(opening.payload.theme, "dark");
       assert.equal(opening.payload.fontSize, 1.2 * 18.5);
+      assert.deepEqual(opening.payload.spacing, { letterSpacing: -2.5, lineSpacing: 175 });
       assert.equal(opening.payload.flow, "scrolled");
       assert.equal(opening.payload.initialLocation, "epubcfi(/6/2)");
       await reader.ready();
@@ -167,6 +170,8 @@ for (const native of [true, false]) {
       assert.deepEqual(await reader.preferences(), [{ type: "reader:theme", payload: { theme: "light" } }]);
       await reader.update({ fontScale: 1.4 });
       assert.deepEqual(await reader.preferences(), [{ type: "reader:fontSize", payload: { fontSize: 1.4 * 18.5 } }]);
+      await reader.update({ lineSpacing: 185 });
+      assert.deepEqual(await reader.preferences(), [{ type: "reader:spacing", payload: { letterSpacing: -2.5, lineSpacing: 185 } }]);
       await reader.update({ flow: "paginated" });
       assert.deepEqual(await reader.preferences(), [{ type: "reader:flow", payload: { flow: "paginated" } }]);
       await reader.update({ flow: "curl" });

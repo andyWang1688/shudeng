@@ -34,13 +34,14 @@ function sseChunk(payload: Record<string, unknown>): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
-function deepSeekSSE(parts: Array<Record<string, unknown>>, finishReason: string): string {
+function deepSeekSSE(parts: Array<Record<string, unknown>>, finishReason: string, terminal: Record<string, unknown> = {}): string {
   const chunks = parts.map((delta) =>
-    sseChunk({ id: 'chunk', object: 'chat.completion.chunk', created: 1, model: 'deepseek-flash', choices: [{ index: 0, delta, finish_reason: null }] }),
+    sseChunk({ id: 'chunk', object: 'chat.completion.chunk', created: 1, model: 'deepseek-flash', choices: [{ index: 0, delta, finish_reason: null,
+      ...(delta.server_tool_event ? { server_tool_event: delta.server_tool_event } : {}) }] }),
   );
   return (
     chunks.join('') +
-    sseChunk({ id: 'chunk', object: 'chat.completion.chunk', created: 1, model: 'deepseek-flash', choices: [{ index: 0, delta: {}, finish_reason: finishReason }] }) +
+    sseChunk({ id: 'chunk', object: 'chat.completion.chunk', created: 1, model: 'deepseek-flash', choices: [{ index: 0, delta: terminal, finish_reason: finishReason }] }) +
     'data: [DONE]\n\n'
   );
 }
@@ -146,5 +147,49 @@ describe('DeepSeek provider 适配', () => {
 
   it('缺少 API Key 时给出配置错误', () => {
     expect(() => createChatModel({ provider: 'openai', model: 'gpt-4o', apiKey: '  ' })).toThrow(/API Key/);
+  });
+
+  it('declares official DeepSeek search, carries its calls through book lookup, and streams provider citations', async () => {
+    const requests: Record<string, unknown>[] = [];
+    const call = { index: 0, id: 'server-1', type: 'deepseek_web_search', kind: 'deep_search', action: { type: 'search', queries: ['灯'] } };
+    // The provider may make more than three internal calls during one deep search.
+    const serverCalls = [{ index: 0, reasoning_content: '', calls: Array.from({ length: 4 }, (_, index) => ({
+      ...call, index, id: 'server-' + (index + 1), status: 'completed',
+    })) }];
+    const annotation = { type: 'url_citation', url_citation: { url: 'https://example.com/lamp', title: '网页实证' } };
+    const responses = [
+      deepSeekSSE([
+        { role: 'assistant' },
+        { server_tool_event: { type: 'call_started', step: 0, call } },
+        { reasoning_content: '再查书内原文' },
+        { tool_calls: [{ index: 0, id: 'book-call', type: 'function', function: { name: 'search_book', arguments: '{"query":"灯"}' } }] },
+      ], 'tool_calls', { server_tool_calls: serverCalls, annotations: [annotation] }),
+      deepSeekSSE([{ role: 'assistant', content: '{"answer":"结合两种来源解释。","citations":[{"id":"E1","quote":"灯把书页照亮"}]}' }], 'stop'),
+    ];
+    const model = createChatModel({ provider: 'deepseek', model: 'deepseek-flash', apiKey: 'synthetic',
+      baseUrl: 'https://api.deepseek.com/v1', webSearch: { enabled: true, maxUses: 3 }, fetch: async (input, init) => {
+        expect(String(input)).toBe('https://api.deepseek.com/v1/chat/completions');
+        const payload = responses[requests.length];
+        requests.push(JSON.parse(String(init?.body)));
+        return new Response(payload, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    (model.langChainModel as { getNumTokens(text: string): Promise<number> }).getNumTokens = async text => Math.ceil(text.length / 4);
+    const session = runBookAgent({ model, source: fixtureSource(), book, question: '请联网查证并和书内原文比较',
+      history: [{ question: '上轮问题', answer: '上轮存档回答' }] });
+    const events = await collect(session);
+    expect(events.filter(event => event.type === 'failed')).toEqual([]);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.tools).toContainEqual({ type: 'deepseek_web_search' });
+    expect(requests[0]?.tools).toContainEqual(expect.objectContaining({ function: expect.objectContaining({ name: 'search_book' }) }));
+    expect(requests[1]?.tools).not.toContainEqual({ type: 'deepseek_web_search' });
+    const assistant = (requests[1]?.messages as Record<string, unknown>[]).filter(message => message.role === 'assistant');
+    expect(assistant[0]).not.toHaveProperty('reasoning_content');
+    expect(assistant[1]).toMatchObject({ server_tool_calls: serverCalls, reasoning_content: '再查书内原文' });
+    expect(events.filter(event => event.type === 'webSearchStatus').map(event => event.status)).toEqual(['enabled', 'searching', 'complete']);
+    expect(await session.result).toMatchObject({ answer: '结合两种来源解释。',
+      citations: [expect.objectContaining({ id: 'E1' })],
+      webSources: [{ id: 'W1', url: 'https://example.com/lamp', title: '网页实证', provider: 'deepseek' }],
+    });
   });
 });

@@ -22,16 +22,27 @@ const write = (details: Parameters<typeof appendBookChatTurn>[0]['details']) => 
 });
 
 describe('assistant sources through actual SQLite conversation persistence', () => {
-  it('keeps website sources separate from navigable book citations across partial/final writes and reopen', async () => {
-    await write({ status: 'streaming', webSearchStatus: { status: 'searching' }, webSources: [source] });
-    await write({ status: 'done', webSearchStatus: { status: 'complete' }, webSources: [source] });
+  it.each(['openai', 'deepseek'] as const)('keeps %s website sources separate from book citations after reopen', async provider => {
+    const website = { ...source, provider, answerAnchor: '外部资料见来源。' };
+    await write({ status: 'streaming', webSearchStatus: { status: 'searching' }, webSources: [website] });
+    await write({ status: 'done', webSearchStatus: { status: 'complete' }, webSources: [website] });
     const reopenedLayer = await createShudengDataLayer(driver);
     state.layer = reopenedLayer;
     const turns = await loadBookConversation('book:roundtrip');
     expect(turns).toHaveLength(2);
-    expect(turns[1]).toMatchObject({ details: { status: 'done', webSources: [source], webSearchStatus: { status: 'complete' } }, citations: [citation] });
+    expect(turns[1]).toMatchObject({ details: { status: 'done', webSources: [website], webSearchStatus: { status: 'complete' } }, citations: [citation] });
     expect(await driver.all('SELECT * FROM citations')).toHaveLength(1);
     expect(await driver.all('SELECT * FROM messages')).toHaveLength(2);
+  });
+
+  it('persists book citation placement and clears it when the answer is retried', async () => {
+    const anchored = { ...citation, answerAnchor: '书内观点。' };
+    const input = { bookId: 'book', conversationId: 'book:roundtrip', assistantId: 'answer',
+      question: '作者有什么看法？', answer: '书内观点。补充说明。', citations: [anchored] };
+    await appendBookChatTurn(input);
+    expect((await loadBookConversation(input.conversationId))[1]?.citations).toEqual([anchored]);
+    await appendBookChatTurn({ ...input, citations: [citation] });
+    expect((await loadBookConversation(input.conversationId))[1]?.citations).toEqual([citation]);
   });
 
   it.each(['streaming', 'cancelled', 'error'] as const)('recovers %s searches without a permanent activity indicator', async status => {

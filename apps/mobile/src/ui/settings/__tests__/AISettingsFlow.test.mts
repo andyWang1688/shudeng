@@ -94,11 +94,13 @@ const { resolveWebSearchPolicy } = loader({
   "@langchain/anthropic": { tools: {} },
 })("packages/core/src/agent/web-search.ts");
 
-test("service search is an unsaved choice and unsupported gateways cannot be saved enabled", async () => {
-  for (const baseUrl of [
-    "https://api.openai.com/v1",
-    "https://gateway.example/v1",
-  ]) {
+test("service search is an unsaved choice and only offered for supported services and models", async () => {
+  for (const [provider, model, baseUrl, unavailable] of [
+    ["openai", "test-model", "https://api.openai.com/v1", undefined],
+    ["openai", "test-model", "https://gateway.example/v1", "当前服务未确认支持"],
+    ["deepseek", "deepseek-chat", "https://api.deepseek.com/v1", "需使用 deepseek-flash"],
+    ["deepseek", "deepseek-flash", "https://api.deepseek.com/v1", undefined],
+  ] as const) {
     const h = hooks(),
       writes: any[] = [];
     let closes = 0,
@@ -107,8 +109,8 @@ test("service search is an unsaved choice and unsupported gateways cannot be sav
       id: "model-1",
       secretId: "retained-secret",
       name: "My model",
-      provider: "openai" as const,
-      model: "test-model",
+      provider,
+      model,
       baseUrl,
       webSearchEnabled: false,
     };
@@ -166,13 +168,13 @@ test("service search is an unsaved choice and unsupported gateways cannot be sav
       tree,
       (n) => n.props?.testID === "ai-service-web-search",
     )[0];
-    const supported = baseUrl.startsWith("https://api.openai.com");
+    const supported = unavailable === undefined;
     if (supported) {
       assert.equal(toggle.props.disabled, false);
       toggle.props.onValueChange(true);
     } else {
       assert.equal(toggle, undefined);
-      assert.equal(row(tree, "联网搜索"), undefined);
+      assert.equal(row(tree, "联网搜索").props.detail, unavailable);
       const form = nodes(tree, node => typeof node.type === "function" && node.type.name === "AIServiceForm")[0];
       form.props.onWebSearchChange(true);
     }

@@ -1,5 +1,6 @@
 /** Interactive reader proposal; locations and bookmarks are session-only samples. */
 import { useMemo, useRef, useState } from "react";
+import { normalizeReaderSpacing } from "@shudeng/core/domain/reader-spacing";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,8 +13,6 @@ import {
   List,
   Maximize2,
   MessageCircle,
-  Minus,
-  Plus,
   Settings2,
   Trash2,
   X,
@@ -25,6 +24,7 @@ import {
 import { DemoPdfSurface } from "./DemoPdfSurface";
 import { DemoSheet } from "./DemoSheet";
 import { DemoAnnotationEditor } from "./DemoAnnotationEditor";
+import { ReaderSpacingControls, ReaderValueStepper } from "../reader/ReaderSpacingControls";
 import type { DemoBook } from "./demoBooks";
 import { demoColors as c } from "./demoTheme";
 import {
@@ -36,6 +36,7 @@ import {
 } from "./readerSamples";
 
 type Panel = "contents" | "settings" | null;
+const stepperPalette = { paperDeep: c.tint, lampInk: c.accent, ink2: c.secondary };
 type Jump = { position: number; revision: number };
 
 export function DemoReader({
@@ -239,7 +240,7 @@ export function DemoReader({
       {panel && (
         <DemoSheet
           ref={sheet}
-          initialHeight={panel === "settings" ? 46 : 70}
+          initialHeight={panel === "settings" ? (isPdf ? 46 : 62) : 70}
           onClose={() => setPanel(null)}
         >
           <View style={s.sheetHeader}>
@@ -317,35 +318,21 @@ export function DemoReader({
                   ))}
                 </View>
                 {!isPdf && (
-                  <View style={s.fontRow}>
-                    <Text style={s.fieldLabel}>字号</Text>
-                    <View style={s.fontControls}>
-                      <IconButton
-                        label="减小阅读字号"
-                        icon={Minus}
-                        disabled={preferences.fontSize <= 16}
-                        onPress={() =>
-                          onPreferencesChange({
-                            ...preferences,
-                            fontSize: preferences.fontSize - 2,
-                          })
-                        }
-                      />
-                      <Text style={s.fontValue}>{preferences.fontSize}</Text>
-                      <IconButton
-                        label="增大阅读字号"
-                        icon={Plus}
-                        disabled={preferences.fontSize >= 28}
-                        onPress={() =>
-                          onPreferencesChange({
-                            ...preferences,
-                            fontSize: preferences.fontSize + 2,
-                          })
-                        }
-                      />
-                    </View>
-                  </View>
+                  <ReaderValueStepper
+                    label="字号"
+                    value={preferences.fontSize}
+                    min={16}
+                    max={28}
+                    step={2}
+                    palette={stepperPalette}
+                    onAdjust={(delta) => onPreferencesChange({ ...preferences, fontSize: preferences.fontSize + delta })}
+                  />
                 )}
+                {!isPdf && <ReaderSpacingControls
+                  spacing={preferences}
+                  palette={stepperPalette}
+                  onAdjust={(field, delta) => onPreferencesChange({ ...preferences, [field]: normalizeReaderSpacing(field, preferences[field] + delta) })}
+                />}
               </>
             ) : (
               <>
@@ -665,20 +652,6 @@ const s = StyleSheet.create({
   segmentSelected: { backgroundColor: c.surface },
   segmentLabel: { color: c.secondary, fontSize: 15, lineHeight: 22 },
   accent: { color: c.accent },
-  fontRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 6,
-  },
-  fontControls: { flexDirection: "row", alignItems: "center" },
-  fontValue: {
-    color: c.ink,
-    fontSize: 16,
-    fontVariant: ["tabular-nums"],
-    minWidth: 28,
-    textAlign: "center",
-  },
   done: {
     minWidth: 60,
     minHeight: 44,

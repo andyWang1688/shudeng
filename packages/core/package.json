@@ -8,6 +8,7 @@
     "./agent": "./src/agent/index.ts",
     "./agent/citation-tail": "./src/agent/citation-tail.ts",
     "./domain": "./src/domain/types.ts",
+    "./domain/reader-spacing": "./src/domain/reader-spacing.ts",
     "./rag": "./src/rag/index.ts",
     "./db": "./src/db/index.ts",
     "./agent/testing": "./src/agent/testing.ts",

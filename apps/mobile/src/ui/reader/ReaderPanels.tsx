@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Check } from "lucide-react-native";
+import { normalizeReaderSpacing } from "@shudeng/core/domain/reader-spacing";
 import type {
   ReaderPreferences,
   ShelfAnnotation,
@@ -9,6 +10,7 @@ import type {
 import { usePalette, type Palette } from "../theme";
 import { useAppearance } from "../appearance";
 import { ReaderPanel } from "./ReaderPanel";
+import { ReaderSpacingControls, ReaderValueStepper } from "./ReaderSpacingControls";
 
 /** Every change is applied to the actual book; closing only dismisses the controls. */
 export function ReaderSettingsPanel({
@@ -17,12 +19,14 @@ export function ReaderSettingsPanel({
   onClose,
   onApply,
   curlAvailable = false,
+  spacingAvailable = true,
 }: {
   readonly visible: boolean;
   readonly preferences: ReaderPreferences;
   readonly onClose: () => void;
   readonly onApply: (value: ReaderPreferences) => Promise<boolean>;
   readonly curlAvailable?: boolean;
+  readonly spacingAvailable?: boolean;
 }) {
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -53,7 +57,7 @@ export function ReaderSettingsPanel({
     <ReaderPanel
       visible={visible}
       title="阅读设置"
-      initialHeight={46}
+      initialHeight={spacingAvailable ? 62 : 46}
       busy={saving}
       onClose={onClose}
     >
@@ -88,45 +92,34 @@ export function ReaderSettingsPanel({
               );
             })}
           </View>
-          <Text style={styles.section}>字号</Text>
-          <View style={styles.fontRow}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="缩小字号"
-              disabled={blocked || preferences.fontScale <= 0.75}
-              onPress={() => {
-                if (canInteract())
-                  void apply({
-                    fontScale: Math.max(
-                      0.75,
-                      confirmed.current.value.fontScale - 0.25,
-                    ),
-                  });
+          <View style={styles.typography}>
+            <ReaderValueStepper
+              label="字号"
+              value={preferences.fontScale}
+              min={0.75}
+              max={2}
+              step={0.25}
+              palette={palette}
+              disabled={blocked}
+              onAdjust={(delta) => {
+                if (!canInteract()) return;
+                const fontScale = Math.max(0.75, Math.min(2, confirmed.current.value.fontScale + delta));
+                if (fontScale !== confirmed.current.value.fontScale) void apply({ fontScale });
               }}
-              style={styles.fontButton}
-            >
-              <Text style={styles.action}>A−</Text>
-            </Pressable>
-            <Text style={styles.text}>
-              {Math.round(preferences.fontScale * 100)}%
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="增大字号"
-              disabled={blocked || preferences.fontScale >= 2}
-              onPress={() => {
-                if (canInteract())
-                  void apply({
-                    fontScale: Math.min(
-                      2,
-                      confirmed.current.value.fontScale + 0.25,
-                    ),
-                  });
-              }}
-              style={styles.fontButton}
-            >
-              <Text style={styles.action}>A+</Text>
-            </Pressable>
+            />
+            {spacingAvailable && (
+              <ReaderSpacingControls
+                spacing={preferences}
+                palette={palette}
+                disabled={blocked}
+                onAdjust={(field, delta) => {
+                  if (!canInteract()) return;
+                  const current = confirmed.current.value[field];
+                  const next = normalizeReaderSpacing(field, current + delta);
+                  if (next !== current) void apply({ [field]: next });
+                }}
+              />
+            )}
           </View>
           <Text style={styles.section}>主题</Text>
           <View style={styles.segment}>
@@ -278,12 +271,12 @@ export function HighlightPalette({
 
 function makeStyles(palette: Palette) {
   return StyleSheet.create({
-    action: { color: palette.lampInk, fontSize: 16 },
     text: { color: palette.ink, fontSize: 16, lineHeight: 24 },
     secondary: { color: palette.ink2, fontSize: 14, lineHeight: 24 },
     segment: {
       flexDirection: "row",
-      margin: 20,
+      marginHorizontal: 20,
+      marginTop: 8,
       backgroundColor: palette.paperDeep,
       borderRadius: 12,
       padding: 3,
@@ -297,27 +290,13 @@ function makeStyles(palette: Palette) {
     },
     segmentSelected: { backgroundColor: palette.surface },
     section: {
-      marginTop: 16,
+      marginTop: 12,
       marginLeft: 24,
       fontSize: 13,
       color: palette.ink2,
     },
     settingsContent: { paddingBottom: 36 },
-    fontRow: {
-      margin: 20,
-      minHeight: 56,
-      backgroundColor: palette.paperDeep,
-      borderRadius: 12,
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-    },
-    fontButton: {
-      minWidth: 72,
-      minHeight: 52,
-      alignItems: "center",
-      justifyContent: "center",
-    },
+    typography: { marginHorizontal: 20 },
     disabled: { opacity: 0.35 },
     highlightContent: { paddingHorizontal: 26, paddingBottom: 32, gap: 20 },
     colorRow: {

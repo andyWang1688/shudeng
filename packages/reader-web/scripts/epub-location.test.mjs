@@ -62,7 +62,7 @@ test('only unstyled CJK documents receive Native default paragraph indentation b
       head: { firstElementChild: first, lastElementChild: last },
       documentElement: { setAttribute: (key, value) => attributes.set(key, value) },
       querySelector: () => authored === 'link' || authored === 'inline' ? {} : null,
-      querySelectorAll: () => authored === 'style' ? [first, {}, last] : [first, last],
+      querySelectorAll: selector => selector === 'style' ? (authored === 'style' ? [first, {}, last] : [first, last]) : [],
     }
     prepareTypographyDocument(doc)
     assert.equal(attributes.has('data-shudeng-unstyled'), authored === 'none', authored + ' author CSS gate')
@@ -86,7 +86,8 @@ function typographyDocument(rootLanguage = {}, bodyLanguage = {}, authored = fal
   return {
     documentElement: element(rootLanguage), body: element(bodyLanguage),
     head: { firstElementChild: first, lastElementChild: last },
-    querySelector: () => authored ? {} : null, querySelectorAll: () => [first, last],
+    querySelector: () => authored ? {} : null,
+    querySelectorAll: selector => selector === 'style' ? [first, last] : [],
     addEventListener() {},
   }
 }
@@ -123,6 +124,26 @@ test('reader prepares CJK language before Foliate fills the root language', asyn
     await reader.open('fixture.epub', 'Fixture')
     assert.equal(doc.documentElement.getAttribute('xml:lang') ?? doc.documentElement.getAttribute('lang'), expected, 'Native effective language after Foliate load')
     assert.equal(doc.documentElement.getAttribute('lang'), rootLanguage.lang ?? null, 'preserve authored lang, including absent and empty')
+  }
+})
+
+test('loading a reflowable EPUB chapter releases inline important font sizes to reader typography', async () => {
+  for (const fixedLayout of [false, true]) {
+    const doc = typographyDocument({}, {}, true)
+    const removed = []
+    const inline = priority => ({ style: {
+      getPropertyPriority: name => name === 'font-size' ? priority : '',
+      removeProperty: name => removed.push(name),
+    } })
+    const query = doc.querySelectorAll
+    doc.querySelectorAll = selector => {
+      if (selector === 'style') return query(selector)
+      assert.ok(selector.includes('[style]'))
+      return [inline('important'), inline(''), {}]
+    }
+    const { reader } = readerHarness({ loadDocument: doc, fixedLayout })
+    await reader.open('fixture.epub', 'Fixture')
+    assert.deepEqual(removed, fixedLayout ? [] : ['font-size'])
   }
 })
 
@@ -299,13 +320,34 @@ test('the first EPUB layout uses the requested typography and flow exactly once'
   assert.equal(log.filter(item => item[0] === 'attribute' && item[1] === 'max-column-count').length, 1)
 })
 
-test('app opening passes initial configuration without replaying three setters', async () => {
-  const { calls, open } = appHarness()
-  await open({ format: 'epub', archive: { sessionID: 'test' }, title: 'Fixture', url: 'inline://epub', theme: 'dark', fontSize: 24, flow: 'scrolled', initialLocation: 'epubcfi(/6/2)' })
+test('app opening passes initial configuration without replaying the setters', async () => {
+  const { calls, open, dispatch } = appHarness()
+  const spacing = { letterSpacing: -2.5, lineSpacing: 205 }
+  await open({ format: 'epub', archive: { sessionID: 'test' }, title: 'Fixture', url: 'inline://epub', theme: 'dark', fontSize: 24, spacing, flow: 'scrolled', initialLocation: 'epubcfi(/6/2)' })
   assert.deepEqual(calls, [
-    ['open', { sessionID: 'test' }, 'Fixture', { theme: 'dark', fontSize: 24, flow: 'scrolled' }],
+    ['open', { sessionID: 'test' }, 'Fixture', { theme: 'dark', fontSize: 24, spacing, flow: 'scrolled' }],
     ['goTo', 'epubcfi(/6/2)'],
   ])
+  const next = { ...spacing, lineSpacing: 200 }
+  await dispatch({ type: 'reader:spacing', payload: next })
+  assert.deepEqual(calls.at(-1), ['spacing', next])
+})
+
+test('EPUB spacing applies before layout, reflows once around the same CFI and restores standard styles', async () => {
+  const { reader, log } = readerHarness()
+  const spacing = { letterSpacing: 3.5, lineSpacing: 100 }
+  await reader.open('fixture.epub', 'Fixture', { spacing })
+  const original = reader.currentLocation()
+  const initial = log.find(item => item[0] === 'first-layout')[1]
+  assert.ok(initial.styles[1].includes('letter-spacing: 0.035em !important'))
+  assert.ok(initial.styles[1].includes('line-height: 1 !important'))
+  const afterOpen = log.length
+  await reader.setSpacing(spacing)
+  assert.equal(log.length, afterOpen)
+  await reader.setSpacing({ letterSpacing: 0, lineSpacing: 175 })
+  assert.deepEqual(log.filter(item => item[0] === 'styles').at(-1)[1], epubTypography(18.5, 'light'))
+  assert.equal(log.filter(item => item[0] === 'goTo').length, 1)
+  assert.equal(reader.currentLocation(), original)
 })
 
 test('app dispatch preserves visibility-only and full bookmark capture commands', async () => {

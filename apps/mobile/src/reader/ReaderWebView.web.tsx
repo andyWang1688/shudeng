@@ -1,5 +1,6 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { defaultReaderSpacing } from '@shudeng/core/domain/reader-spacing';
 import { StyleSheet, View } from 'react-native';
 import { usePalette, type Palette } from '../ui/theme';
 import { readerWebHtml } from './readerWebHtml';
@@ -8,7 +9,7 @@ import type { ReaderWebViewHandle, ReaderWebViewProps } from './ReaderWebView';
 export type { ReaderEvent } from './readerProtocol';
 
 /** Web uses the same protocol and persistent annotation identities as the native WebView. */
-export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView({ bookId, initialLocation, openOverride, initialAnnotations, selectionActionsEnabled = true, theme = 'light', fontScale = 1, flow = 'paginated', onEvent, onTap }, ref) {
+export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewProps>(function ReaderWebView({ bookId, initialLocation, openOverride, initialAnnotations, selectionActionsEnabled = true, theme = 'light', fontScale = 1, letterSpacing = defaultReaderSpacing.letterSpacing, lineSpacing = defaultReaderSpacing.lineSpacing, flow = 'paginated', onEvent, onTap }, ref) {
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -43,14 +44,15 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
         return;
       }
       const base = { type: 'reader:open', payload: { ...openOverride, url: `inline://${openOverride.format}` } };
-      send({ ...base, payload: { ...base.payload, theme, fontSize: fontScale * 18.5, flow, selectionActionsEnabled, ...(initialLocation ? { initialLocation } : {}) } });
+      const spacing = openOverride.format === 'epub' ? { spacing: { letterSpacing, lineSpacing } } : {};
+      send({ ...base, payload: { ...base.payload, theme, fontSize: fontScale * 18.5, ...spacing, flow, selectionActionsEnabled, ...(initialLocation ? { initialLocation } : {}) } });
       const doc = target.document;
       const style = doc.createElement('style');
       style.textContent = '#chrome,#footer{display:none!important} #app{padding:0!important}';
       doc.head.append(style);
     };
     setReady(false); sent.current.clear(); deliver();
-  }, [flow, fontScale, initialLocation, openOverride, selectionActionsEnabled, send, sourceError, theme]);
+  }, [flow, fontScale, initialLocation, letterSpacing, lineSpacing, openOverride, selectionActionsEnabled, send, sourceError, theme]);
   useEffect(() => {
     const listener = (event: MessageEvent) => {
       if (event.source !== iframeRef.current?.contentWindow) return;
@@ -79,6 +81,9 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
     if (!ready) return;
     send({ type: 'reader:theme', payload: { theme } }); send({ type: 'reader:fontSize', payload: { fontSize: fontScale * 18.5 } }); send({ type: 'reader:flow', payload: { flow } });
   }, [flow, fontScale, ready, send, theme]);
+  useEffect(() => {
+    if (ready && openOverride?.format === 'epub') send({ type: 'reader:spacing', payload: { letterSpacing, lineSpacing } });
+  }, [letterSpacing, lineSpacing, openOverride?.format, ready, send]);
   return <View style={styles.container}>{!sourceError ? <iframe ref={iframeRef} title="书灯阅读器" srcDoc={readerWebHtml} onLoad={open} style={{ ...iframeStyle, backgroundColor: palette.paper }} /> : null}</View>;
 }));
 const iframeStyle = { borderWidth: 0, width: '100%', height: '100%' } satisfies CSSProperties;

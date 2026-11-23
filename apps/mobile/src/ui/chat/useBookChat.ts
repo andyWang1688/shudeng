@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import type { AgentContextEstimate, AgentContextUsage, AgentRunSession } from '@shudeng/core';
 import { getBookChatAvailability, startBookChatTurn, type BookChatAvailability } from '../../platform/ai';
+import { beginBookChatBackgroundTask } from '../../platform/ai/bookChatBackground';
 import {
   appendBookChatTurn,
   createBookConversationId,
@@ -42,6 +43,7 @@ export interface UseBookChatOptions {
 let sequence = 0;
 const nextId = () => `turn-${Date.now()}-${++sequence}`;
 const missingModelNotice = '还没有配置 AI 模型，设置后即可发送。';
+const backgroundExpirationMessage = '系统后台运行时间已结束，回答未完成。可以重试。';
 
 /** Owns one independent conversation, its durable history, and exactly one active run. */
 export function useBookChat(options: UseBookChatOptions) {
@@ -335,6 +337,9 @@ export function useBookChat(options: UseBookChatOptions) {
         publish();
       };
       const writer = createTurnPersistence(persist, reportSaveError);
+      let backgroundExpired = false;
+      let endBackgroundTask: (() => void) | undefined;
+      const interruptedInBackground = () => ({ ...current, status: 'error' as const, error: backgroundExpirationMessage });
       const appState = AppState.addEventListener('change', (state) => {
         if (state !== 'active') void writer.flush(current).catch(reportSaveError);
       });
@@ -349,8 +354,14 @@ export function useBookChat(options: UseBookChatOptions) {
         current = { ...current, reasoningDurationMs: reasoningMs };
       };
       try {
+        endBackgroundTask = beginBookChatBackgroundTask(() => {
+          if (current.status !== 'streaming' || cancelRequested.current) return;
+          backgroundExpired = true;
+          session.current?.cancel();
+        });
         // Persist the question before the request, so termination cannot lose the reader's input.
         await writer.flush(current);
+        if (backgroundExpired) throw new Error(backgroundExpirationMessage);
         const started = await startBookChatTurn({
           bookId,
           question: input.display,
@@ -361,7 +372,7 @@ export function useBookChat(options: UseBookChatOptions) {
           ...(input.questionOrigin ? { readingPosition: input.questionOrigin.readingPosition } : {}),
         });
         session.current = started.session;
-        if (cancelRequested.current) started.session.cancel();
+        if (cancelRequested.current || backgroundExpired) started.session.cancel();
         let terminal = false;
         for await (const event of started.session.events) {
           switch (event.type) {
@@ -446,12 +457,12 @@ export function useBookChat(options: UseBookChatOptions) {
             case 'failed':
               terminal = true;
               stopThinking();
-              current = { ...current, status: 'error', error: friendlyError(event.message) };
+              current = backgroundExpired ? interruptedInBackground() : { ...current, status: 'error', error: friendlyError(event.message) };
               break;
             case 'cancelled':
               terminal = true;
               stopThinking();
-              current = { ...current, status: 'cancelled' };
+              current = backgroundExpired ? interruptedInBackground() : { ...current, status: 'cancelled' };
               break;
             case 'started':
               break;
@@ -462,11 +473,11 @@ export function useBookChat(options: UseBookChatOptions) {
         await started.session.result;
         if (!terminal) {
           stopThinking();
-          current = { ...current, status: 'error', error: 'AI 服务没有完成回答，请重试。' };
+          current = backgroundExpired ? interruptedInBackground() : { ...current, status: 'error', error: 'AI 服务没有完成回答，请重试。' };
         }
       } catch (error) {
         stopThinking();
-        current = {
+        current = backgroundExpired ? interruptedInBackground() : {
           ...current,
           status: cancelRequested.current ? 'cancelled' : 'error',
           error: friendlyError(error instanceof Error ? error.message : String(error)),
@@ -488,6 +499,8 @@ export function useBookChat(options: UseBookChatOptions) {
             ...current,
             saveError: '对话保存失败：' + (error instanceof Error ? error.message : String(error)),
           };
+        } finally {
+          endBackgroundTask?.();
         }
         if (frame !== null) cancelAnimationFrame(frame);
         if (isBookConversationDeleted(conversationId)) discardConversationRun(conversationId);
