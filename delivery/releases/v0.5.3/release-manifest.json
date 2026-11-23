@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.3",
+  "build": "16",
+  "release_date": "2026-11-23",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "6785cfda23a557a22faef861b43d37e27f047570",
+    "tag": "v0.5.3",
+    "mobile_tree": "9f0a5e5e1475650ce61e064d81bb4e34140110ab",
+    "core_tree": "0121cd5cc8e12b05520484309a2f0859b100c3e6",
+    "reader_web_tree": "5755d6b8b5bc6d17e5f7f2bf6355dffe6ca985e1"
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": [
+      "arm64"
+    ],
+    "validated_runtime": "iOS 26.5",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "binary_sha256": "92bd1e4c25133323bc9690633a89bb383337085ea810705ac3ddc09c4e148cdd",
+    "js_bundle_sha256": "14d8ff58f0f15a8eaa6bde771f7f792119ef18f7fce1ed1ea704e0470faa6660",
+    "cdhash": "df69e82a7a27aa5cf63f9c52a54a7fba344c90bd",
+    "signing": "Simulator ad hoc"
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.3-ios-simulator.zip",
+      "bytes": 29213116,
+      "sha256": "50fc4fe8a69189f5e42171ebc4e9e53524c9804b18056d61ac39b3db6e156fbc"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 918,
+      "sha256": "7de84223d31ec9a52439ac68f192e633b239701945f86be2d9f810b4783bc544"
+    }
+  ],
+  "packaging": {
+    "native_compile_rerun": true,
+    "xcode": "27.2 (27B52)",
+    "minimum_ios": "16.4",
+    "js": "Production Hermes bundle from Release build; notices regenerated from the corresponding source map"
+  },
+  "validation": {
+    "final_tests": {
+      "passed": 1157,
+      "skipped": 9,
+      "failed": 0
+    },
+    "typecheck": "four packages passed",
+    "website_build": "passed",
+    "package_audit": "passed",
+    "zip_integrity": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "bundled_npm_license_count": 127,
+    "simulator_smoke": "Installed the extracted archive on Small iOS 26.5, confirmed installed executable, bundle, and Expo config, saw existing seven-book shelf, and opened the EPUB typography settings."
+  },
+  "not_validated": [
+    "physical iPhone, TestFlight, App Store and older runtime operation",
+    "real model provider quality and billing, or physical device background time"
+  ],
+  "evidence": [
+    "docs/validation/2026-11-23/release-v0.5.3.md",
+    "docs/validation/2026-11-23/reading-answer-continuation.md",
+    "docs/validation/2026-11-23/epub-spacing.md"
+  ]
+}
