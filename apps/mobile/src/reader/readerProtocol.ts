@@ -39,6 +39,7 @@ export type ReaderNavigationCommand = { readonly operationId: string; readonly l
 export type ReaderNavigationReceipt = { readonly operationId: string; readonly status: 'arrived' | 'failed'; readonly message?: string; readonly progress?: { readonly fraction: number; readonly chapter?: string; readonly locator: ReaderLocator } };
 
 export type ReaderEvent =
+  | { readonly type: 'restarting' }
   | { readonly type: 'navigated'; readonly receipt: ReaderNavigationReceipt }
   | { readonly type: 'bookmarkContext'; readonly context: ReaderBookmarkContext }
   | { readonly type: 'ready'; readonly format: ReaderFormat; readonly fixedLayout?: true }

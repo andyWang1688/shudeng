@@ -45,6 +45,9 @@ const state = controller.slice(stateStart, stateEnd)
 const methods = [
     'func load(_ html: String)', 'func setActive(_ value: Bool)', 'func setCurl(_ value: Bool)',
     'private func clearCache()', 'private func invalidate()', 'func submit(_ raw: String)',
+    'func rememberProgress(_ event: [String: Any])', 'func applicationWillResignActive()',
+    'func applicationDidBecomeActive()', 'func recoverTerminatedWebContent()',
+    'func handleNavigationFailure(_ error: Error)', 'private func startPendingWebRecovery()',
     'private func attachWeb(to container: UIView)', 'private func removePager()',
     'private func jsonString(_ value: Any)', 'private func schedule()', 'private func drain() async',
 ].map(method).join('\n\n')

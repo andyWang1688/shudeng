@@ -28,4 +28,4 @@
 
 ## 旧版本与开发包
 
-v0.5.3 沿用 `dev.shudeng.mobile`，与旧 Swift 版 `dev.shudeng.app`、开发包 `dev.shudeng.integration` 各自保存数据。本版不会覆盖它们，也没有跨包自动迁移；保留旧 App，避免卸载后丢失其中的记录。
+v0.5.4 沿用 `dev.shudeng.mobile`，与旧 Swift 版 `dev.shudeng.app`、开发包 `dev.shudeng.integration` 各自保存数据。本版不会覆盖它们，也没有跨包自动迁移；保留旧 App，避免卸载后丢失其中的记录。

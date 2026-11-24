@@ -227,6 +227,42 @@ test("duplicate native acknowledgements do not rerender the reader surface", asy
   } finally { await reader.unmount(); }
 });
 
+test("native EPUB restores the reading position and annotations after WebKit reclaims its content process", async () => {
+  const annotations = [{ id: "annotation-a", format: "epub", locator: { type: "epub", cfi: "epubcfi(/6/2)" }, text: "学而" }];
+  const reader = await mount(true, { initialLocation: "epubcfi(/6/2)", initialAnnotations: annotations });
+  try {
+    await reader.loaded();
+    const [opening] = await reader.drain();
+    assert.equal(opening.payload.initialLocation, "epubcfi(/6/2)");
+    await reader.ready();
+    await reader.drain();
+    await reader.emit({
+      type: "reader:progress",
+      payload: {
+        format: "epub",
+        fraction: 0.42,
+        locator: { type: "epub", cfi: "epubcfi(/6/24!/4/2/2:5)", chapter: "第四章" },
+      },
+    });
+    await reader.update({ theme: "dark", fontScale: 1.2, flow: "scrolled" });
+    await reader.emit({
+      type: "native:restarting",
+      payload: { acknowledgedCommandId: reader.acknowledgedId, initialLocation: "epubcfi(/6/24!/4/2/2:5)" },
+    });
+    assert.equal(reader.events.at(-1)?.type, "restarting");
+    await reader.loaded();
+    const reopened = await reader.drain();
+    const openingAgain = reopened.find(message => message.type === "reader:open");
+    assert.equal(openingAgain?.payload.initialLocation, "epubcfi(/6/24!/4/2/2:5)");
+    assert.equal(openingAgain?.payload.theme, "dark");
+    assert.equal(openingAgain?.payload.fontSize, 1.2 * 18.5);
+    assert.equal(openingAgain?.payload.flow, "scrolled");
+    await reader.ready();
+    const restored = await reader.drain();
+    assert.ok(restored.some(message => message.type === "reader:annotation:add" && message.payload.id === "annotation-a"));
+  } finally { await reader.unmount(); }
+});
+
 test("the PDF WebView fallback retains its ready-time flow synchronization", async () => {
   const reader = await mount(false, { bookId: "book-pdf", flow: "scrolled", openOverride: { format: "pdf", title: "Explicit PDF", mimeType: "application/pdf", dataBase64: "AA==" } });
   try {

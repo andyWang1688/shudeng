@@ -32,6 +32,8 @@ WK 创建前注册 `EpubResourceScheme(archives: EpubResourceStore.shared.archiv
 
 固定 fork 用 `about:srcdoc` 加载章节。App 自有 shell 的 CSP 因而允许同源与 blob frame，native 子 frame 导航白名单精确增加 `about:srcdoc`；章节先经 `securePublication` 净化并注入禁脚本、禁嵌套 frame 的正文 CSP，消息处理仍只接受 main frame。该兼容不放宽任意远程导航或书籍脚本执行。实际 iOS 接线结果见[连续阅读验收](../validation/2026-11-09/continuous-epub.md)。
 
+WK 内容进程被系统回收时，native 保留 shell、ZIP session 和最近一条正文 progress。应用在后台时只记录待恢复状态，回前台才重载 App 自有 shell；随后向 TypeScript 发 `native:restarting`，TypeScript 用最新 CFI 重发 `reader:open`，ready 后重新同步标注与设置。一次自动恢复失败后显示可重试错误，避免内容进程反复终止形成重载循环。应用自身被强杀仍只能恢复数据库里已保存的进度。设备证据见[后台回收恢复](../validation/2026-11-24/reader-background-recovery.md)。
+
 ## 运行保护与边界
 
 策略集中在 EpubResourceStore：每个独占 session 最多 20,000 条目、8 MiB 实际 metadata 读取、同时存活 native 临时资源 128 MiB；单资源实际解压 64 MiB、解压 30 秒。校验实际输出与 CRC，不只相信 ZIP 头。已处理且 release 的章节不累计计费；压缩包没有 100 MiB 整档限制。reader/import/index 可以并行拥有不同 session，128 MiB 不是跨 session 的全局上限。

@@ -194,8 +194,11 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
   private var working = false
   private var transitioning = false
   private var dirty = true
+  private var restartAttempts = 0
+  private var latestLocation: String?
   private var viewport = CGSize.zero
   private var revision = 0
+  private var webGeneration = 0
   private var current: EpubCurlPage?
   private var previous: EpubCurlPage?
   private var following: EpubCurlPage?
@@ -204,26 +207,41 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
   private var cacheOrder: [String] = []
   private var cover: UIImageView?
   private var observer: NSObjectProtocol?
+  private var activationObserver: NSObjectProtocol?
+  private var resignationObserver: NSObjectProtocol?
+  private var applicationActive = true
+  private var restartPending = false
 
   override func viewDidLoad() {
     super.viewDidLoad()
     handler.owner = self
+    applicationActive = UIApplication.shared.applicationState == .active
     view.clipsToBounds = true
     view.backgroundColor = UIColor(red: 250/255, green: 247/255, blue: 241/255, alpha: 1)
     attachWeb(to: view)
     observer = NotificationCenter.default.addObserver(forName: UIAccessibility.reduceMotionStatusDidChangeNotification,
       object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.invalidate() } }
+    activationObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+      object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.applicationDidBecomeActive() } }
+    resignationObserver = NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification,
+      object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.applicationWillResignActive() } }
   }
 
   deinit {
     if let observer { NotificationCenter.default.removeObserver(observer) }
+    if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+    if let resignationObserver { NotificationCenter.default.removeObserver(resignationObserver) }
   }
 
   func load(_ html: String) {
     guard !html.isEmpty, html != source else { return }
+    webGeneration += 1
     source = html
     loaded = false
     ready = false
+    restartAttempts = 0
+    restartPending = false
+    latestLocation = nil
     appliedCurl = nil
     clearCache()
     resourceScheme.setReaderHTML(html)
@@ -240,9 +258,11 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
   func dispose() {
     guard !disposed else { return }
     disposed = true
+    webGeneration += 1
     active = false
     ready = false
     loaded = false
+    restartPending = false
     pending.removeAll()
     clearCache()
     web.stopLoading()
@@ -309,12 +329,17 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     // A module script may execute after didFinish. Its explicit handshake is
     // authoritative; this probe also handles an already-completed handshake.
+    let generation = webGeneration
     Task { [weak self] in
-      guard let self else { return }
+      guard let self, self.webGeneration == generation else { return }
       do {
         let available = try await webView.evaluateJavaScript("typeof window.__readerHost === 'function' && typeof window.__readerNative === 'object'")
+        guard self.webGeneration == generation else { return }
         if available as? Bool == true { self.hostReady() }
-      } catch { self.failure(error) }
+      } catch {
+        guard self.webGeneration == generation else { return }
+        self.handleNavigationFailure(error)
+      }
     }
   }
 
@@ -325,7 +350,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
     schedule()
   }
 
-  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failure(error) }
+  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { handleNavigationFailure(error) }
   func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
     guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
     if navigationAction.targetFrame?.isMainFrame == true {
@@ -336,11 +361,11 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
       decisionHandler(url.scheme == "blob" || ["about:blank", "about:srcdoc"].contains(url.absoluteString) ? .allow : .cancel)
     }
   }
-  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failure(error) }
+  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+    handleNavigationFailure(error)
+  }
   func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-    ready = false
-    clearCache()
-    emitJSON(["type": "reader:error", "payload": ["message": "阅读器已被系统回收，请重试打开书籍。"]])
+    recoverTerminatedWebContent()
   }
 
   func receive(_ body: Any) {
@@ -348,7 +373,8 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
       let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let type = event["type"] as? String else { return }
     switch type {
     case "reader:hostReady": hostReady(); return
-    case "reader:ready": ready = true; dirty = true; schedule()
+    case "reader:ready": ready = true; restartAttempts = 0; restartPending = false; dirty = true; schedule()
+    case "reader:progress": rememberProgress(event)
     case "reader:selection": selecting = true; setGesturesEnabled(false)
     case "reader:selectionCleared": selecting = false; setGesturesEnabled(true); schedule()
     case "reader:turnRequested":
@@ -366,7 +392,66 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
   }
 
   private func failure(_ error: Error) {
+    guard !disposed else { return }
     emitJSON(["type": "reader:error", "payload": ["message": error.localizedDescription]])
+  }
+
+  func handleNavigationFailure(_ error: Error) {
+    guard !disposed else { return }
+    let native = error as NSError
+    if native.domain == WKErrorDomain, native.code == WKError.webContentProcessTerminated.rawValue { return }
+    if native.domain == NSURLErrorDomain, native.code == NSURLErrorCancelled { return }
+    failure(error)
+  }
+
+  func rememberProgress(_ event: [String: Any]) {
+    guard let payload = event["payload"] as? [String: Any],
+      let locator = payload["locator"] as? [String: Any],
+      locator["type"] as? String == "epub",
+      let cfi = locator["cfi"] as? String, !cfi.isEmpty else { return }
+    latestLocation = cfi
+  }
+
+  func applicationWillResignActive() {
+    applicationActive = false
+  }
+
+  func applicationDidBecomeActive() {
+    applicationActive = true
+    if restartPending { startPendingWebRecovery() } else { schedule() }
+  }
+
+  /// WebKit may reclaim its content process while the app is in the background.
+  /// Reload the same bundled shell once and let TypeScript reopen the current book.
+  func recoverTerminatedWebContent() {
+    guard !disposed, !source.isEmpty else { return }
+    webGeneration += 1
+    ready = false
+    loaded = false
+    appliedCurl = nil
+    pending.removeAll()
+    pendingTurn = nil
+    navigationReceipts.removeAll()
+    selecting = false
+    clearCache()
+    removePager()
+    guard restartAttempts == 0 else {
+      restartPending = false
+      emitJSON(["type": "reader:error", "payload": ["message": "阅读器重复被系统回收，请返回书架重新打开。"]])
+      return
+    }
+    restartAttempts += 1
+    restartPending = true
+    if applicationActive { startPendingWebRecovery() }
+  }
+
+  private func startPendingWebRecovery() {
+    guard restartPending, !disposed, !source.isEmpty else { return }
+    restartPending = false
+    var payload: [String: Any] = ["acknowledgedCommandId": lastCommand]
+    if let latestLocation { payload["initialLocation"] = latestLocation }
+    emitJSON(["type": "native:restarting", "payload": payload])
+    web.load(URLRequest(url: resourceScheme.pageURL))
   }
 
   private func attachWeb(to container: UIView) {
@@ -476,6 +561,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
   }
 
   private func drain() async {
+    let drainGeneration = webGeneration
     let completedTarget = pendingTurn
     var inFlightNavigation: String?
     defer {
@@ -492,11 +578,15 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
       if let target = pendingTurn {
         pendingTurn = nil
         _ = try await native("begin")
+        guard drainGeneration == webGeneration else { return }
         _ = try await native("restore", ["page": target.metadata])
+        guard drainGeneration == webGeneration else { return }
         _ = try await native("finish", ["commit": true])
+        guard drainGeneration == webGeneration else { return }
         dirty = true
       }
       while !pending.isEmpty {
+        guard drainGeneration == webGeneration else { return }
         let message = pending.removeFirst()
         let type = message["type"] as? String ?? ""
         if type == "reader:open" { appliedCurl = nil }
@@ -510,12 +600,14 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
           guard let receipt = try await native("navigate", ["command": command]) as? [String: Any] else {
             throw NSError(domain: "ShudengEpub", code: 4, userInfo: [NSLocalizedDescriptionKey: "引用位置未能确认"])
           }
+          guard drainGeneration == webGeneration else { return }
           navigationReceipts.append(receipt)
           inFlightNavigation = nil
           continue
         }
         let script = "window.__readerHost(\(try jsonString(message))); true;"
         _ = try await web.evaluateJavaScript(script)
+        guard drainGeneration == webGeneration else { return }
       }
       guard ready else { return }
       let curlEnabled = wantsCurl && !UIAccessibility.isReduceMotionEnabled
@@ -532,6 +624,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
         dirty = false
       }
     } catch {
+      if drainGeneration != webGeneration { return }
       if let operationID = inFlightNavigation { navigationReceipts.append(["operationId": operationID, "status": "failed"]) }
       navigationReceipts = navigationReceipts.map { receipt in
         ["operationId": receipt["operationId"] ?? "", "status": "failed", "message": error.localizedDescription]

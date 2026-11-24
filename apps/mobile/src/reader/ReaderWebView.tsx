@@ -83,6 +83,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
   const sentAnnotations = useRef(new Map<string, string>());
   const sentPreferences = useRef<{ theme: 'light' | 'dark'; fontSize: number; flow?: 'paginated' | 'scrolled'; spacing?: ReaderSpacing } | null>(null);
   const initializedBook = useRef<string | null>(null);
+  const restartLocation = useRef<string | null>(null);
   const nativeCommandId = useRef(0);
   const nativeAcknowledgedId = useRef(0);
   const [nativeCommands, setNativeCommands] = useState<readonly { readonly id: number; readonly message: object }[]>([]);
@@ -151,7 +152,8 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
     if (openSent.current || !hasSource || !openOverride) return;
     if (fileUri && !archive) return;
     openSent.current = true;
-    const payload = { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, ...('dataBase64' in openOverride ? { dataBase64: openOverride.dataBase64 } : { archive }), mimeType: openOverride.mimeType, theme, fontSize, flow: engineFlow, ...(initialLocation ? { initialLocation } : {}) } };
+    const location = restartLocation.current ?? initialLocation;
+    const payload = { type: 'reader:open', payload: { format: openOverride.format, url: `inline://${openOverride.format}`, title: openOverride.title, ...('dataBase64' in openOverride ? { dataBase64: openOverride.dataBase64 } : { archive }), mimeType: openOverride.mimeType, theme, fontSize, flow: engineFlow, ...(location ? { initialLocation: location } : {}) } };
     const spacing = { letterSpacing, lineSpacing };
     const isEpub = payload.payload.format === 'epub';
     const opening = { ...payload, payload: { ...payload.payload, selectionActionsEnabled, ...(isEpub ? { spacing } : {}) } };
@@ -257,6 +259,7 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
     initializedBook.current = bookId;
     setSelection(null);
     openSent.current = false;
+    restartLocation.current = null;
     setReady(false);
     sentAnnotations.current.clear();
     sentPreferences.current = null;
@@ -270,7 +273,22 @@ export const ReaderWebView = memo(forwardRef<ReaderWebViewHandle, ReaderWebViewP
         onEpubEvent={({ nativeEvent }) => {
           const value: unknown = JSON.parse(nativeEvent.message);
           if (typeof value !== 'object' || value === null) return;
-          const native = value as { type?: string; payload?: { id?: number } };
+          const native = value as { type?: string; payload?: { id?: number; acknowledgedCommandId?: number; initialLocation?: string } };
+          if (native.type === 'native:restarting') {
+            eventHandler.current({ type: 'restarting' });
+            restartLocation.current = typeof native.payload?.initialLocation === 'string' && native.payload.initialLocation
+              ? native.payload.initialLocation
+              : null;
+            const acknowledged = native.payload?.acknowledgedCommandId;
+            if (typeof acknowledged === 'number' && acknowledged > nativeAcknowledgedId.current) nativeAcknowledgedId.current = acknowledged;
+            setNativeCommands([]);
+            openSent.current = false;
+            setReady(false);
+            setSelection(null);
+            sentAnnotations.current.clear();
+            sentPreferences.current = null;
+            return;
+          }
           if (native.type === 'native:loaded') {
             const owner = archiveOwner.current;
             if (owner && owner.archive.sessionID === archive?.sessionID) owner.nativeOwnsClose = true;

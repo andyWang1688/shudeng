@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import WebKit
 
 // Browser/UI boundary substitutes. Production queue, schedule, drain, mode and
 // attach/remove bodies are inserted verbatim by the runner before execution.
@@ -40,6 +41,7 @@ final class ResourceScheme {
 }
 @MainActor final class WebView: UIView {
   var scripts: [String] = []
+  var loadCount = 0
   var failNextEvaluation = false
   var onEvaluation: ((String) -> Void)?
   func evaluateJavaScript(_ script: String) async throws -> Any? {
@@ -51,7 +53,7 @@ final class ResourceScheme {
     onEvaluation?(script)
     return nil
   }
-  func load(_ request: URLRequest) {}
+  func load(_ request: URLRequest) { loadCount += 1 }
 }
 @MainActor final class PresentationHost {
   let view = UIView()
@@ -115,7 +117,7 @@ extension PresentationHost {
   }
   func resetTrace() {
     emitted.removeAll(); nativeCalls.removeAll(); web.scripts.removeAll()
-    view.additions = 0; view.layouts = 0; web.removals = 0
+    view.additions = 0; view.layouts = 0; web.removals = 0; web.loadCount = 0
   }
   var acknowledgement: Int? { (emitted.last?["payload"] as? [String: Any])?["id"] as? Int }
   var completedNavigationCount: Int { emitted.filter { $0["type"] as? String == "reader:navigated" }.count }
@@ -129,6 +131,64 @@ extension PresentationHost {
 }
 
 @MainActor func exercisePresentation() async {
+  await run("web content termination reloads in place and reports the latest reading position") {
+    let host = PresentationHost()
+    host.load("<html>reader</html>")
+    host.resetTrace()
+    host.rememberProgress([
+      "type": "reader:progress",
+      "payload": [
+        "format": "epub",
+        "fraction": 0.42,
+        "locator": ["type": "epub", "cfi": "epubcfi(/6/24!/4/2/2:5)"],
+      ],
+    ])
+    host.recoverTerminatedWebContent()
+    check(host.web.loadCount == 1, "terminated web content was not reloaded")
+    check(host.emitted.count == 1, "recovery must emit exactly one native event")
+    check(host.emitted.first?["type"] as? String == "native:restarting", "recovery did not reset the TypeScript bridge")
+    let payload = host.emitted.first?["payload"] as? [String: Any]
+    check(payload?["initialLocation"] as? String == "epubcfi(/6/24!/4/2/2:5)", "recovery lost the latest reading position")
+    check(!host.emitted.contains { $0["type"] as? String == "reader:error" }, "recovery presented a terminal reader error")
+  }
+
+  await run("a repeated web content termination stops after one automatic recovery") {
+    let host = PresentationHost()
+    host.load("<html>reader</html>")
+    host.resetTrace()
+    host.recoverTerminatedWebContent()
+    check(host.web.loadCount == 1, "first termination must reload once")
+    host.resetTrace()
+    host.recoverTerminatedWebContent()
+    check(host.web.loadCount == 0, "a repeated termination must not reload in an endless loop")
+    check(host.emitted.first?["type"] as? String == "reader:error", "repeated termination must expose the fallback error")
+  }
+
+  await run("background web content termination waits for the app to become active") {
+    let host = PresentationHost()
+    host.load("<html>reader</html>")
+    host.resetTrace()
+    host.applicationWillResignActive()
+    host.recoverTerminatedWebContent()
+    check(host.web.loadCount == 0, "background recovery must not start a new WebKit process")
+    check(host.emitted.isEmpty, "background recovery must not flash a bridge reset")
+    host.applicationDidBecomeActive()
+    check(host.web.loadCount == 1, "foregrounding must reload the terminated reader")
+    check(host.emitted.first?["type"] as? String == "native:restarting", "foregrounding must reset the TypeScript bridge")
+  }
+
+  await run("expected web content termination and cancellation do not replace recovery with an error") {
+    let host = PresentationHost()
+    host.load("<html>reader</html>")
+    host.resetTrace()
+    host.recoverTerminatedWebContent()
+    host.handleNavigationFailure(NSError(domain: WKErrorDomain, code: WKError.webContentProcessTerminated.rawValue))
+    host.handleNavigationFailure(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+    check(host.failures.isEmpty, "expected recovery interruptions surfaced as product errors: \(host.failures)")
+    host.handleNavigationFailure(NSError(domain: "TestNavigation", code: 1, userInfo: [NSLocalizedDescriptionKey: "real failure"]))
+    check(host.failures == ["real failure"], "unexpected navigation failures must remain visible")
+  }
+
   await run("empty native envelopes acknowledge receipt without starting presentation work") {
     let host = PresentationHost()
     host.submit("[]")

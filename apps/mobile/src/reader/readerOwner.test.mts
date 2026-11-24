@@ -190,6 +190,20 @@ test("reading progress updates the saved location without rerendering the EPUB i
   } finally { await h.unmount(); }
 });
 
+test("a WebKit restart clears ready so a second failure exposes the blocking retry state", async () => {
+  const h = await mount({}, []);
+  try {
+    h.state.readerRef.current = { requestContents() {} };
+    await h.act(() => h.state.onReaderEvent({ type: "ready" }));
+    assert.equal(h.state.readerReady, true);
+    await h.act(() => h.state.onReaderEvent({ type: "restarting" }));
+    assert.equal(h.state.readerReady, false);
+    assert.equal(h.state.readerError, null);
+    await h.act(() => h.state.onReaderEvent({ type: "error", message: "恢复失败" }));
+    assert.equal(h.state.readerError, "恢复失败");
+  } finally { await h.unmount(); }
+});
+
 test("EPUB progress received before ready is preserved when the first ready reader flushes", async () => {
   const writes: any[] = [];
   const h = await mount({ saveBookProgress: async (...args: any[]) => writes.push(args) }, []);

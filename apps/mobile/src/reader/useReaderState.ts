@@ -269,6 +269,16 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
         setReaderError(null);
         readerRef.current?.requestContents();
         break;
+      case 'restarting':
+        readyRef.current = false;
+        setReaderReady(false);
+        setReaderError(null);
+        setSelection(null);
+        setContentsLoaded(false);
+        updateBookmarkVisibility(false);
+        for (const [operationId, resolve] of navigationRequests.current) resolve({ operationId, status: 'failed', message: '阅读器正在恢复' });
+        navigationRequests.current.clear();
+        break;
       case 'selection': {
         if (!selectionActionsEnabled.current) { setSelection(null); break; }
         const locator = storedLocatorFromReaderLocator(event.locator);
