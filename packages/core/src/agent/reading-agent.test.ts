@@ -108,6 +108,47 @@ describe('reading Agent official infrastructure', () => {
     expect(() => createChatModel({ provider: 'openai', model: 'test', apiKey: 'test', baseUrl: 'invalid-url', webSearch: { enabled: true } })).toThrow('AI 服务地址无效');
   });
 
+  it('tells an enabled DeepSeek run that provider web search is available', async () => {
+    const base = createScriptedModel([
+      { chunks: [{ text: JSON.stringify({ answer: '可以联网搜索。', citations: [] }) }] },
+    ]);
+    const model = {
+      ...base,
+      webSearch: resolveWebSearchPolicy(
+        'deepseek',
+        'https://api.deepseek.com/v1',
+        { enabled: true },
+        'deepseek-flash',
+      ),
+    };
+    const session = runBookAgent({ model, source: source(), book, question: '你能联网搜索不' });
+    await collect(session);
+    const prompts = JSON.stringify((model.langChainModel as ScriptedChatModel).calls[0]);
+    expect(prompts).toContain('本轮已启用服务商内置联网搜索');
+    expect(prompts).toContain('不要回答没有可用的联网搜索工具');
+  });
+
+  it('tells a DeepSeek chat model the exact reason search is unavailable', async () => {
+    const base = createScriptedModel([
+      { chunks: [{ text: JSON.stringify({ answer: '需要切换模型。', citations: [] }) }] },
+    ]);
+    const model = {
+      ...base,
+      webSearch: resolveWebSearchPolicy(
+        'deepseek',
+        'https://api.deepseek.com/v1',
+        { enabled: true },
+        'deepseek-chat',
+      ),
+    };
+    const session = runBookAgent({ model, source: source(), book, question: '你能联网搜索不' });
+    await collect(session);
+    const prompts = JSON.stringify((model.langChainModel as ScriptedChatModel).calls[0]);
+    expect(prompts).toContain('本轮未启用服务商内置联网搜索');
+    expect(prompts).toContain('需使用 deepseek-flash');
+    expect(prompts).toContain('不要声称可以联网');
+  });
+
   it('does not send a server search tool or switch protocols when networking is disabled', async () => {
     const requests: { url: string; body: Record<string, unknown> }[] = [];
     const completion = { id: 'chat_1', object: 'chat.completion.chunk', created: 1, model: 'test-model',

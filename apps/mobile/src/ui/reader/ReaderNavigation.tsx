@@ -5,10 +5,14 @@ import {
   StyleSheet,
   Text,
   View,
+  type StyleProp,
+  type ViewStyle,
 } from "react-native";
+import { SegmentedControl } from "@expo/ui/community/segmented-control";
 import { BottomSheetTextInput } from "@gorhom/bottom-sheet";
 import { Search, Trash2 } from "lucide-react-native";
 import { usePalette, type Palette } from "../theme";
+import { useAppearance } from "../appearance";
 
 /** Shared presentation only; EPUB and PDF keep their own queries and source locations. */
 export function ReaderNavigationTabs<T extends string>({
@@ -16,38 +20,34 @@ export function ReaderNavigationTabs<T extends string>({
   items,
   onChange,
   disabled = false,
+  accessibilityLabel = "书内导航",
+  style,
 }: {
   readonly value: T;
   readonly items: readonly { readonly value: T; readonly label: string }[];
   readonly onChange: (value: T) => void;
   readonly disabled?: boolean;
+  readonly accessibilityLabel?: string;
+  readonly style?: StyleProp<ViewStyle>;
 }) {
-  const palette = usePalette();
-  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const { resolvedMode } = useAppearance();
   return (
-    <View style={styles.tabs} accessibilityRole="tablist">
-      {items.map((item) => (
-        <Pressable
-          key={item.value}
-          accessibilityRole="tab"
-          accessibilityState={{ selected: item.value === value, disabled }}
-          disabled={disabled}
-          onPress={() => onChange(item.value)}
-          style={[styles.tab, item.value === value && styles.activeTab]}
-        >
-          <Text
-            style={[
-              styles.tabText,
-              item.value === value && styles.activeTabText,
-            ]}
-          >
-            {item.label}
-          </Text>
-        </Pressable>
-      ))}
-    </View>
+    <SegmentedControl
+      style={[segmentLayout, style]}
+      accessibilityLabel={accessibilityLabel}
+      values={items.map((item) => item.label)}
+      selectedIndex={items.findIndex((item) => item.value === value)}
+      appearance={resolvedMode}
+      enabled={!disabled}
+      onChange={({ nativeEvent: { selectedSegmentIndex } }) => {
+        const selected = items[selectedSegmentIndex];
+        if (!disabled && selected && selected.value !== value) onChange(selected.value);
+      }}
+    />
   );
 }
+
+const segmentLayout = { marginHorizontal: 24, marginBottom: 12 };
 
 export function ReaderSearchField({
   value,
@@ -156,24 +156,6 @@ export function ReaderNavigationEmpty({
 
 function makeStyles(palette: Palette) {
   return StyleSheet.create({
-    tabs: {
-      flexDirection: "row",
-      marginHorizontal: 24,
-      marginBottom: 12,
-      gap: 6,
-      padding: 4,
-      backgroundColor: palette.paperDeep,
-      borderRadius: 15,
-    },
-    tab: {
-      flex: 1,
-      minHeight: 38,
-      alignItems: "center",
-      justifyContent: "center",
-      borderRadius: 11,
-    },
-    activeTab: { backgroundColor: palette.paper },
-    tabText: { color: palette.ink3, fontSize: 15 },
     activeTabText: { color: palette.ink, fontWeight: "600" },
     searchBox: {
       marginHorizontal: 24,

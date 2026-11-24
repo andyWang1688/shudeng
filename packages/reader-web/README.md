@@ -22,6 +22,8 @@ build:inline 由[脚本](scripts/build-inline.mjs)生成 dist-inline/index.html�
 
 固定 fork 另应用 [pnpm 补丁](../../patches/foliate-js@0.0.0.patch)：上下滚动期间用真实触摸状态延后位置测量，松手或取消后补报最终位置；无触摸的连续滚动仍保留周期更新。滚动位移、惯性、排版与邻章预载继续由引擎处理。补丁随锁文件安装，升级引擎时须复核补丁与 [调度回归](scripts/foliate-scroll-scheduling.test.mjs)，不能直接沿用同为 `0.0.0` 的版本号。
 
+中日韩出版物的可重排章节使用书内段距与缩进。未带出版社样式的章节通过 Foliate 的加载事件接入仓库已有的 [Readium CSS 默认样式](../../Vendor/Readium/Sources/Navigator/EPUB/Assets/Static/readium-css/cjk-horizontal/ReadiumCSS-default.css)。字号、字距、行距与主题仍由阅读设置控制。Readium 的许可随移动端发布包分发。
+
 ## 接入边界
 
 - 消息与数据字段以 [protocol.ts](src/protocol.ts)、[bridge.ts](src/bridge.ts) 及移动端 [ReaderWebView](../../apps/mobile/src/reader/ReaderWebView.tsx) 为准，不在 README 保存第二份协议代码。

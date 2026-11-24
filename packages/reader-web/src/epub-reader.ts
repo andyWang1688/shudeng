@@ -14,6 +14,7 @@ import { drawNoteWave } from './note-wave'
 import { readiumSelection, rangeFromReadium } from './epub-selection'
 import { visibleBookmark, bookmarkRange, rangeIsVisible } from './epub-bookmarks'
 import { EPUB_GUTTER, epubSpacing, epubTypography, prepareTypographyDocument } from './epub-typography'
+import readiumCjkDefaults from '../../../Vendor/Readium/Sources/Navigator/EPUB/Assets/Static/readium-css/cjk-horizontal/ReadiumCSS-default.css?raw'
 import { restoreTerminalLayout, stabilizeEmptyAnchorBox, stabilizeEmptyTerminalBlock, terminalRecoveryForAnchor, visibleDocumentViewport } from './epub-viewport'
 
 export interface NativePage {
@@ -129,7 +130,7 @@ export class EpubReader {
     // body language can take priority over the publication's default language.
     this.view.renderer?.addEventListener('load', event => {
       const detail = (event as CustomEvent<{ doc: Document }>).detail
-      const restoreLanguage = prepareTypographyDocument(detail.doc, this.view.book?.metadata?.language, this.view.isFixedLayout)
+      const restoreLanguage = prepareTypographyDocument(detail.doc, this.view.book?.metadata?.language, this.view.isFixedLayout, readiumCjkDefaults)
       if (restoreLanguage) this.view.addEventListener('load', restoreLanguage, { once: true })
     }, { capture: true })
     this.view.renderer?.addEventListener('relocate', event => {

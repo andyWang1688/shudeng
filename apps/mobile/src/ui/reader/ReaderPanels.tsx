@@ -10,7 +10,13 @@ import type {
 import { usePalette, type Palette } from "../theme";
 import { useAppearance } from "../appearance";
 import { ReaderPanel } from "./ReaderPanel";
+import { ReaderNavigationTabs } from "./ReaderNavigation";
 import { ReaderSpacingControls, ReaderValueStepper } from "./ReaderSpacingControls";
+
+const readerThemes = [
+  { value: "light", label: "明亮" },
+  { value: "dark", label: "深色" },
+] as const;
 
 /** Every change is applied to the actual book; closing only dismisses the controls. */
 export function ReaderSettingsPanel({
@@ -122,27 +128,16 @@ export function ReaderSettingsPanel({
             )}
           </View>
           <Text style={styles.section}>主题</Text>
-          <View style={styles.segment}>
-            {(["light", "dark"] as const).map((theme) => (
-              <Pressable
-                key={theme}
-                accessibilityRole="button"
-                accessibilityState={{ selected: preferences.theme === theme }}
-                disabled={blocked}
-                onPress={() => {
-                  if (canInteract()) void apply({ theme });
-                }}
-                style={[
-                  styles.segmentItem,
-                  preferences.theme === theme && styles.segmentSelected,
-                ]}
-              >
-                <Text style={styles.text}>
-                  {theme === "light" ? "明亮" : "深色"}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          <ReaderNavigationTabs
+            accessibilityLabel="阅读主题"
+            style={styles.themeControl}
+            value={preferences.theme}
+            items={readerThemes}
+            disabled={blocked}
+            onChange={(theme) => {
+              if (canInteract()) void apply({ theme });
+            }}
+          />
         </BottomSheetScrollView>
       )}
     </ReaderPanel>
@@ -296,6 +291,7 @@ function makeStyles(palette: Palette) {
       color: palette.ink2,
     },
     settingsContent: { paddingBottom: 36 },
+    themeControl: { marginHorizontal: 20, marginTop: 8, marginBottom: 0 },
     typography: { marginHorizontal: 20 },
     disabled: { opacity: 0.35 },
     highlightContent: { paddingHorizontal: 26, paddingBottom: 32, gap: 20 },

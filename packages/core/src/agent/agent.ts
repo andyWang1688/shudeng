@@ -184,6 +184,14 @@ function failureCode(error: unknown): AgentFailureCode {
   return 'invalid-response';
 }
 
+function withSystemGuidance(message: SystemMessage | undefined, guidance: string): SystemMessage | undefined {
+  if (!message || !guidance || contentText(message.content).includes(guidance)) return message;
+  const blocks = Array.isArray(message.content)
+    ? message.content
+    : [{ type: 'text' as const, text: String(message.content) }];
+  return new SystemMessage({ content: [...blocks, { type: 'text', text: guidance }] });
+}
+
 function extractMessagesFromUpdate(payload: unknown): MessageLike[] {
   const collected: MessageLike[] = [];
   const visit = (value: unknown): void => {
@@ -360,7 +368,8 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
     wrapModelCall: async (request, handler) => {
       webSearch.assertWithinBudget();
       if (Date.now() - runStartedAt > (options.runTimeoutMs ?? 240000)) throw new Error('本次问答超时，请稍后重试。');
-      const { systemMessage } = request;
+      const systemMessage = withSystemGuidance(request.systemMessage, webSearch.systemGuidance);
+      if (!systemMessage) throw new Error('阅读 Agent 缺少系统提示');
       const prepared = context ? await context.prepare(systemMessage, request.messages) : undefined;
       if (controller.signal.aborted) {
         const error = new Error('aborted');

@@ -27,8 +27,6 @@ export function epubTypography(size: number, theme: ReaderTheme, publication: { 
   const cjk = /^(ja|ko)$/i.test(language ?? '') || /^zh(-|_|$)/i.test(language ?? '')
   // Readium's CJK/RTL stylesheet variants omit automatic justification hyphens.
   const automaticHyphens = !cjk && !rightToLeft
-  // Both Readium CJK variants leave authored paragraph indentation untouched.
-  const paragraphIndent = cjk ? '' : 'text-indent: 2rem !important;'
   const { letterSpacing, lineHeight } = epubSpacing(spacing)
   const defaults = `/* shudeng-reader-typography */
     html { text-rendering: optimizeLegibility; -webkit-text-size-adjust: 100%; }
@@ -38,23 +36,18 @@ export function epubTypography(size: number, theme: ReaderTheme, publication: { 
     h1, h2, h3, h4, h5, h6, dt, figcaption, pre, caption, address, center, code, var {
       -webkit-hyphens: none; hyphens: none; }
     :lang(zh), :lang(ja), :lang(ko) { overflow-wrap: break-word; line-break: strict; }
+    ${cjk ? `:root { --RS__baseFontFamily: "PingFang SC", "Hiragino Sans", sans-serif; --RS__monospaceTf: ui-monospace, monospace; }` : `
     :root[data-shudeng-unstyled] h1, :root[data-shudeng-unstyled] h2,
     :root[data-shudeng-unstyled] h3, :root[data-shudeng-unstyled] h4,
     :root[data-shudeng-unstyled] h5, :root[data-shudeng-unstyled] h6 {
       font-family: "Iowan Old Style", "Sitka Text", Palatino, "Book Antiqua", serif;
       text-align: start; margin-block: 1.5rem;
     }
-    :root[data-shudeng-unstyled]:lang(zh) :is(h1,h2,h3,h4,h5,h6) {
-      font-family: "方体", "PingFang SC", "黑体", "Heiti SC", "Microsoft JhengHei UI", "Microsoft JhengHei", Roboto, Noto, "Noto Sans CJK SC", sans-serif;
-    }
     :root[data-shudeng-unstyled] h1 { margin-block: 3rem; }
     :root[data-shudeng-unstyled] h2 { margin-block: 3rem 1.5rem; }
     :root[data-shudeng-unstyled] h6 { margin-bottom: 0; }
-    :root[data-shudeng-unstyled]:is(:lang(zh),:lang(ja),:lang(ko)) :is(h1,h2,h3) { text-align: center; }
     :root[data-shudeng-unstyled] body { text-justify: inter-character; }
-    :root[data-shudeng-unstyled]:is(:lang(zh),:lang(ja),:lang(ko)) body { font-size: 87.5%; }${cjk ? `
-    :root[data-shudeng-unstyled] p { text-indent: 1em; }
-    :root[data-shudeng-unstyled]:lang(zh) p { text-indent: 2em; }` : ''}
+    `}
   `
   const overrides = `/* shudeng-reader-typography */
     :root { --theme-bg-color: ${paper}; background: ${paper} !important; color: ${ink} !important;
@@ -67,7 +60,7 @@ export function epubTypography(size: number, theme: ReaderTheme, publication: { 
     :root body, :root p, :root li, :root div { line-height: inherit; }
     :root body, :root p, :root li { text-align: justify !important; }
     ${automaticHyphens ? ':root body { -webkit-hyphens: auto; hyphens: auto; }' : ''}
-    :root :is(pre,${PROSE_BLOCKS}) { font-size: 1rem !important; }
+    :root :is(pre,${cjk ? 'p,li,div,dd' : PROSE_BLOCKS}) { font-size: 1rem !important; }
     :root:not([data-shudeng-unstyled]) body,
     :root :is(${INLINE_PROSE})${OUTSIDE_SPECIAL_TEXT} { font-size: inherit !important; }
     ${lineHeight === undefined ? '' : `
@@ -77,7 +70,7 @@ export function epubTypography(size: number, theme: ReaderTheme, publication: { 
       :root :is(body,p,li,div,dt,dd,blockquote,td,th,${INLINE_PROSE})${OUTSIDE_SPECIAL_TEXT} { letter-spacing: ${letterSpacing} !important; }
       :root :is(pre,code,math,svg,rt,rp) { letter-spacing: normal; }
     `}
-    :root p { ${paragraphIndent} margin-top: 1.5rem !important; margin-bottom: 1.5rem !important; }
+    ${cjk ? '' : ':root p { text-indent: 2rem !important; margin-top: 1.5rem !important; margin-bottom: 1.5rem !important; }'}
     ::selection { background: ${selection} !important; color: ${ink} !important; }
   `
   return [defaults, overrides]
@@ -85,7 +78,7 @@ export function epubTypography(size: number, theme: ReaderTheme, publication: { 
 
 /** Run before Foliate fills html.lang, retaining Native's body-language priority.
  * Foliate's two empty style ports already exist; authored CSS suppresses defaults. */
-export function prepareTypographyDocument(doc: Document, publicationLanguage?: string | readonly string[], fixedLayout = false): (() => void) | undefined {
+export function prepareTypographyDocument(doc: Document, publicationLanguage?: string | readonly string[], fixedLayout = false, readiumCjkDefaults?: string): (() => void) | undefined {
   const language = typeof publicationLanguage === 'string' ? publicationLanguage : publicationLanguage?.[0]
   const cjk = /^(ja|ko)$/i.test(language ?? '') || /^zh(-|_|$)/i.test(language ?? '')
   const root = doc.documentElement
@@ -101,7 +94,16 @@ export function prepareTypographyDocument(doc: Document, publicationLanguage?: s
   const authored = doc.querySelector('link, [style]') !== null
     || Array.from(doc.querySelectorAll('style')).some(style => style !== doc.head?.firstElementChild
       && style !== doc.head?.lastElementChild)
-  if (!authored) doc.documentElement.setAttribute('data-shudeng-unstyled', '')
+  if (!authored) {
+    root.setAttribute('data-shudeng-unstyled', '')
+    if (cjk && !fixedLayout && readiumCjkDefaults && doc.head) {
+      const style = doc.createElement('style')
+      // Use Readium's typography defaults without its separate pagination model.
+      style.textContent = readiumCjkDefaults
+      // Place it after Foliate's first style so its defaults retain precedence.
+      doc.head.firstElementChild?.after(style)
+    }
+  }
   // Inline !important declarations win over the injected reader stylesheet.
   // Update only the rendered document; the EPUB and its text anchors stay intact.
   if (!fixedLayout) normalizeInlineFontSizes(doc)

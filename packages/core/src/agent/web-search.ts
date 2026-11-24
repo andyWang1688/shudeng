@@ -72,6 +72,19 @@ export class ProviderWebSearch {
   get allSources(): WebSource[] { return [...this.sources.values()]; }
   get remaining(): number { return Math.max(0, this.policy.maxUses - this.calls.size); }
   get failedWithoutBudgetViolation(): boolean { return this.unavailable && !this.budgetError; }
+  get systemGuidance(): string {
+    if (this.policy.provider && !this.unavailable) {
+      return '本轮已启用服务商内置联网搜索。读者询问能否联网时，明确回答可以；不要回答没有可用的联网搜索工具。' +
+        '需要网页事实、时效信息或用户明确要求联网时，实际使用搜索工具核实；普通书籍解释无需强行搜索。';
+    }
+    if (this.state.status === 'unsupported') {
+      return '本轮未启用服务商内置联网搜索：' + (this.state.message ?? '当前服务不支持') + '。不要声称可以联网。';
+    }
+    if (this.state.status === 'failed') {
+      return '本轮联网搜索不可用或未完成。不要声称已经查到网页；没有实际网页来源时，明确说明本次未能联网。';
+    }
+    return '';
+  }
 
   /** Call outside SDK callbacks, whose errors may otherwise be logged and swallowed. */
   assertWithinBudget(): void {

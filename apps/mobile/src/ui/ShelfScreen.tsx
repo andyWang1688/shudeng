@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActionSheetIOS,
   ActivityIndicator,
   FlatList,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -79,6 +81,7 @@ export function ShelfScreen() {
   const [showingRemoved, setShowingRemoved] = useState(false);
   const [bookMenu, setBookMenu] = useState<ShelfBookRecord | null>(null);
   const menuOwner = useRef<ShelfBookRecord | null>(null);
+  const nativeMenu = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<{
@@ -157,6 +160,7 @@ export function ShelfScreen() {
       return () => {
         focused.current = false;
         menuOwner.current = null;
+        ++nativeMenu.current;
         setBookMenu(null);
         ++loadGeneration.current;
       };
@@ -255,11 +259,29 @@ export function ShelfScreen() {
     if (
       !focused.current ||
       importing ||
+      importController.current ||
       removalInFlight.current ||
       removalRequest ||
+      removalFailure ||
       importNotice
     )
       return;
+    if (Platform.OS === "ios") {
+      const request = ++nativeMenu.current;
+      ActionSheetIOS.showActionSheetWithOptions({
+        title: book.title,
+        options: ["查看标注", book.removed ? "彻底删除书籍及记录" : "移除原书", "取消"],
+        destructiveButtonIndex: 1,
+        cancelButtonIndex: 2,
+      }, (index) => {
+        if (!mounted.current || !focused.current || request !== nativeMenu.current ||
+            importController.current || removalInFlight.current) return;
+        ++nativeMenu.current;
+        if (index === 0) openAnnotations(book);
+        if (index === 1) askDelete(book);
+      });
+      return;
+    }
     menuOwner.current = book;
     setBookMenu(book);
   };
@@ -377,7 +399,7 @@ export function ShelfScreen() {
         </Pressable>
       </View>
     ),
-    [cardWidth, palette.line, styles, openBook, askDelete],
+    [cardWidth, palette.line, styles, openBook, showBookMenu],
   );
 
   const listHeader = (

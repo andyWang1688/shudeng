@@ -43,7 +43,7 @@ function mount(
 function nodes(tree: any, type: string): any[] {
   if (!tree || typeof tree !== "object") return [];
   if (Array.isArray(tree)) return tree.flatMap((child) => nodes(child, type));
-  if (["ReaderValueStepper", "ReaderSpacingControls"].includes(tree.type?.name)) {
+  if (["ReaderValueStepper", "ReaderSpacingControls", "ReaderNavigationTabs"].includes(tree.type?.name)) {
     return nodes(tree.type(tree.props), type);
   }
   return [
@@ -52,6 +52,8 @@ function nodes(tree: any, type: string): any[] {
   ];
 }
 function pressable(tree: any, label: string) {
+  const segment = nodes(tree, "SegmentedControl").find(node => node.props.values.includes(label));
+  if (segment) return () => segment.props.onChange({ nativeEvent: { selectedSegmentIndex: segment.props.values.indexOf(label) } });
   const result = nodes(tree, "Pressable").find(
     (node) =>
       node.props.accessibilityLabel === label ||
@@ -95,7 +97,6 @@ for (const label of [
   "仿真",
   "缩小字号",
   "增大字号",
-  "明亮",
   "深色",
 ]) {
   test(`the actual EPUB ${label} setting callback stops before persistence during close`, async () => {

@@ -9,6 +9,8 @@ import * as bookmarks from '../src/epub-bookmarks.ts';
 
 const requireHere = createRequire(import.meta.url);
 const ts = requireHere('typescript');
+export const readiumCjkPath = '../../../Vendor/Readium/Sources/Navigator/EPUB/Assets/Static/readium-css/cjk-horizontal/ReadiumCSS-default.css';
+export const readiumCjkDefaults = readFileSync(new URL(readiumCjkPath, import.meta.url), 'utf8');
 function loadSource(path, imports) {
   const source = readFileSync(new URL(path, import.meta.url), 'utf8');
   const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText;
@@ -72,6 +74,7 @@ export function readerHarness({ language, loadDocument, fixedLayout, onProgress 
     './foliate-resource-loader': {}, './epub-sandbox': { securePublication() {} }, './bridge': { bridge: { send: onMessage } },
     './epub-location': location, './note-wave': {}, './epub-selection': selection, './epub-bookmarks': bookmarks,
     './epub-typography': { epubSpacing, epubTypography, prepareTypographyDocument, EPUB_GUTTER },
+    [readiumCjkPath + '?raw']: readiumCjkDefaults,
     '@shudeng/core/domain/reader-spacing': { defaultReaderSpacing, normalizeReaderSpacing },
     './epub-viewport': viewport,
   });

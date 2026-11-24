@@ -130,6 +130,7 @@ function generate(app, sourceMapPath) {
   sections.push(read(join(ROOT, 'scripts/rn-licenses/zip-js-2.7.52-inflate-notice.txt')));
   const fflateLicense = join(MOBILE, 'node_modules/fflate/LICENSE');
   sections.push('=== Foliate vendored fflate ===\n' + read(fflateLicense));
+  sections.push('=== Readium CSS (vendored with Readium Swift 3.11.0) ===\n' + read(join(ROOT, 'Vendor/Readium/LICENSE')));
   const text = sections.join('\n\n') + '\n';
   const manifest = { format: 1, generator: 'scripts/package-rn-notices.mjs',
     metroSourceMapSha256: sha256(readFileSync(sourceMapPath)),

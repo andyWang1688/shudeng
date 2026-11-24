@@ -45,7 +45,7 @@ export function AssistantWebSources({
   const status = turn.webSearchStatus;
   if (
     !sources.length &&
-    (!status || status.status === "disabled" || status.status === "enabled")
+    (!status || status.status === "disabled")
   )
     return null;
   return (

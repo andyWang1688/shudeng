@@ -32,6 +32,8 @@ function settingControl(tree: any, label: string) {
 }
 
 function setting(tree: any, label: string) {
+  const segment = nodes(tree, "SegmentedControl").find(node => node.props.values.includes(label));
+  if (segment) return () => segment.props.onChange({ nativeEvent: { selectedSegmentIndex: segment.props.values.indexOf(label) } });
   return settingControl(tree, label).onPress;
 }
 

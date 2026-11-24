@@ -48,6 +48,7 @@ function shelf(
     initialize?: () => Promise<any>;
     migrate?: () => Promise<any>;
     removeBook?: (bookId: string) => Promise<void>;
+    platform?: "ios" | "web";
   } = {},
 ) {
   const h = hooks(),
@@ -55,6 +56,11 @@ function shelf(
     locks: boolean[] = [];
   let focused = true;
   const native = nativePorts([]);
+  native.Platform = { OS: options.platform ?? "web" };
+  const actionSheets: { choices: { options: string[]; destructiveButtonIndex: number }; select: (index: number) => void }[] = [];
+  native.ActionSheetIOS = {
+    showActionSheetWithOptions: (choices: typeof actionSheets[number]["choices"], select: (index: number) => void) => actionSheets.push({ choices, select }),
+  };
   native.useWindowDimensions = () => ({
     width: options.width ?? 390,
     height: 844,
@@ -120,6 +126,7 @@ function shelf(
     render: () => h.render(Screen),
     pushes,
     locks,
+    actionSheets,
     unmount: h.unmount,
     blur() {
       focused = false;
@@ -639,6 +646,36 @@ test("removed book opens its retained annotations while permanent deletion stays
   menu.props.actions[0].onPress();
   menu.props.actions[1].onPress();
   assert.equal(h.pushes.length, 1);
+  assert.equal(find(h.render(), "BookNotice"), undefined);
+  h.unmount();
+});
+
+test("iOS book menus share the selected book and keep removal behind confirmation", async () => {
+  const h = await ready({ platform: "ios" });
+  const card = () => find(h.render(), "FlatList").props.renderItem({ item: fixture[0] });
+  const show = () => find(card(), "Pressable").props.onLongPress();
+  nodes(card(), node => node.props?.accessibilityLabel === "海洋的更多操作")[0].props.onPress();
+  const more = h.actionSheets.at(-1)!;
+  assert.deepEqual(more.choices.options, ["查看标注", "移除原书", "取消"]);
+  assert.equal(more.choices.destructiveButtonIndex, 1);
+  more.select(0);
+  more.select(0);
+  assert.deepEqual(h.pushes, [{ pathname: "/book-annotations/[id]", params: { id: "sea" } }]);
+  show();
+  const context = h.actionSheets.at(-1)!;
+  assert.deepEqual(context.choices, more.choices);
+  context.select(1);
+  const confirm = find(h.render(), "BookNotice");
+  assert.ok(confirm);
+  show();
+  assert.equal(h.actionSheets.length, 2);
+  confirm.props.actions.find((action: any) => action.style === "cancel").onPress();
+  assert.equal(find(h.render(), "BookNotice"), undefined);
+  show();
+  const abandoned = h.actionSheets.at(-1)!;
+  h.blur();
+  h.render();
+  abandoned.select(1);
   assert.equal(find(h.render(), "BookNotice"), undefined);
   h.unmount();
 });

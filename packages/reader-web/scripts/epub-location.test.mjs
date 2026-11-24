@@ -5,7 +5,7 @@ import { indexedDocumentText, rangeAtIndexedOffset } from '../src/epub-indexed-r
 import { epubDocumentText } from '../../core/src/rag/epub-xml.ts'
 import { legacyIndexedDocumentText, legacyQuoteText } from './epub-mapping-oracle.mjs'
 import { mappingDocument } from './epub-test-dom.mjs'
-import { readerHarness, appHarness } from './epub-reader-test-harness.mjs'
+import { readerHarness, appHarness, readiumCjkDefaults } from './epub-reader-test-harness.mjs'
 import { epubTypography, prepareTypographyDocument } from '../src/epub-typography.ts'
 import { readFileSync } from 'node:fs'
 
@@ -23,7 +23,7 @@ test('CJK paragraph indentation follows both Readium stylesheet variants without
     for (const dir of ['ltr', 'rtl']) {
       const [, overrides] = epubTypography(18.5, 'light', { language, dir })
       assert.doesNotMatch(overrides, /text-indent\s*:/, language + '/' + dir + ' must not override or reset author indentation')
-      assert.match(overrides, /margin-top: 1\.5rem !important; margin-bottom: 1\.5rem !important;/, 'paragraph spacing is unchanged')
+      assert.doesNotMatch(overrides, /margin-(top|bottom): 1\.5rem !important/, 'leave paragraph spacing to the publisher or Readium')
     }
   }
 })
@@ -38,34 +38,28 @@ test('indentation uses the first publication language and preserves non-CJK beha
   }
 })
 
-test('only unstyled CJK documents receive Native default paragraph indentation by document language', () => {
+test('only unstyled reflowable CJK documents receive the bundled Readium defaults', async () => {
   for (const variant of ['cjk-horizontal', 'cjk-vertical']) {
     const nativeCSS = readFileSync(new URL('../../../Vendor/Readium/Sources/Navigator/EPUB/Assets/Static/readium-css/' + variant + '/ReadiumCSS-default.css', import.meta.url), 'utf8')
     assert.match(nativeCSS, /--RS__paraIndent: 1em;/)
     assert.match(nativeCSS, /:root:lang\(zh\)\s*\{\s*--RS__paraIndent: 2em;/)
     assert.match(nativeCSS, /p\s*\{[^}]*text-indent: var\(--RS__paraIndent\);/)
   }
-  for (const language of ['zh-CN', 'ja', 'ko', ['zh-CN', 'en']]) {
-    const [defaults] = epubTypography(18.5, 'light', { language })
-    const indentRules = Array.from(defaults.matchAll(/([^{}]+)\{([^{}]*text-indent\s*:[^{}]*)\}/g))
-    assert.deepEqual(indentRules.map(([, selector, declarations]) => [selector.trim(), declarations.trim()]), [
-      [':root[data-shudeng-unstyled] p', 'text-indent: 1em;'],
-      [':root[data-shudeng-unstyled]:lang(zh) p', 'text-indent: 2em;'],
-    ], 'defaults use the actual document root language, not a fixed metadata indent')
-  }
-  for (const language of ['en', 'ja-JP', 'ko-KR', undefined]) {
-    assert.doesNotMatch(epubTypography(18.5, 'light', { language })[0], /text-indent\s*:/, 'non-CJK defaults remain unchanged')
-  }
+  assert.match(readiumCjkDefaults, /--RS__paraSpacing: 0;/)
   for (const authored of ['none', 'link', 'inline', 'style']) {
-    const first = {}, last = {}, attributes = new Map()
-    const doc = {
-      head: { firstElementChild: first, lastElementChild: last },
-      documentElement: { setAttribute: (key, value) => attributes.set(key, value) },
-      querySelector: () => authored === 'link' || authored === 'inline' ? {} : null,
-      querySelectorAll: selector => selector === 'style' ? (authored === 'style' ? [first, {}, last] : [first, last]) : [],
-    }
-    prepareTypographyDocument(doc)
-    assert.equal(attributes.has('data-shudeng-unstyled'), authored === 'none', authored + ' author CSS gate')
+    const doc = typographyDocument({ lang: 'zh-CN' })
+    const { firstElementChild: before, lastElementChild: after } = doc.head
+    doc.querySelector = () => authored === 'link' || authored === 'inline' ? {} : null
+    doc.querySelectorAll = selector => selector === 'style' ? (authored === 'style' ? [before, {}, after] : [before, after]) : []
+    const { reader } = readerHarness({ language: 'zh-CN', loadDocument: doc })
+    await reader.open('fixture.epub', 'Fixture')
+    assert.equal(doc.documentElement.hasAttribute('data-shudeng-unstyled'), authored === 'none')
+    assert.deepEqual(doc.styles.map(style => style.textContent), authored === 'none' ? [readiumCjkDefaults] : [])
+  }
+  for (const [language, fixedLayout] of [['zh-CN', true], ['en', false]]) {
+    const doc = typographyDocument()
+    prepareTypographyDocument(doc, language, fixedLayout, readiumCjkDefaults)
+    assert.equal(doc.styles.length, 0)
   }
 })
 
@@ -82,10 +76,12 @@ function typographyDocument(rootLanguage = {}, bodyLanguage = {}, authored = fal
       removeAttribute: key => attributes.delete(key),
     }
   }
-  const first = {}, last = {}
+  const styles = []
+  const first = { after: style => styles.push(style) }, last = {}
   return {
     documentElement: element(rootLanguage), body: element(bodyLanguage),
     head: { firstElementChild: first, lastElementChild: last },
+    styles, createElement: () => ({}),
     querySelector: () => authored ? {} : null,
     querySelectorAll: selector => selector === 'style' ? [first, last] : [],
     addEventListener() {},

@@ -74,6 +74,7 @@ export function readerComponent(
   const palette = new Proxy({}, { get: (_target, key) => key });
   const jsx = (type: any, props: any) => ({ type, props });
   const mocks: Record<string, any> = {
+    "@expo/ui/community/segmented-control": { SegmentedControl: "SegmentedControl" },
     "@shudeng/core/domain/reader-spacing": { normalizeReaderSpacing, readerSpacingSettings },
     react: { ...hooks, useLayoutEffect: hooks.useEffect },
     "react/jsx-runtime": { jsx, jsxs: jsx },

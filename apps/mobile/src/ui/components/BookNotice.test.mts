@@ -103,6 +103,7 @@ function component(file: URL, overrides: Record<string, any> = {}) {
     },
     Easing: { ease: "ease", inOut: (value: any) => value },
     Platform: { OS: "ios" },
+    ActionSheetIOS: { showActionSheetWithOptions(_options: unknown, select: (index: number) => void) { select(1); } },
     Modal: "Modal",
     Pressable: "Pressable",
     Text: "Text",
@@ -442,17 +443,12 @@ async function shelf(removed: boolean, operation?: () => Promise<void>) {
   ui.render("ShelfScreen");
   await settle();
   const tree = ui.render("ShelfScreen");
-  const card = ofType(
-    ofType(tree, "FlatList")[0].props.renderItem({ item: fixture }),
-    "Pressable",
-  )[0];
+  const card = ofType(tree, "FlatList")[0].props.renderItem({ item: fixture });
   return { ui, calls, otherCalls, card, fixture };
 }
 
-function openRemoval(ui: ReturnType<typeof component>, card: any) {
-  card.props.onLongPress();
-  const menu = ofType(ui.render("ShelfScreen"), "BookActionSheet")[0];
-  menu?.props.actions.find((action: any) => action.key === "remove").onPress();
+function openRemoval(card: any) {
+  ofType(card, "Pressable")[0].props.onLongPress();
 }
 
 for (const permanent of [false, true]) {
@@ -462,7 +458,7 @@ for (const permanent of [false, true]) {
       " uses the native contract and only the selected id",
     async () => {
       const { ui, calls, card } = await shelf(permanent);
-      openRemoval(ui, card);
+      openRemoval(card);
       let tree = ui.render("ShelfScreen");
       const props = ofType(tree, "BookNotice")[0].props;
       assert.equal(
@@ -505,7 +501,7 @@ for (const permanent of [false, true]) {
       " cancel performs no library mutation",
     async () => {
       const { ui, calls, card } = await shelf(permanent);
-      openRemoval(ui, card);
+      openRemoval(card);
       const props = ofType(ui.render("ShelfScreen"), "BookNotice")[0].props;
       const notice = component(noticeFile);
       let dialog = notice.render("BookNotice", props);
@@ -526,7 +522,7 @@ test("Shelf ignores a second removal request while the confirmed operation is ru
     finish = resolve;
   });
   const { ui, calls, otherCalls, card } = await shelf(false, () => pending);
-  openRemoval(ui, card);
+  openRemoval(card);
   let tree = ui.render("ShelfScreen");
   const props = ofType(tree, "BookNotice")[0].props;
   props.actions[1].onPress();
@@ -536,8 +532,8 @@ test("Shelf ignores a second removal request while the confirmed operation is ru
   const another = list.props.renderItem({
     item: { id: "another-book", title: "另一书", removed: false },
   });
-  ofType(another, "Pressable")[0].props.onLongPress();
-  card.props.onPress();
+  openRemoval(another);
+  ofType(card, "Pressable")[0].props.onPress();
   ofType(tree, "PageHeading")[0].props.action.props.onPress();
   await settle();
   assert.equal(ofType(ui.render("ShelfScreen"), "BookNotice").length, 0);
@@ -557,7 +553,7 @@ test("Shelf removal failure uses the native retry card and retry targets the sam
     const { ui, calls, card } = await shelf(permanent, async () => {
       if (++attempts === 1) throw Error("磁盘不可写");
     });
-    openRemoval(ui, card);
+    openRemoval(card);
     const confirmation = ofType(ui.render("ShelfScreen"), "BookNotice")[0]
       .props;
     confirmation.actions[1].onPress();
@@ -588,7 +584,7 @@ test("Shelf repeated failure remounts the closed notice and later retry dismissa
   const { ui, calls, card } = await shelf(false, async () => {
     throw Error("磁盘不可写");
   });
-  openRemoval(ui, card);
+  openRemoval(card);
   ofType(ui.render("ShelfScreen"), "BookNotice")[0].props.actions[1].onPress();
   await settle();
   const first = ofType(ui.render("ShelfScreen"), "BookNotice")[0];
@@ -613,7 +609,7 @@ test("Shelf removal finishes its authorized operation but does not publish a lat
     reject = fail;
   });
   const { ui, calls, card } = await shelf(false, () => pending);
-  openRemoval(ui, card);
+  openRemoval(card);
   ofType(ui.render("ShelfScreen"), "BookNotice")[0].props.actions[1].onPress();
   await settle();
   ui.unmount();
