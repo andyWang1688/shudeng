@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.4",
+  "build": "17",
+  "release_date": "2026-11-24",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "030893e05ccc1f1eca960c01e004c5d94c6ca8df",
+    "tag": "v0.5.4",
+    "mobile_tree": "a72ad6067e8165d9caba089b20d6af58f29d5662",
+    "core_tree": "0121cd5cc8e12b05520484309a2f0859b100c3e6",
+    "reader_web_tree": "5755d6b8b5bc6d17e5f7f2bf6355dffe6ca985e1"
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": [
+      "arm64"
+    ],
+    "validated_runtime": "iOS 26.5",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "binary_sha256": "d6711af807101a7c90e1127f3fa504553cd70daed5089ae48de220ec7678f54c",
+    "js_bundle_sha256": "224e2c2dfff3fad45da3edef3aa2589e2790a1d5a54bac1de43d500527a6adaf",
+    "cdhash": "b11e88500ac4fb160631e3f3349d194f84b94614",
+    "signing": "Simulator ad hoc"
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.4-ios-simulator.zip",
+      "bytes": 29216077,
+      "sha256": "c236f370db43a310e2926a73c6da7a6de2da1882315a7524b95f58b0c4d2d1e7"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 918,
+      "sha256": "18c7dabe4246bc2247618c8445b5a66948e64ea97add5db7ed54ceeb3416876d"
+    }
+  ],
+  "packaging": {
+    "native_compile_rerun": true,
+    "xcode": "27.2 (27B52)",
+    "minimum_ios": "16.4",
+    "js": "Production Hermes bundle from Release build; notices regenerated from the corresponding source map"
+  },
+  "validation": {
+    "final_tests": {
+      "passed": 1159,
+      "skipped": 9,
+      "failed": 0
+    },
+    "typecheck": "four packages passed",
+    "website_build": "passed",
+    "reader_web_inline_build": "passed",
+    "package_audit": "passed",
+    "zip_integrity": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "bundled_npm_license_count": 127,
+    "simulator_smoke": "Installed the extracted final archive on Small iOS 26.5; verified installed executable, JS bundle and Expo config; preserved seven books; terminated the reader WebKit process in the background and returned to the same reading position without an error overlay."
+  },
+  "not_validated": [
+    "physical iPhone, TestFlight, App Store and older runtime operation",
+    "real model provider quality and billing, or physical-device long-background process reclamation"
+  ],
+  "evidence": [
+    "docs/validation/2026-11-24/release-v0.5.4.md",
+    "docs/validation/2026-11-24/reader-background-recovery.md"
+  ]
+}
