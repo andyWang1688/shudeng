@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.5",
+  "build": "18",
+  "release_date": "2026-11-24",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "7ed726dccd334dc13c5f113fdb90b1539ac0fe83",
+    "tag": "v0.5.5",
+    "mobile_tree": "0dfe78815dd5b99711901d0fae904be94dbd05e3",
+    "core_tree": "aca01744ecc16dcea2e3ad2c523022d33eeb4959",
+    "reader_web_tree": "ca47363a6db6acc9748601b1920f42f01f414def"
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": [
+      "arm64"
+    ],
+    "validated_runtime": "iOS 26.5",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "binary_sha256": "30e136b688c63e2490ec7fc32bf7f346613f6d9f503630b97bc9625ef99ebd6a",
+    "js_bundle_sha256": "1ff1007a525c3421d281e269b0b3b4cda6a7240745352f69fc4859a2cf0f1024",
+    "cdhash": "8e7ec3a2859bac693f3dfbb1e590b99b2322663f",
+    "signing": "Simulator ad hoc"
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.5-ios-simulator.zip",
+      "bytes": 29218524,
+      "sha256": "e23cb921240c0bab3dbf1314f99ed2136a69244681e016e53ca0cb1012e16724"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 918,
+      "sha256": "26025707589fdf34a783de6c7538b108309b9b7d95bc013d8c95eebb80b928ab"
+    }
+  ],
+  "packaging": {
+    "native_compile_rerun": true,
+    "xcode": "27.2 (27B52)",
+    "minimum_ios": "16.4",
+    "js": "Production Hermes bundle from Release build; notices regenerated from the corresponding source map"
+  },
+  "validation": {
+    "final_tests": {
+      "passed": 1161,
+      "skipped": 9,
+      "failed": 0
+    },
+    "typecheck": "four packages passed",
+    "website_build": "passed",
+    "reader_web_inline_build": "passed",
+    "package_audit": "passed",
+    "zip_integrity": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "bundled_npm_license_count": 127,
+    "simulator_smoke": "Installed the extracted final archive on Small iOS 26.5. Confirmed the installed binary, JS bundle and Expo config match the archive. Preserved eight books and reopened the CJK EPUB to the previous chapter."
+  },
+  "not_validated": [
+    "physical iPhone release build, older simulator runtime, TestFlight or App Store",
+    "live DeepSeek Flash search and citations"
+  ],
+  "evidence": [
+    "docs/validation/2026-11-24/release-v0.5.5.md",
+    "docs/validation/2026-11-24/reader-component-reuse.md",
+    "docs/validation/2026-11-24/web-search-capability-guidance.md"
+  ]
+}
