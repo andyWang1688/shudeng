@@ -101,6 +101,8 @@ DeepSeek 未提供原生引用时，回答里的网页链接须与当轮成功�
 
 核验区分三层材料：源片段全文、工具实际渲染原文、每次请求经过预算/压缩后实际派发的原文。[agent.ts](../../packages/core/src/agent/agent.ts) 在上下文准备成功且预算允许派发后，将实际请求中的书内材料按证据编号登记到 EvidenceRegistry。最终引用须同时属于该编号的原文连续片段与本轮至少一次实际派发的连续片段；仅登记或渲染过、从未派发的尾部不能通过。此前已派发但后来被裁剪的材料仍可引用，不拼接分离片段，不跨位置或运行复用。回归入口为 [evidence.test.ts](../../packages/core/src/agent/evidence.test.ts) 与 [context-manager.test.ts](../../packages/core/src/agent/context-manager.test.ts)；这些检查证明发送范围核验，不证明真实模型的推断质量或设备回跳正确。
 
+PDF 引用核对允许折叠两汉字之间的单个排版换行，仍须同时匹配书内原文和实际派发片段。保存来源保留原始换行，以便阅读器在原页高亮。
+
 ## 前端、持久化与中断
 
 assistant-ui React Native 的 useExternalStoreRuntime 适配 AgentEvent 和已保存消息；Gorhom Bottom Sheet 处理两档吸附、连续外观、滚动和键盘协作。宿主保护当前书、会话、聊天输入与生成状态，业务插槽承载选文/引用/上下文；组件来源与本地差异见[模块说明](../../apps/mobile/components/assistant-ui/README.md)。
