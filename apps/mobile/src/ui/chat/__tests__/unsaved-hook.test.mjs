@@ -289,15 +289,26 @@ describe('unsaved conversation run boundary', () => {
     expect(chat.selectionPending).toBe(true);
     expect(activeConversationRun('unsaved-hook').turn.id).toBe(failed.id);
 
+    h.append.mockRejectedValueOnce(Error('disk still unavailable'));
+    chat.retry(failed);
+    await settle(); chat = render();
+    const failedRetry = chat.turns.find(turn => turn.id === failed.id);
+    expect(chat.loadError).toBeNull();
+    expect(failedRetry.saveError).toContain('disk still unavailable');
+    expect(chat.canSend).toBe(false);
+
     let release;
     const saving = new Promise(resolve => { release = resolve; });
     h.append.mockImplementation(async () => saving);
     const before = h.append.mock.calls.length;
-    chat.retry(failed); chat.retry(failed);
+    chat.retry(failedRetry); chat.retry(failedRetry);
     await settle();
     expect(h.append.mock.calls.length - before).toBe(1);
     release(); await settle(); chat = render();
     expect(activeConversationRun('unsaved-hook')).toBeUndefined();
+    expect(chat.turns.find(turn => turn.id === failed.id).saveError).toBeUndefined();
+    expect(chat.loadError).toBeNull();
+    expect(h.start).toHaveBeenCalledTimes(1);
     expect(chat.canSend).toBe(true);
     expect(chat.question).toBe('保留草稿');
     h.append.mockResolvedValue(undefined);

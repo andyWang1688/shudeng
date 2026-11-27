@@ -19,7 +19,7 @@ const text = value => Array.isArray(value) ? value.map(text).join('') : typeof v
 
 /** Real React reconciler, assistant-ui runtime, ReaderAssistantThread/Parts and routes.
  * Only the native/registry views, scroll geometry, persistence and model are ports. */
-function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat' } = {}) {
+function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat', sourceAvailable = true, initialTurn } = {}) {
   const records = new Map(), cache = new Map(), subscribers = new Set(), chatSubscribers = new Set();
   const pushes = [], navigated = [], loads = [], storage = [], chatInputs = [], alerts = [], sent = [];
   let sequence = 0, question, registry, appearance, transition, flushes = 0;
@@ -71,7 +71,7 @@ function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat' } = 
   };
   const turn = { id: 'answer-1', role: 'assistant', text: '已保存回答', reasoning: '', tools: [], warnings: [], status: 'done', citations: [],
     sentMaterials: [{ kind: 'selection', id: 'selection-1', name: '选中原文', content: '发送材料样本' }] };
-  let turns = [turn];
+  let turns = [{ ...turn, ...initialTurn }];
   const subscribeChat = listener => { chatSubscribers.add(listener); return () => chatSubscribers.delete(listener); };
   const publishTurns = values => { turns = values; for (const listener of chatSubscribers) listener(); };
   const ThreadHost = host('RegistryThread');
@@ -130,7 +130,7 @@ function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat' } = 
             const view = React.useSyncExternalStore(input.presentation.subscribe, input.presentation.getSnapshot, input.presentation.getSnapshot);
             const values = React.useSyncExternalStore(subscribeChat, () => turns, () => turns);
             const setQuestion = React.useCallback(draft => input.presentation.update({ draft }), [input.presentation]);
-            return { loading: false, turns: values, title: 'Book', format, sourceAvailable: true,
+            return { loading: false, turns: values, title: 'Book', format, sourceAvailable,
               question: view.draft, setQuestion, running: false, canSend: true, inputEnabled: true, configMissing: false,
               selectionPending: false, service: 'fixture', placeholder: '追问', send: async text => { sent.push(text); return true; }, cancel() {}, retry() {} };
           },

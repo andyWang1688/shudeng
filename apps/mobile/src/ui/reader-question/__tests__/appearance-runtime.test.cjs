@@ -225,6 +225,20 @@ test("the actual history composer restores an unsent draft into a new presentati
   } finally { await h.close(); }
 });
 
+test("history without the original book can retry saving but cannot retry answering", async () => {
+  for (const saveError of [undefined, "写入失败"]) {
+    const h = createRuntime({ sourceAvailable: false, initialTurn: { status: "interrupted", saveError } });
+    try {
+      await h.mount();
+      await h.openHistory("saved-conversation");
+      const retry = h.all().find(record => record.props.testID === "question-retry-answer-1");
+      assert.equal(retry?.props.accessibilityLabel, saveError ? "重试保存" : undefined);
+    } finally {
+      await h.close();
+    }
+  }
+});
+
 for (const format of ["pdf", "epub"])
   test(
     format +

@@ -385,7 +385,7 @@ export function ReaderAssistantFooter() {
             : turn.error || "上次回答已中断。"}
         </Text>
       ) : null}
-      {turn.saveError || recoverable ? (
+      {turn.saveError || (recoverable && chat.sourceAvailable) ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={turn.saveError ? "重试保存" : "重试回答"}

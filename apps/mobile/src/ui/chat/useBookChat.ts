@@ -324,7 +324,7 @@ export function useBookChat(options: UseBookChatOptions) {
       const reportSaveError = (error: unknown) => {
         current = {
           ...current,
-          saveError: '对话保存失败：' + (error instanceof Error ? error.message : String(error)),
+          saveError: error instanceof Error ? error.message : String(error),
         };
         publish();
       };
@@ -493,7 +493,7 @@ export function useBookChat(options: UseBookChatOptions) {
         } catch (error) {
           current = {
             ...current,
-            saveError: '对话保存失败：' + (error instanceof Error ? error.message : String(error)),
+            saveError: error instanceof Error ? error.message : String(error),
           };
         } finally {
           endBackgroundTask?.();
@@ -560,14 +560,22 @@ export function useBookChat(options: UseBookChatOptions) {
     (turn: ChatTurn) => {
       if (runningRef.current) return;
       if (turn.saveError) {
-        if (savingTurns.current.has(turn.id)) return;
+        const retained = activeConversationRun(conversationId)?.turn;
+        if (retained?.id !== turn.id || !retained.saveError || savingTurns.current.has(turn.id)) return;
         savingTurns.current.add(turn.id);
-        void persist(turn)
+        void persist(retained)
           .then(() => {
-            const { saveError: _, ...saved } = turn;
+            if (isBookConversationDeleted(conversationId)) return;
+            const { saveError: _, ...saved } = retained;
             finishConversationRun(conversationId, saved);
           })
-          .catch((error: unknown) => setLoadError('对话保存失败：' + String(error)))
+          .catch((error: unknown) => {
+            if (isBookConversationDeleted(conversationId)) return;
+            finishConversationRun(conversationId, {
+              ...retained,
+              saveError: error instanceof Error ? error.message : String(error),
+            });
+          })
           .finally(() => { savingTurns.current.delete(turn.id); });
         return;
       }
