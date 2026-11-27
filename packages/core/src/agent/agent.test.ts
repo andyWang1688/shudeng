@@ -482,7 +482,11 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
         { id: 'W3', url: 'https://unwanted:secret@example.org/', title: '不可用', provider: 'deepseek' },
       ] }] });
     await collect(session);
-    const text = String((model.langChainModel as ScriptedChatModel).calls[0]?.[2]?.content);
+    const request = (model.langChainModel as ScriptedChatModel).calls[0];
+    const system = JSON.stringify(request?.[0]?.content);
+    expect(system).toContain('本轮不会发出新的联网请求');
+    expect(system).toContain('以历史中「书灯保存的该次联网记录」为准');
+    const text = String(request?.[2]?.content);
     expect(text).toContain('已完成联网搜索');
     expect(text).toMatch(/网页引用[^\n]*https:\/\/example\.org\/official/);
     expect(text).toMatch(/搜索结果[^\n]*https:\/\/example\.org\/listing/);

@@ -113,14 +113,15 @@ export class ProviderWebSearch {
       return '本轮已启用服务商内置联网搜索。读者询问能否联网时，明确回答可以；不要回答没有可用的联网搜索工具。' +
         '需要网页事实、时效信息或用户明确要求联网时，实际使用搜索工具核实；普通书籍解释无需强行搜索。';
     }
+    const historyGuidance = '当前轮的联网状态仅描述当前请求。读者追问以前是否联网或引用了哪个网页时，以历史中「书灯保存的该次联网记录」为准。该记录由书灯根据服务商结果保存，可以复述当时的出处和网址。历史出处不登记为本轮新引用。';
     if (this.state.status === 'unsupported') {
-      return '本轮未启用服务商内置联网搜索：' + (this.state.message ?? '当前服务不支持') + '。不要声称可以联网。';
+      return '本轮未启用服务商内置联网搜索：' + (this.state.message ?? '当前服务不支持') + '。不要声称本轮可以联网。' + historyGuidance;
     }
     if (this.state.status === 'failed') {
-      return '本轮联网搜索不可用或未完成。不要声称已经查到网页；没有实际网页来源时，明确说明本次未能联网。';
+      return '本轮联网搜索不可用或未完成。没有本轮实际网页来源时，明确说明本次未能联网。' + historyGuidance;
     }
     if (this.policy.provider) return '本步骤不能再发起联网搜索。根据已有资料回答，只引用实际取得的网页来源。已有网页结果时，不要声称本轮无法联网。';
-    return '本轮联网搜索已关闭。不要声称可以联网或已经搜索网页。';
+    return '本轮联网搜索已关闭，本轮不会发出新的联网请求。' + historyGuidance;
   }
 
   /** Call outside SDK callbacks, whose errors may otherwise be logged and swallowed. */

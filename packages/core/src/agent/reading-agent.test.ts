@@ -151,7 +151,7 @@ describe('reading Agent official infrastructure', () => {
     const prompts = JSON.stringify((model.langChainModel as ScriptedChatModel).calls[0]);
     expect(prompts).toContain('本轮未启用服务商内置联网搜索');
     expect(prompts).toContain('需使用 deepseek-flash');
-    expect(prompts).toContain('不要声称可以联网');
+    expect(prompts).toContain('不要声称本轮可以联网');
   });
 
   it('does not send a server search tool or switch protocols when networking is disabled', async () => {
