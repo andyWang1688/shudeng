@@ -10,6 +10,8 @@
 
 默认构建模拟器；真机构建使用 `IOS_DEVICE_UDID=<UDID> IOS_DEVELOPMENT_TEAM=<TEAM> KEEP_ARTIFACT=1 scripts/build-ios-rn.sh Release`，需要 Xcode 已登录对应开发团队。脚本使用设备目标与自动签名，产物名为 `Release-iphoneos-<时间戳>/app.app`；默认模拟器产物名保持不变。`latest.app` 指向最近保留的产物，安装前仍需核对目标平台、签名和授权有效期。开发签名安装不等于正式分发，不能承诺长期可启动。
 
+手机未连接时，可用 `IOS_DEVICE_BUILD=1 IOS_DEVELOPMENT_TEAM=<TEAM> scripts/build-ios-rn.sh Release` 为通用 iPhone 目标构建，不安装。真机构建会更新应用资源签名，签名校验通过后才保留产物；安装前还要验证描述文件包含目标手机且未过期。指定 `IOS_DEVICE_UDID` 时仍使用该设备作为构建目标。
+
 ## 清理合同
 
 1. 一次性脚本、调试日志、临时截图与导出集中在任务专属目录，复用现有依赖和环境。

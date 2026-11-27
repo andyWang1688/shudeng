@@ -23,14 +23,20 @@ KEEP_ARTIFACT="${KEEP_ARTIFACT:-0}"
 SDK=iphonesimulator
 DESTINATION="platform=iOS Simulator,id=${IOS_SIMULATOR_UDID:-1B9B9A35-F2D7-4D87-AB31-6B07D1B27D66}"
 SIGNING_ARGS=()
-if [[ -n "${IOS_DEVICE_UDID:-}" ]]; then
+if [[ -n "${IOS_DEVICE_UDID:-}" || "${IOS_DEVICE_BUILD:-0}" == "1" ]]; then
   SDK=iphoneos
-  DESTINATION="platform=iOS,id=$IOS_DEVICE_UDID"
+  DESTINATION="generic/platform=iOS"
+  if [[ -n "${IOS_DEVICE_UDID:-}" ]]; then
+    DESTINATION="platform=iOS,id=$IOS_DEVICE_UDID"
+  fi
   if [[ -z "${IOS_DEVELOPMENT_TEAM:-}" ]]; then
     echo "IOS_DEVELOPMENT_TEAM is required for an iPhone build" >&2
     exit 2
   fi
-  SIGNING_ARGS=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration "DEVELOPMENT_TEAM=$IOS_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Automatic)
+  SIGNING_ARGS=(-allowProvisioningUpdates "DEVELOPMENT_TEAM=$IOS_DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Automatic)
+  if [[ -n "${IOS_DEVICE_UDID:-}" ]]; then
+    SIGNING_ARGS+=(-allowProvisioningDeviceRegistration)
+  fi
 fi
 
 free_gib() { df -Pk "$ROOT" | awk 'NR==2 {printf "%d", $4/1024/1024}'; }
@@ -73,6 +79,11 @@ if [[ "$NO_BUILD" == "--no-build" ]]; then
 fi
 
 log "config=$CONFIG sdk=$SDK free=${available}GiB derived=$DERIVED"
+APP="$DERIVED/Build/Products/$CONFIG-$SDK/app.app"
+if [[ "$SDK" == iphoneos ]]; then
+  # Expo 重写 JS bundle 的阶段未声明输出。让 Xcode 重做应用签名，避免复用旧资源签名。
+  rm -f "$APP/_CodeSignature/CodeResources"
+fi
 cd "$ROOT/apps/mobile/ios"
 xcodebuild \
   -workspace app.xcworkspace \
@@ -84,10 +95,12 @@ xcodebuild \
   ${SIGNING_ARGS[@]+"${SIGNING_ARGS[@]}"} \
   build
 
-APP="$DERIVED/Build/Products/$CONFIG-$SDK/app.app"
 if [[ ! -d "$APP" ]]; then
   log "构建成功但找不到 app.app" >&2
   exit 1
+fi
+if [[ "$SDK" == iphoneos ]]; then
+  codesign --verify --deep --strict "$APP"
 fi
 log "app=$APP size=$(du -sh "$APP" | awk '{print $1}')"
 
