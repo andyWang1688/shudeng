@@ -6,8 +6,10 @@ function nativeFormHarness() {
   const h = hooks();
   const writes: string[] = [];
   const changes: [string, string][] = [];
+  const readers = new Map<string, () => string>();
   const state = {
     value: "",
+    get() { return this.value; },
     set(value: string) {
       this.value = value;
       writes.push(value);
@@ -26,7 +28,6 @@ function nativeFormHarness() {
       "SecureField",
       "Text",
       "TextField",
-      "Toggle",
       "VStack",
     ].map((name) => [name, name]),
   );
@@ -86,6 +87,10 @@ function nativeFormHarness() {
       changes.push([name, value]);
       props.fields[name] = value;
     },
+    registerFieldReader(name: string, read: () => string) {
+      readers.set(name, read);
+      return () => readers.delete(name);
+    },
     onChoosePreset() {},
     onProviderChange() {},
     onChangeKey() {},
@@ -110,6 +115,7 @@ function nativeFormHarness() {
     renderField,
     writes,
     changes,
+    readers,
     state,
     unmount: h.unmount,
   };
@@ -147,8 +153,9 @@ test("iOS delayed input echoes never replace newer native text", () => {
   const tree = h.renderField("name");
   const field = nodes(tree, (node) => node.type === "TextField")[0];
   h.state.value = "AB";
+  assert.equal(h.readers.get("name")?.(), "AB");
   field.props.onTextChange("A");
-  field.props.onTextChange("AB");
+  assert.deepEqual(h.changes, [["name", "AB"]]);
   h.props.fields.name = "A";
   h.renderField("name");
   assert.equal(h.state.value, "AB");
@@ -157,6 +164,7 @@ test("iOS delayed input echoes never replace newer native text", () => {
   h.renderField("name");
   assert.equal(h.state.value, "AB");
   h.unmount();
+  assert.equal(h.readers.has("name"), false);
 });
 
 test("iOS saved service forms expose neither preset nor protocol selection", () => {
@@ -165,7 +173,20 @@ test("iOS saved service forms expose neither preset nor protocol selection", () 
   assert.equal(nodes(tree, node => node.type === "Picker").length, 0);
   assert.equal(nodes(tree, node => node.props?.onPress === h.props.onChoosePreset).length, 0);
   assert.equal(nodes(tree, node => node.props?.onPress === h.props.onAdvanced).length, 1);
-  assert.equal(nodes(tree, node => node.type === "Toggle").length, 0);
+  h.unmount();
+});
+
+test("iOS search selection reflects the saved service and forwards both choices", () => {
+  const h = nativeFormHarness();
+  const picker = () => nodes(h.render(), node => node.type === "Picker" && node.props.label === "联网搜索")[0];
+  assert.equal(picker(), undefined);
+  h.props.supportsWebSearch = true;
+  h.props.onWebSearchChange = (value: boolean) => { h.props.webSearchEnabled = value; };
+  assert.equal(picker().props.selection, "off");
+  picker().props.onSelectionChange("on");
+  assert.equal(picker().props.selection, "on");
+  picker().props.onSelectionChange("off");
+  assert.equal(picker().props.selection, "off");
   h.unmount();
 });
 
@@ -207,6 +228,7 @@ test("iOS credential replacement uses an empty secure field and preserves cancel
   tree = h.renderField("key");
   const secure = nodes(tree, (node) => node.type === "SecureField")[0];
   assert.equal(secure.props.text.value, "");
+  h.state.value = "replacement";
   secure.props.onTextChange("replacement");
   assert.deepEqual(h.changes, [["key", "replacement"]]);
   assert.equal(

@@ -11,7 +11,6 @@ import {
   SecureField,
   Text,
   TextField,
-  Toggle,
   VStack,
   useNativeState,
 } from "@expo/ui/swift-ui";
@@ -45,6 +44,8 @@ function ServiceField({
   const value = props.fields[name];
   const text = useNativeState(value);
   const synchronizedRevision = useRef(props.fieldRevision);
+  const { registerFieldReader } = props;
+  useEffect(() => registerFieldReader(name, () => text.get()), [name, registerFieldReader, text]);
   useEffect(() => {
     if (props.fieldRevision === synchronizedRevision.current) return;
     synchronizedRevision.current = props.fieldRevision;
@@ -52,8 +53,9 @@ function ServiceField({
   }, [text, value, props.fieldRevision]);
   const inputProps = {
     text,
-    onTextChange: (value: string) => {
-      props.onFieldChange(name, value);
+    onTextChange: () => {
+      // Expo delivers change events asynchronously. The native binding may already be newer.
+      props.onFieldChange(name, text.get());
     },
     modifiers: [
       disabled(props.busy),
@@ -180,12 +182,15 @@ export function AIServiceForm(props: AIServiceFormProps) {
         }
       >
         {props.supportsWebSearch ? (
-          <Toggle
+          <Picker
             label="联网搜索"
-            isOn={props.webSearchEnabled}
-            onIsOnChange={props.onWebSearchChange}
-            modifiers={[disabled(props.busy)]}
-          />
+            selection={props.webSearchEnabled ? "on" : "off"}
+            onSelectionChange={(value) => props.onWebSearchChange(value === "on")}
+            modifiers={[pickerStyle("menu"), disabled(props.busy)]}
+          >
+            <Text modifiers={[tag("off")]}>关闭</Text>
+            <Text modifiers={[tag("on")]}>开启</Text>
+          </Picker>
         ) : (
           <LabeledContent label="联网搜索">
             <Text>{props.webSearchUnavailableReason ?? "当前服务未确认支持"}</Text>

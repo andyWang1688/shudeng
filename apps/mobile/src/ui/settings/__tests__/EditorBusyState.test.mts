@@ -64,6 +64,18 @@ function oldAIControls(h: ReturnType<typeof aiHarness>, tree: any) {
     row(tree, "删除这个服务").props.onPress();
   };
 }
+test("AI save and connection checks use the current native field before its delayed change event", async () => {
+  for (const operation of ["save", "check"] as const) {
+    const h = aiHarness();
+    const tree = h.render();
+    serviceForm(tree).props.registerFieldReader?.("model", () => "reading-model-final");
+    if (operation === "save") action(tree, "保存").props.onPress();
+    else row(tree, "检查连接").props.onPress();
+    await flush();
+    assert.equal((operation === "save" ? h.saves : h.checks)[0][0].model, "reading-model-final");
+    h.unmount();
+  }
+});
 test("AI connection checks freeze the draft and stale menus before a state rerender", async () => {
   const h = aiHarness(), tree = h.render(), mutate = oldAIControls(h, tree);
   row(tree, "检查连接").props.onPress();
@@ -83,7 +95,7 @@ test("AI connection checks freeze the draft and stale menus before a state reren
   assert.equal(input(pending, "自定义模型 ID").props.editable, false);
   h.check.resolve({ message: "原配置连接成功" });
   await flush();
-  assert.ok(row(h.render(), "原配置连接成功；尚未保存。"));
+  assert.ok(row(h.render(), "原配置连接成功"));
   assert.equal(action(h.render(), "保存").props.disabled, false);
   h.unmount();
 });

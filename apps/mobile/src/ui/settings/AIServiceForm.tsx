@@ -39,6 +39,7 @@ export type AIServiceFormProps = {
   webSearchUnavailableReason?: string;
   webSearchEnabled: boolean;
   onFieldChange: (field: keyof AIServiceFields, value: string) => void;
+  registerFieldReader: (field: keyof AIServiceFields, read: () => string) => () => void;
   onChoosePreset: () => void;
   onProviderChange: (value: AIProvider) => void;
   onChangeKey: () => void;

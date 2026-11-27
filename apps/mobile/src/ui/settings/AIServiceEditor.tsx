@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, KeyboardAvoidingView, Platform } from "react-native";
 import { usePreventRemove, useRouter } from "expo-router";
 import {
@@ -22,7 +22,7 @@ import { testAIConnection } from "../../platform/aiTest";
 import { useAISendingConsent } from "./useAISendingConsent";
 import { usePalette } from "../theme";
 import { SettingsEditorLayout } from "./SettingsEditorLayout";
-import { AIServiceForm, type AIServiceFormProps } from "./AIServiceForm";
+import { AIServiceForm, type AIServiceFields, type AIServiceFormProps } from "./AIServiceForm";
 import {
   SettingsAction,
   SettingsHeader,
@@ -74,6 +74,19 @@ export function AIServiceEditor({
   const mounted = useRef(true);
   const closing = useRef(false);
   const closeNotice = useRef(false);
+  const fieldReaders = useRef<Partial<Record<keyof AIServiceFields, () => string>>>({});
+  const registerFieldReader: AIServiceFormProps["registerFieldReader"] = useCallback((field, read) => {
+    fieldReaders.current[field] = read;
+    return () => {
+      if (fieldReaders.current[field] === read) delete fieldReaders.current[field];
+    };
+  }, []);
+  const readFields = (): AIServiceFields => ({
+    name: fieldReaders.current.name?.() ?? name,
+    baseUrl: fieldReaders.current.baseUrl?.() ?? baseUrl,
+    model: fieldReaders.current.model?.() ?? model,
+    key: changingKey ? (fieldReaders.current.key?.() ?? key) : key,
+  });
   const currentFields = JSON.stringify({
     provider,
     name,
@@ -160,7 +173,7 @@ export function AIServiceEditor({
     inFlight.current = false;
     if (active()) setBusy(false);
   };
-  const draft = (): AIServiceDraft => {
+  const draft = ({ name, baseUrl, model }: AIServiceFields): AIServiceDraft => {
     const tokens = parseContextWindowTokens(windowAutomatic ? "" : windowSize);
     if (windowAutomatic === false && tokens === undefined)
       throw new Error("请输入上下文 Token 数，或切回自动。");
@@ -170,7 +183,8 @@ export function AIServiceEditor({
       provider: serviceProvider,
       model,
       baseUrl,
-      webSearchEnabled: supportsWebSearch && webSearchEnabled,
+      webSearchEnabled: webSearchEnabled &&
+        resolveWebSearchPolicy(serviceProvider, baseUrl, { enabled: true }, model).state.status === "enabled",
       ...(tokens !== undefined ? { contextWindowTokens: tokens } : {}),
     });
   };
@@ -184,7 +198,9 @@ export function AIServiceEditor({
   const save = async () => {
     if (!begin()) return;
     try {
-      const value = draft();
+      const fields = readFields();
+      const value = draft(fields);
+      const key = fields.key;
       if (!key.trim() && requiresNewKey) throw new Error("请填写 API Key。");
       const consent =
         service?.consentScope === aiConsentScope(value) ||
@@ -208,7 +224,9 @@ export function AIServiceEditor({
     controller.current = request;
     setStatus("正在检查连接…");
     try {
-      const value = draft();
+      const fields = readFields();
+      const value = draft(fields);
+      const key = fields.key;
       if (!key.trim() && requiresNewKey) throw new Error("请填写 API Key。");
       const saved =
         !key.trim() && service ? await loadAIServiceForTest(service.id) : null;
@@ -222,7 +240,7 @@ export function AIServiceEditor({
         signal: request.signal,
       });
       if (active() && !request.signal.aborted)
-        setStatus(result.message + "；尚未保存。");
+        setStatus(!service || dirty ? result.message + "（配置尚未保存）" : result.message);
     } catch (error) {
       if (!request.signal.aborted) failed(error);
     } finally {
@@ -326,6 +344,7 @@ export function AIServiceEditor({
     ...(searchPolicy.status === "unsupported" && searchPolicy.message
       ? { webSearchUnavailableReason: searchPolicy.message } : {}),
     webSearchEnabled: supportsWebSearch && webSearchEnabled,
+    registerFieldReader,
     onFieldChange: (field, value) => {
       if (!editable()) return;
       ({ name: setName, baseUrl: setBaseUrl, model: setModel, key: setKey })[
