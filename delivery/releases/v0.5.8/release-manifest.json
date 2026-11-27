@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.8",
+  "build": "21",
+  "release_date": "2026-11-27",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "329d87db30cae68239f763de86cb4c640e3743c9",
+    "tag": "v0.5.8",
+    "mobile_tree": "1ed380560c65b57e3d7bb0e8dd171056e13a1de4",
+    "core_tree": "6e4785922c5f46aea02b2a0f8169588f190a57ad",
+    "reader_web_tree": "23918c9c9d375f1f72508711007e680a0ee67006"
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": [
+      "arm64"
+    ],
+    "validated_runtime": "iOS 26.5",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "binary_sha256": "19ace0fb3fb3414626ea673e42d17fbed360ae58a622b8c3371b8b44ec5f92a2",
+    "js_bundle_sha256": "d00d4aaf4e6b9212c547951263109db2ed329f5cef3721048c70c7e5b92562eb",
+    "signing": "Simulator ad hoc"
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.8-ios-simulator.zip",
+      "bytes": 29253541,
+      "sha256": "da8a45b8508673d52115b85ef8f39252cbb4bbb6e05f2d42f218982226936ede"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 918,
+      "sha256": "060d979993ba73780fa4071ef880ba4ffcf00e436d16f63642962aef3214b3ec"
+    }
+  ],
+  "packaging": {
+    "native_compile_rerun": true,
+    "xcode": "Xcode 27.2 (27B52)",
+    "minimum_ios": "16.4",
+    "js": "Production Hermes bundle with matching third-party notices"
+  },
+  "validation": {
+    "tests": {
+      "scope": "Focused regression suites for reading and chat. Final core rerun after the last change.",
+      "final_core_passed": 71
+    },
+    "typecheck": "passed",
+    "website_build": "passed",
+    "package_audit": "passed",
+    "zip_integrity": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "bundled_npm_license_count": 127,
+    "simulator_smoke": "Installed the final ZIP, retained 8 books, 5 annotations and 38 conversations, and verified the installed Hermes bundle matches the package. Used the matching Release build to verify real DeepSeek can read the saved search status and reproduce a historical source URL with web search disabled. EPUB recovery and PDF search return were verified on the first candidate."
+  },
+  "not_validated": [
+    "Full workspace test suite",
+    "iPhone build or installation",
+    "TestFlight or App Store"
+  ],
+  "evidence": [
+    "docs/validation/2026-11-27/release-v0.5.8.md",
+    "docs/validation/2026-11-26/simulator-reading-chat-lifecycle.md"
+  ]
+}
