@@ -1,5 +1,5 @@
 import type { VerifiedCitation } from '@shudeng/core';
-import { splitCitationTail } from '@shudeng/core/agent/citation-tail';
+import { answerStringStart, splitCitationTail } from '@shudeng/core/agent/citation-tail';
 import type { AIConfig } from '../../platform/aiConfig';
 
 /** Swift BookType.serif 使用 PostScript 名 SongtiSC-*；family 名在 RN 会回退系统字体。 */
@@ -71,15 +71,15 @@ export function streamingAnswer(raw: string): string {
     } catch {
     }
   }
-  const start = /"answer"\s*:\s*"/.exec(raw);
-  if (!start) return /^\s*(?:```(?:json)?\s*)?[{"]/.test(raw) ? '' : raw;
-  const value = raw.slice(start.index + start[0].length);
-  const citationBoundary = /"\s*,\s*"citations"\s*:\s*\[/.exec(value);
-  const limit = citationBoundary?.index ?? value.length;
+  const start = answerStringStart(raw);
+  if (start === undefined) return /^\s*(?:```(?:json)?\s*)?[{"]/.test(raw) ? '' : raw;
+  const value = raw.slice(start);
+  const nextField = /"\s*,\s*"(?:[^"\\]|\\.)+"\s*:/.exec(value);
+  const limit = nextField?.index ?? value.length;
   let answer = '';
   for (let index = 0; index < limit; index++) {
     const char = value[index]!;
-    if (char === '"' && !citationBoundary) break;
+    if (char === '"' && !nextField) break;
     if (char !== '\\') {
       answer += char;
       continue;

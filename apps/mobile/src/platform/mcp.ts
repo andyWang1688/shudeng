@@ -284,6 +284,7 @@ export async function discoverMCPTools(
   }
 }
 const consented = new Map<string, string>();
+class MCPToolConsentDenied extends Error {}
 async function confirmTool(
   server: MCPServer,
   tool: MCPTool,
@@ -294,7 +295,8 @@ async function confirmTool(
   if (consented.get(key) === scope) return;
   if (signal?.aborted) throw abortError();
   const granted = await requestMCPToolConsent(mcpToolConsentPrompt(server, tool), signal);
-  if (!granted || signal?.aborted) throw abortError();
+  if (signal?.aborted) throw abortError();
+  if (!granted) throw new MCPToolConsentDenied();
   consented.set(key, scope);
 }
 export async function loadMCPAgentTools(): Promise<
@@ -327,7 +329,11 @@ export async function loadMCPAgentTools(): Promise<
                   confirm: confirmTool,
                   connect: (current) => new MCPConnection(current),
                 },
-              );
+              ).catch((error: unknown) => {
+                if (error instanceof MCPToolConsentDenied) return null;
+                throw error;
+              });
+              if (!result) return { status: "denied" };
               if (result.isError === true)
                 throw new Error(
                   "外部工具执行失败：" + JSON.stringify(result.content),

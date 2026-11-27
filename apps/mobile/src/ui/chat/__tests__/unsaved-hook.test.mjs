@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Real hook + runtime + writer; native adapters and React scheduling are isolated.
 const h = vi.hoisted(() => ({ slots: [], cursor: 0, effects: [], append: vi.fn(), start: vi.fn(), load: vi.fn(), beginBackground: vi.fn(), config: null, configError: undefined, indexAvailable: true }));
+const book = { id: 'unsaved-book', title: '原书名', format: 'epub', removedAt: null };
 vi.mock('react', () => {
   const equal = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const memo = (factory, deps) => {
@@ -24,22 +25,30 @@ vi.mock('react', () => {
     },
   };
 });
-vi.mock('expo-router', () => ({ useFocusEffect: () => {} }));
+vi.mock('expo-router', async () => {
+  const { useEffect } = await import('react');
+  return { useFocusEffect: effect => useEffect(effect, [effect]) };
+});
 vi.mock('react-native', () => ({ AppState: { addEventListener: () => ({ remove() {} }) } }));
 vi.mock('../../../platform/ai/bookChatBackground', () => ({ beginBookChatBackgroundTask: h.beginBackground }));
 vi.mock('../../../platform/ai', () => ({
-  getBookChatAvailability: async () => ({
-    book: { id: 'unsaved-book', title: '原书名', format: 'epub', removedAt: null },
-    config: h.config,
-    configError: h.configError,
-    index: { available: h.indexAvailable, detail: '' },
-  }),
+  getBookChatSource: async () => {
+    if (h.sourceFailure) throw h.sourceFailure;
+    return { book, sourceAvailable: true, sourceError: null };
+  },
+  getBookChatAvailability: async () => {
+    if (h.indexGate) await h.indexGate;
+    if (h.sourceFailure) throw h.sourceFailure;
+    return { book, sourceAvailable: true, config: h.config, configError: h.configError,
+      index: { available: h.indexAvailable, detail: '' } };
+  },
   startBookChatTurn: (...args) => h.start(...args),
 }));
 vi.mock('../../../platform/library', () => ({
   appendBookChatTurn: (...args) => h.append(...args),
   createBookConversationId: () => 'unsaved-hook', loadBookConversation: (...args) => h.load(...args),
-  registerConversationRun: () => () => {}, cancelConversationRun() {}, isBookConversationDeleted: () => false,
+  registerConversationRun: (_id, cancel) => { h.cancelRun = cancel; return () => { h.cancelRun = undefined; }; },
+  cancelConversationRun: () => h.cancelRun?.(), isBookConversationDeleted: () => false,
 }));
 import { useBookChat } from '../useBookChat';
 import { activeConversationRun, discardConversationRun, finishConversationRun, publishConversationRun } from '../conversationRuntime';
@@ -55,8 +64,11 @@ function unmount() { for (const slot of h.slots) slot.cleanup?.(); h.slots = [];
 beforeEach(() => {
   h.slots = []; h.cursor = 0; h.effects = []; h.append.mockReset(); h.start.mockReset();
   h.beginBackground.mockReset();
+  h.cancelRun = undefined;
   h.config = { name: '本机', provider: 'openai', model: 'test', apiKey: 'synthetic' };
   h.indexAvailable = true;
+  h.indexGate = undefined;
+  h.sourceFailure = undefined;
   h.configError = undefined;
   h.load.mockReset(); h.load.mockResolvedValue([]);
   vi.stubGlobal('requestAnimationFrame', callback => setTimeout(callback, 0));
@@ -69,6 +81,112 @@ beforeEach(() => {
 afterEach(() => { unmount(); discardConversationRun('unsaved-hook'); vi.unstubAllGlobals(); });
 
 describe('unsaved conversation run boundary', () => {
+  it('preserves a stopped question without starting the model after the pending save finishes', async () => {
+    let save;
+    h.append.mockImplementationOnce(() => new Promise(resolve => { save = resolve; }));
+    const chat = await open();
+    const sent = chat.send('刚发送的问题');
+    await settle();
+    chat.cancel();
+    save();
+    expect(await sent).toBe(true);
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.append).toHaveBeenLastCalledWith(expect.objectContaining({
+      question: '刚发送的问题', details: expect.objectContaining({ status: 'cancelled' }),
+    }));
+    expect(render().turns.at(-1)).toMatchObject({ status: 'cancelled', sourceQuestion: '刚发送的问题' });
+  });
+
+  it('hands over the scroll position only for an accepted question, before publishing it', async () => {
+    let chat = await open();
+    const accepted = vi.fn(() => {
+      expect(activeConversationRun('unsaved-hook')).toBeUndefined();
+      expect(h.start).not.toHaveBeenCalled();
+    });
+    expect(await chat.send(' ', accepted)).toBe(false);
+    expect(accepted).not.toHaveBeenCalled();
+    const sent = chat.send('继续追问', accepted);
+    expect(accepted).toHaveBeenCalledOnce();
+    expect(activeConversationRun('unsaved-hook')?.turn.sourceQuestion).toBe('继续追问');
+    const rejected = vi.fn();
+    expect(await chat.send('并发问题', rejected)).toBe(false);
+    expect(rejected).not.toHaveBeenCalled();
+    await sent;
+  });
+
+  it('opens saved answers and retains a draft before the book index finishes preparing', async () => {
+    let finishIndex;
+    h.indexGate = new Promise(resolve => { finishIndex = resolve; });
+    const citations = [{ id: 'E1', quote: '原文', locator: 'chapter.xhtml' }];
+    h.load.mockResolvedValue([
+      { id: 'saved:user', role: 'user', text: '首问', reasoning: '', citations: [], details: { status: 'done' } },
+      { id: 'saved', role: 'assistant', text: '保存的回答', reasoning: '', citations, details: { status: 'done' } },
+    ]);
+    let chat = await open();
+    expect(chat.loading).toBe(false);
+    expect(chat.turns[1]).toMatchObject({ text: '保存的回答', citations });
+    expect(chat.sourceAvailable).toBe(true);
+    expect(chat.checkingAvailability).toBe(true);
+    chat.setQuestion('索引好了再发送');
+    chat = render();
+    expect(chat.canSend).toBe(false);
+    expect(await chat.send()).toBe(false);
+    expect(h.start).not.toHaveBeenCalled();
+    finishIndex();
+    await settle();
+    chat = render();
+    expect(chat.question).toBe('索引好了再发送');
+    expect(chat.checkingAvailability).toBe(false);
+    expect(chat.canSend).toBe(true);
+    await chat.send();
+    expect(h.start.mock.lastCall[0]).toMatchObject({
+      question: '索引好了再发送', history: [{ question: '首问', answer: '保存的回答' }],
+    });
+  });
+
+  it('shows saved history when the original book lookup fails', async () => {
+    h.sourceFailure = new Error('暂时无法读取原书');
+    h.load.mockResolvedValue([
+      { id: 'saved:user', role: 'user', text: '首问', reasoning: '', citations: [], details: { status: 'done' } },
+      { id: 'saved', role: 'assistant', text: '已保存的回答', reasoning: '', citations: [], details: { status: 'done' } },
+    ]);
+    const chat = await open({ initialQuestion: '追问' });
+    expect(chat.loading).toBe(false);
+    expect(chat.turns[1]).toMatchObject({ text: '已保存的回答' });
+    expect(chat.sourceAvailable).toBe(false);
+    expect(chat.loadError).toBe('暂时无法读取原书');
+    expect(await chat.send()).toBe(false);
+    expect(h.start).not.toHaveBeenCalled();
+  });
+
+  it('does not clear a history read error or send without history when the index is ready', async () => {
+    h.load.mockRejectedValue(new Error('读取对话失败'));
+    const chat = await open({ initialQuestion: '保留这条问题' });
+    expect(chat.loading).toBe(false);
+    expect(chat.loadError).toBe('读取对话失败');
+    expect(chat.question).toBe('保留这条问题');
+    expect(chat.canSend).toBe(false);
+    expect(await chat.send()).toBe(false);
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.append).not.toHaveBeenCalled();
+  });
+
+  it('does not send an old initial question if the draft changes during index preparation', async () => {
+    let finishIndex;
+    h.indexGate = new Promise(resolve => { finishIndex = resolve; });
+    let chat = await open({ initialQuestion: '原始问题' });
+    chat.setQuestion('我改过的问题');
+    await flush();
+    finishIndex();
+    await settle();
+    render();
+    chat = await flush();
+    expect(chat.question).toBe('我改过的问题');
+    expect(h.start).not.toHaveBeenCalled();
+    await chat.send();
+    expect(h.start.mock.lastCall[0].question).toBe('我改过的问题');
+  });
+
   it('saves a partial answer as interrupted and releases the iOS background task on expiration', async () => {
     const end = vi.fn();
     h.beginBackground.mockReturnValue(end);
@@ -217,6 +335,39 @@ describe('unsaved conversation run boundary', () => {
     }
   });
 
+  it('keeps an older retry in order after reopening the conversation while it runs', async () => {
+    const saved = [
+      { id: 'first:user', role: 'user', text: '第一问', reasoning: '', citations: [], details: { status: 'done' } },
+      { id: 'first', role: 'assistant', text: '未完成', reasoning: '', citations: [], details: { status: 'error' } },
+      { id: 'second:user', role: 'user', text: '第二问', reasoning: '', citations: [], details: { status: 'done' } },
+      { id: 'second', role: 'assistant', text: '第二答', reasoning: '', citations: [], details: { status: 'done' } },
+    ];
+    h.load.mockResolvedValue(saved);
+    h.append.mockResolvedValue(undefined);
+    let completeRetry;
+    const result = new Promise(resolve => { completeRetry = resolve; });
+    h.start.mockResolvedValueOnce({ session: { result, cancel() {}, events: (async function* () {
+      yield { type: 'completed', result: await result };
+    })() } });
+
+    let chat = await open();
+    chat.retry(chat.turns[1]);
+    await settle();
+    expect(h.start.mock.lastCall[0].history).toEqual([]);
+    unmount();
+    chat = await open();
+    expect(chat.turns[1]).toMatchObject({ id: 'first', status: 'streaming' });
+    completeRetry({ answer: '第一答', citations: [], warnings: [] });
+    await settle();
+    chat = render();
+    expect(chat.turns.map(turn => turn.text)).toEqual(['第一问', '第一答', '第二问', '第二答']);
+    await chat.send('第三问');
+    expect(h.start.mock.lastCall[0].history).toEqual([
+      { question: '第一问', answer: '第一答' },
+      { question: '第二问', answer: '第二答' },
+    ]);
+  });
+
   it('restores fixed selection from the saved first turn when history opens without route selection', async () => {
     const quote = '已保存的独有原文';
     h.load.mockResolvedValue([
@@ -228,5 +379,28 @@ describe('unsaved conversation run boundary', () => {
     await chat.send('这段是什么意思');
     expect(h.start.mock.calls[0][0].selectionQuote).toBe(quote);
     expect(h.start.mock.calls[0][0].history[0].question).toBe('首问');
+  });
+
+  it.each(['live', 'reopened'])('keeps saved web evidence on the earlier turn for a %s follow-up', async path => {
+    const webSources = [{ id: 'W1', title: '官方说明', url: 'https://example.org/guide', provider: 'deepseek' }];
+    const result = { answer: '见官方说明。', citations: [], warnings: [], webSources };
+    const details = { status: 'done', webSources, webSearchStatus: { status: 'complete' } };
+    if (path === 'reopened') {
+      h.load.mockResolvedValue([
+        { id: 'old:user', role: 'user', text: '查一下说明', reasoning: '', citations: [], details: { status: 'done' } },
+        { id: 'old', role: 'assistant', text: result.answer, reasoning: '', citations: [], details },
+      ]);
+    } else {
+      h.start.mockResolvedValueOnce({ session: { events: (async function* () {
+        yield { type: 'webSearchStatus', status: 'complete' };
+        yield { type: 'completed', result };
+      })(), result: Promise.resolve(result), cancel() {} } });
+    }
+    let chat = await open();
+    if (path === 'live') { await chat.send('查一下说明'); chat = render(); }
+    await chat.send('刚才的网页是哪一个？');
+    expect(h.start.mock.lastCall[0].history).toEqual([{ question: '查一下说明', answer: result.answer,
+      webSearchStatus: 'complete', webSources }]);
+    expect(render().turns.filter(turn => turn.role === 'assistant').at(-1).webSources).toBeUndefined();
   });
 });

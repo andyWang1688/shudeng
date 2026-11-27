@@ -130,7 +130,7 @@ function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat' } = 
             const view = React.useSyncExternalStore(input.presentation.subscribe, input.presentation.getSnapshot, input.presentation.getSnapshot);
             const values = React.useSyncExternalStore(subscribeChat, () => turns, () => turns);
             const setQuestion = React.useCallback(draft => input.presentation.update({ draft }), [input.presentation]);
-            return { loading: false, turns: values, title: 'Book', format, availability: { book: { removedAt: null } },
+            return { loading: false, turns: values, title: 'Book', format, sourceAvailable: true,
               question: view.draft, setQuestion, running: false, canSend: true, inputEnabled: true, configMissing: false,
               selectionPending: false, service: 'fixture', placeholder: '追问', send: async text => { sent.push(text); return true; }, cancel() {}, retry() {} };
           },

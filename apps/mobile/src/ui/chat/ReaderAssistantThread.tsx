@@ -30,13 +30,14 @@ export function ReaderAssistantThread({ chat, presentation, onOpenSettings, onOp
 }) {
   const [contextExpanded, setContextExpanded] = useState(false);
   const toggleContext = useCallback(() => setContextExpanded(expanded => !expanded), []);
+  const scroll = useChatListScroll<ThreadMessage>(presentation, onOpenCitation);
   const runtime = useExternalStoreRuntime<ChatTurn>({
     messages: chat.turns, isRunning: chat.running, isLoading: chat.loading,
-    isDisabled: !chat.availability?.book, isSendDisabled: !chat.canSend,
+    isDisabled: !chat.sourceAvailable, isSendDisabled: !chat.canSend,
     convertMessage: bookTurnToAssistantMessage,
     onNew: async message => {
       const text = submittedQuestion(message);
-      if (text && !await chat.send(text)) throw new MessageNotSentError('The question was not accepted.');
+      if (text && !await chat.send(text, scroll.releaseReferenceAnchor)) throw new MessageNotSentError('The question was not accepted.');
     },
     onCancel: async () => { chat.cancel(); },
   });
@@ -48,14 +49,13 @@ export function ReaderAssistantThread({ chat, presentation, onOpenSettings, onOp
     const text = composer.getState().text;
     if (text !== presentation.getSnapshot().draft) chat.setQuestion(text);
   }), [chat.setQuestion, composer, presentation]);
-  const scroll = useChatListScroll<ThreadMessage>(presentation, onOpenCitation);
   useLayoutEffect(() => { scroll.update(runtime.thread.getState().messages, true); }, [chat.turns, runtime, scroll.update]);
   useEffect(() => runtime.thread.subscribe(() => { scroll.update(runtime.thread.getState().messages, true); }), [runtime, scroll.update]);
   const restoredScroll = useRef(Boolean(presentation.getSnapshot().scroll.anchorId || presentation.getSnapshot().scroll.offset > 0 || presentation.getSnapshot().restoreReferenceFocus));
   const content = <>
       {chat.indexMissing || chat.loadError ? <View accessibilityRole="alert" className="bg-destructive/10 mx-4 my-2 rounded-lg p-3">
         <Text className="text-destructive text-sm leading-5">{chat.loadError || chat.indexDetail}</Text>
-      </View> : null}
+      </View> : chat.checkingAvailability ? <Text accessibilityLiveRegion="polite" className="text-muted-foreground mx-4 my-2 text-sm">正在准备问答…</Text> : null}
       <AssistantSheetThreadFrame>
       <Thread components={bookAdditions} keyboardAvoidanceEnabled={false} composerExternal bottomInset={0}
         hostListRef={scroll.list} hostViewportRef={scroll.viewport} onViewportLayout={scroll.restore}

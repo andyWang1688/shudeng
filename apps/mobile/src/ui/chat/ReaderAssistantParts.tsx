@@ -251,12 +251,9 @@ export function ReaderComposerTools() {
 }
 
 function openBookCitation({ chat, presentation, scroll }: ReaderAssistantContextValue, turn: ChatTurn, index: number) {
-  const sourceAvailable = Boolean(
-    chat.availability?.book && chat.availability.book.removedAt === null,
-  );
     const citation = turn.citations[index];
     if (!citation) return;
-    if (!sourceAvailable) {
+    if (!chat.sourceAvailable) {
       Alert.alert(
         "保存的原文片段",
         citation.quote + "\n\n重新导入原书后可回到书中核查。",

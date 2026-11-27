@@ -153,5 +153,6 @@ describe('answer payload parsing tolerates model formatting without exposing the
   it('returns null rather than treating an unrelated JSON object as an answer', () => {
     expect(parseAnswerPayload('{"citations":[],"answer":42}')).toBeNull();
     expect(parseAnswerPayload('{"citations":[]}')).toBeNull();
+    expect(parseAnswerPayload('{"debug":{"answer":"内部备注","citations":[]}}')).toBeNull();
   });
 });

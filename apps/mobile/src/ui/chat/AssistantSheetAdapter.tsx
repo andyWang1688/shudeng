@@ -43,18 +43,22 @@ export function useAssistantSheetBodyLayout() {
 /** Accounts for a book-index/error banner above the thread without hard-coded header sizes. */
 export function AssistantSheetThreadFrame({ children }: PropsWithChildren) {
   const layout = useContext(SheetLayoutContext);
+  const visibleStyle = useVisibleThreadHeight();
   return <View style={{ flex: 1 }} onLayout={event => {
     if (layout) layout.threadTop.set(event.nativeEvent.layout.y);
-  }}>{children}</View>;
+  }}><Animated.View style={visibleStyle}>{children}</Animated.View></View>;
 }
 
 /** Center inside the visible chat region, rather than the maximum snap-point content. */
-export function SheetWelcome() {
+function useVisibleThreadHeight() {
   const layout = useContext(SheetLayoutContext);
-  const visibleStyle = useAnimatedStyle(() => ({
+  return useAnimatedStyle(() => ({
     height: layout ? Math.max(0, layout.footerTop.get() - layout.bodyTop.get() - layout.threadTop.get()) : 0,
   }), [layout]);
-  return <Animated.View style={visibleStyle}><ThreadWelcome /></Animated.View>;
+}
+
+export function SheetWelcome() {
+  return <ThreadWelcome />;
 }
 
 // Expo Router explicitly forbids a second argument; Gorhom accepts an optional deps argument.
@@ -62,7 +66,7 @@ function useSheetFocus(effect: EffectCallback) { useFocusEffect(effect); }
 
 /** Keep assistant-ui's FlatList, row providers, refs and auto-scroll intact. */
 export const renderSheetScrollComponent: NonNullable<FlatListProps<ThreadMessage>['renderScrollComponent']> = props => (
-  <BottomSheetScrollView {...props} focusHook={useSheetFocus} enableFooterMarginAdjustment>
+  <BottomSheetScrollView {...props} focusHook={useSheetFocus}>
     {props.children}
   </BottomSheetScrollView>
 );

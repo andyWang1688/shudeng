@@ -7,11 +7,19 @@ const server = { id: "mcp-audit", name: "本机工具", endpoint: "http://127.0.
   headers: { authorization: "Bearer fake-only-header" }, tools: [tool], allowedTools: [tool.name], authorizationRevision: 1 };
 const storageKey = "shudeng.mcp-servers.v1";
 
-function fixture() {
+function fixture(initialState = "active") {
   const h = hooks(), alerts: any[] = [], requests: any[] = [], writes: string[] = [];
   const entries = new Map([[storageKey, JSON.stringify([server])]]);
+  const stateListeners = new Set<(state: string) => void>();
+  const appState = { currentState: initialState, addEventListener(_event: string, listener: (state: string) => void) {
+    stateListeners.add(listener); return { remove: () => stateListeners.delete(listener) };
+  } };
+  const setAppState = (state: string) => {
+    appState.currentState = state;
+    for (const listener of stateListeners) listener(state);
+  };
   const load = loader({
-    react: h.react, "react/jsx-runtime": { jsx, jsxs: jsx }, "react-native": nativePorts(alerts),
+    react: h.react, "react/jsx-runtime": { jsx, jsxs: jsx }, "react-native": { AppState: appState, ...nativePorts(alerts) },
     "../components/BookNotice": { BookNotice: "BookNotice" },
     "expo-secure-store": { WHEN_UNLOCKED_THIS_DEVICE_ONLY: "fake-only", getItemAsync: async (key: string) => entries.get(key) ?? null, setItemAsync: async (key: string, value: string) => { writes.push(key); entries.set(key, value); } },
     "expo/fetch": { async fetch(url: string, options: any) {
@@ -27,12 +35,12 @@ function fixture() {
   const bridge = load("apps/mobile/src/platform/settings/mcpToolConsent.ts");
   const Host = load("apps/mobile/src/ui/settings/MCPToolConsentHost.tsx").MCPToolConsentHost;
   const render = (options?: { active?: boolean; scope?: "fallback" | "screen"; depth?: number }) => h.render(() => Host(options));
-  return { api, bridge, render, requests, writes, alerts, entries, unmount: h.unmount, restart: h.restart };
+  return { api, bridge, render, requests, writes, alerts, entries, setAppState, unmount: h.unmount, restart: h.restart };
 }
 test("no tool-consent host fails closed before initialization or any storage write", async () => {
   const f = fixture();
   const tools = await f.api.loadMCPAgentTools();
-  await assert.rejects(tools[0].invoke({ title: "never-send-this-argument" }), /取消/);
+  assert.deepEqual(await tools[0].invoke({ title: "never-send-this-argument" }), { status: "denied" });
   assert.deepEqual(f.requests, []); assert.deepEqual(f.writes, []); assert.deepEqual(f.alerts, []);
 });
 test("first tool consent uses exact native paper text/actions and only allows the pending call once", async () => {
@@ -57,11 +65,13 @@ test("cancel, Abort and host unmount never initialize or call a tool; old action
   for (const outcome of ["cancel", "abort", "unmount"] as const) {
     const f = fixture(); f.render();
     const tools = await f.api.loadMCPAgentTools(); const abort = new AbortController();
-    const pending = tools[0].invoke({ title: "forbidden" }, abort.signal); const rejected = assert.rejects(pending, /取消/);
+    const pending = tools[0].invoke({ title: "forbidden" }, abort.signal);
+    const settled = outcome === "abort" ? assert.rejects(pending, { name: "AbortError" }) :
+      pending.then((result: unknown) => assert.deepEqual(result, { status: "denied" }));
     await flush(); const old = f.render(); assert.ok(old);
     if (outcome === "cancel") old.props.actions[1].onPress();
     else if (outcome === "abort") abort.abort(); else f.unmount();
-    old.props.actions[0].onPress(); await rejected;
+    old.props.actions[0].onPress(); await settled;
     assert.deepEqual(f.requests, []); assert.deepEqual(f.writes, []); assert.deepEqual(f.alerts, []);
     if (outcome !== "unmount") {
       const fresh = f.bridge.requestMCPToolConsent({ title: "fresh", message: "second-prompt" });
@@ -71,6 +81,24 @@ test("cancel, Abort and host unmount never initialize or call a tool; old action
     f.unmount();
     assert.equal(await f.bridge.requestMCPToolConsent({ title: "no-host", message: "deny" }), false);
   }
+});
+
+test("backgrounding settles pending consent and denies new prompts until foreground", async () => {
+  const f = fixture(); f.render();
+  const [lookup] = await f.api.loadMCPAgentTools();
+  const pending = lookup.invoke({ title: "never dispatch in background" });
+  await flush();
+  const foregroundCard = f.render(); assert.ok(foregroundCard);
+  f.setAppState("background");
+  assert.equal(f.render(), null);
+  assert.deepEqual(await pending, { status: "denied" });
+  foregroundCard.props.actions[0].onPress();
+  assert.deepEqual(await lookup.invoke({ title: "no foreground authority" }), { status: "denied" });
+  assert.deepEqual(f.requests, []);
+  f.setAppState("active");
+  const next = f.bridge.requestMCPToolConsent({ title: "foreground again", message: "new request" });
+  f.render().props.actions[1].onPress(); assert.equal(await next, false);
+  f.unmount();
 });
 test("effect cleanup/setup denies the old request and cannot revive it on a new host lease", async () => {
   const f = fixture(); f.render();

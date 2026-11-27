@@ -4,6 +4,7 @@ import Module, { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { parseQuestionOrigin } from '../../platform/library/questionOrigin.ts';
+import { questionIdForAnswer } from '../../platform/library/conversationMessageIds.ts';
 import { parseWebSources, parseWebSearchPresentation } from '../../platform/library/assistantSources.ts';
 
 const require = createRequire(import.meta.url);
@@ -47,6 +48,7 @@ function library(legacy: any[] | (() => unknown) = []) {
       citationHref: (raw: string | null) => raw ? /"href"\s*:\s*"([^"]+)"/.exec(raw)?.[1] ?? null : null },
     './legacyMigration': { parseLegacyJSON: () => { reads.legacy++; return typeof legacy === 'function' ? legacy() : legacy; } },
     './questionOrigin': { parseQuestionOrigin },
+    './conversationMessageIds': { questionIdForAnswer },
     './assistantSources': { parseWebSources, parseWebSearchPresentation },
   };
   compiled.require = (id: string) => { if (!(id in mocks)) throw Error('Unmocked ' + id); return mocks[id]; };

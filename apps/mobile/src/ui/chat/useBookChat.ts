@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import type { AgentContextEstimate, AgentContextUsage, AgentRunSession } from '@shudeng/core';
-import { getBookChatAvailability, startBookChatTurn, type BookChatAvailability } from '../../platform/ai';
+import { assertNotAborted } from '@shudeng/core';
+import type { AgentContextEstimate, AgentContextUsage, AgentRunSession, BookChatHistoryTurn } from '@shudeng/core';
+import { getBookChatAvailability, getBookChatSource, startBookChatTurn, type BookChatAvailability, type BookChatSourceState } from '../../platform/ai';
 import { beginBookChatBackgroundTask } from '../../platform/ai/bookChatBackground';
 import {
   appendBookChatTurn,
@@ -45,14 +46,34 @@ const nextId = () => `turn-${Date.now()}-${++sequence}`;
 const missingModelNotice = '还没有配置 AI 模型，设置后即可发送。';
 const backgroundExpirationMessage = '系统后台运行时间已结束，回答未完成。可以重试。';
 
+function historyBefore(turns: readonly ChatTurn[], retryId?: string): BookChatHistoryTurn[] {
+  const history: BookChatHistoryTurn[] = [];
+  for (let index = 1; index < turns.length; index++) {
+    const answer = turns[index];
+    const user = turns[index - 1];
+    if (answer?.id === retryId) break;
+    if (answer?.role === 'assistant' && answer.status !== 'streaming' && !answer.saveError && user?.role === 'user') {
+      history.push({ question: user.text, answer: answer.text,
+        ...(answer.webSearchStatus ? { webSearchStatus: answer.webSearchStatus.status } : {}),
+        ...(answer.webSources?.length ? { webSources: answer.webSources } : {}),
+      });
+    }
+  }
+  return history;
+}
+
 /** Owns one independent conversation, its durable history, and exactly one active run. */
 export function useBookChat(options: UseBookChatOptions) {
   const { bookId, bookTitleParam, selectionQuote, initialQuestion } = options;
   const [conversationId] = useState(() => options.conversationId ?? createBookConversationId());
+  const [source, setSource] = useState<BookChatSourceState | null>(null);
+  const [sourceLookupError, setSourceLookupError] = useState<string | null>(null);
   const [availability, setAvailability] = useState<BookChatAvailability | null>(null);
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [configurationNotice, setConfigurationNotice] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [historyStatus, setHistoryStatus] = useState<'loading' | 'loaded' | 'failed'>('loading');
+  const loading = historyStatus === 'loading';
   const [question, setLocalQuestion] = useState(options.presentation?.getSnapshot().draft ?? initialQuestion ?? '');
   const setQuestion = useCallback((value: string) => {
     const selection = options.presentation?.getSnapshot().selection;
@@ -62,14 +83,13 @@ export function useBookChat(options: UseBookChatOptions) {
     setLocalQuestion(value);
   }, [options.presentation]);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
+  // A run can finish before React renders again. Build the next request from the latest ordered transcript.
+  const currentTurns = useRef<ChatTurn[]>([]);
   const [running, setRunning] = useState(false);
   const [contextUsage, setContextUsage] = useState<AgentContextUsage | undefined>();
   const [contextEstimate, setContextEstimate] = useState<AgentContextEstimate | undefined>();
   const firstBookTitle = useRef<string | undefined>(undefined);
-  const session = useRef<AgentRunSession | null>(null);
   const runningRef = useRef(false);
-  const cancelRequested = useRef(false);
-  const history = useRef<Array<{ id: string; question: string; answer: string }>>([]);
   const savingTurns = useRef(new Set<string>());
   const selectionUsed = useRef(options.presentation?.getSnapshot().selectionConsumed ?? false);
   const conversationSelection = useRef(questionSelection(selectionQuote !== undefined ? { selectionQuote } : {}));
@@ -92,13 +112,8 @@ export function useBookChat(options: UseBookChatOptions) {
         setRunning(busy);
         if (turn.contextUsage) setContextUsage(turn.contextUsage);
         if (turn.contextEstimate) setContextEstimate(turn.contextEstimate);
-        setTurns((items) => mergeConversationRun(items, snapshot));
-        if (!busy && !turn.saveError) {
-          const entry = { id: turn.id, question: turn.sourceQuestion ?? '', answer: turn.text };
-          const index = history.current.findIndex(item => item.id === turn.id);
-          if (index >= 0) history.current[index] = entry;
-          else history.current.push(entry);
-        }
+        currentTurns.current = mergeConversationRun(currentTurns.current, snapshot);
+        setTurns(currentTurns.current);
       }),
     [conversationId],
   );
@@ -106,24 +121,33 @@ export function useBookChat(options: UseBookChatOptions) {
   useEffect(() => {
     mounted.current = true;
     let active = true;
+    setHistoryStatus('loading');
+    setLoadError(null);
     void (async () => {
       try {
-        const next = await getBookChatAvailability(bookId);
-        const saved = await loadBookConversation(conversationId);
+        const [sourceResult, saved] = await Promise.all([
+          getBookChatSource(bookId).then(
+            source => ({ source, error: null }),
+            (error: unknown) => ({ source: null, error: friendlyError(error instanceof Error ? error.message : String(error)) }),
+          ),
+          loadBookConversation(conversationId),
+        ]);
         if (!active) return;
-        setAvailability(next);
+        const next = sourceResult.source;
+        setSource(next);
+        setSourceLookupError(sourceResult.error);
         const hasLegacyTurns = saved.some(message => message.details.legacyNative !== undefined || message.id.startsWith('legacy-q:'));
         // Missing Native first-turn identity must not turn another round's selection or location into conversation context.
         const firstAnswer = saved.find(message => message.isFirstLegacyTurn) ??
           (hasLegacyTurns ? undefined : saved.find(message => message.role === 'assistant'));
         conversationSelection.current ??= firstAnswer ? questionSelection(firstAnswer.details) : undefined;
-        const bookFormat = next.book?.format ?? options.presentation?.source?.format ?? 'epub';
+        const bookFormat = next?.book?.format ?? options.presentation?.source?.format ?? 'epub';
         if (firstAnswer && conversationOrigin.current === undefined) {
           conversationOrigin.current = resolveQuestionOrigin({ bookId, format: bookFormat,
             questionOrigin: firstAnswer.details.questionOrigin, legacyNative: firstAnswer.details.legacyNative }) ?? null;
         }
         firstBookTitle.current ??= saved.find(message => message.details.bookTitle)?.details.bookTitle ??
-          next.book?.title ?? bookTitleParam ?? '书内问答';
+          next?.book?.title ?? bookTitleParam ?? '书内问答';
         const restored: ChatTurn[] = saved.map((message, index) => {
           const answer = message.role === 'user' ? saved[index + 1] : message;
           const selected = questionSelection(message.role === 'user' && answer?.role === 'assistant' ? answer.details : message.details);
@@ -161,34 +185,22 @@ export function useBookChat(options: UseBookChatOptions) {
               : {}),
           };
         });
-        // A run can finish during either read. Its subscriber snapshot remains newer even
+        // A run can finish while history loads. Its subscriber snapshot remains newer even
         // after finish removes it from the active map, so never replace it with stale disk data.
         const live = activeConversationRun(conversationId) ?? latestSnapshot.current;
         const merged = live ? mergeConversationRun(restored, live) : restored;
+        currentTurns.current = merged;
         setTurns(merged);
         runningRef.current = live?.running ?? false;
         setRunning(live?.running ?? false);
-        history.current = [];
-        for (let i = 1; i < merged.length; i++) {
-          const answer = merged[i];
-          const user = merged[i - 1];
-          if (answer?.role === 'assistant' && answer.status !== 'streaming' && !answer.saveError && user?.role === 'user') {
-            history.current.push({
-              id: answer.id,
-              question: user.text,
-              answer: answer.text,
-            });
-          }
-        }
         const usage = [...merged].reverse().find((turn) => turn.contextUsage)?.contextUsage;
         setContextUsage(usage);
         setContextEstimate([...merged].reverse().find(turn => turn.contextEstimate)?.contextEstimate);
-        if (!next.book) setLoadError('原书已移除，仍可查看对话；重新导入后可继续提问。');
-        else if (!next.index.available) setLoadError(next.index.detail);
+        setHistoryStatus('loaded');
       } catch (error) {
-        if (active) setLoadError(friendlyError(error instanceof Error ? error.message : String(error)));
-      } finally {
-        if (active) setLoading(false);
+        if (!active) return;
+        setLoadError(friendlyError(error instanceof Error ? error.message : String(error)));
+        setHistoryStatus('failed');
       }
     })();
     return () => {
@@ -199,27 +211,22 @@ export function useBookChat(options: UseBookChatOptions) {
 
   useFocusEffect(
     useCallback(() => {
-      if (loading) return;
       let active = true;
       void getBookChatAvailability(bookId)
         .then((next) => {
           if (!active) return;
           setAvailability(next);
-          setLoadError(
-            !next.book
-              ? '原书已移除，仍可查看对话；重新导入后可继续提问。'
-              : !next.index.available
-                ? next.index.detail
-                : null,
-          );
+          setAvailabilityError(null);
         })
         .catch((error: unknown) => {
-          if (active) setLoadError(friendlyError(String(error)));
+          if (!active) return;
+          setAvailability(null);
+          setAvailabilityError(friendlyError(error instanceof Error ? error.message : String(error)));
         });
       return () => {
         active = false;
       };
-    }, [bookId, loading]),
+    }, [bookId]),
   );
 
   const persist = useCallback(
@@ -266,8 +273,9 @@ export function useBookChat(options: UseBookChatOptions) {
       if (
         runningRef.current ||
         activeConversationRun(conversationId)?.running ||
-        hasUnsavedConversationTurn(conversationId, turns) ||
-        !availability?.book
+        hasUnsavedConversationTurn(conversationId, currentTurns.current) ||
+        historyStatus !== 'loaded' ||
+        !availability?.book || !availability.sourceAvailable
       )
         return;
       if (!availability.config) {
@@ -275,13 +283,16 @@ export function useBookChat(options: UseBookChatOptions) {
         return;
       }
       if (!availability.index.available) return;
+      const history = historyBefore(currentTurns.current, input.retryId);
       runningRef.current = true;
-      cancelRequested.current = false;
       setRunning(true);
-      const unregister = registerConversationRun(conversationId, () => {
-        cancelRequested.current = true;
-        session.current?.cancel();
-      });
+      const controller = new AbortController();
+      let session: AgentRunSession | undefined;
+      const stop = () => {
+        controller.abort();
+        session?.cancel();
+      };
+      const unregister = registerConversationRun(conversationId, stop);
       const id = input.retryId ?? nextId();
       let current: ChatTurn = {
         id,
@@ -298,25 +309,6 @@ export function useBookChat(options: UseBookChatOptions) {
         ...selectionFields(input.selection),
         ...(input.questionOrigin !== undefined ? { questionOrigin: input.questionOrigin } : {}),
       };
-      setTurns((items) =>
-        input.retryId
-          ? items.map((item) => (item.id === id ? current : item))
-          : [
-              ...items,
-              {
-                id: id + ':user',
-                role: 'user',
-                text: input.display,
-                reasoning: '',
-                tools: [],
-                citations: [],
-                warnings: [],
-                status: 'done',
-                ...selectionFields(input.selection),
-              },
-              current,
-            ],
-      );
       let frame: number | null = null;
       const publishCurrent = () => publishConversationRun(conversationId, current, {
         bookId, bookTitle: current.bookTitle ?? availability.book!.title,
@@ -355,24 +347,26 @@ export function useBookChat(options: UseBookChatOptions) {
       };
       try {
         endBackgroundTask = beginBookChatBackgroundTask(() => {
-          if (current.status !== 'streaming' || cancelRequested.current) return;
+          if (current.status !== 'streaming' || controller.signal.aborted) return;
           backgroundExpired = true;
-          session.current?.cancel();
+          stop();
         });
         // Persist the question before the request, so termination cannot lose the reader's input.
         await writer.flush(current);
-        if (backgroundExpired) throw new Error(backgroundExpirationMessage);
+        assertNotAborted(controller.signal);
         const started = await startBookChatTurn({
           bookId,
           question: input.display,
+          signal: controller.signal,
           ...(input.selection?.contextQuote ? { selectionQuote: input.selection.contextQuote } : {}),
-          history: (input.retryId ? history.current.filter(entry =>
-            turns.findIndex(turn => turn.id === entry.id) < turns.findIndex(turn => turn.id === input.retryId)) : history.current)
-            .map(({ question, answer }) => ({ question, answer })),
+          history,
           ...(input.questionOrigin ? { readingPosition: input.questionOrigin.readingPosition } : {}),
         });
-        session.current = started.session;
-        if (cancelRequested.current || backgroundExpired) started.session.cancel();
+        session = started.session;
+        if (controller.signal.aborted) {
+          session.cancel();
+          assertNotAborted(controller.signal);
+        }
         let terminal = false;
         for await (const event of started.session.events) {
           switch (event.type) {
@@ -473,13 +467,15 @@ export function useBookChat(options: UseBookChatOptions) {
         await started.session.result;
         if (!terminal) {
           stopThinking();
-          current = backgroundExpired ? interruptedInBackground() : { ...current, status: 'error', error: 'AI 服务没有完成回答，请重试。' };
+          current = backgroundExpired ? interruptedInBackground() : controller.signal.aborted
+            ? { ...current, status: 'cancelled' }
+            : { ...current, status: 'error', error: 'AI 服务没有完成回答，请重试。' };
         }
       } catch (error) {
         stopThinking();
-        current = backgroundExpired ? interruptedInBackground() : {
+        current = backgroundExpired ? interruptedInBackground() : controller.signal.aborted ? { ...current, status: 'cancelled' } : {
           ...current,
-          status: cancelRequested.current ? 'cancelled' : 'error',
+          status: 'error',
           error: friendlyError(error instanceof Error ? error.message : String(error)),
         };
       } finally {
@@ -505,19 +501,19 @@ export function useBookChat(options: UseBookChatOptions) {
         if (frame !== null) cancelAnimationFrame(frame);
         if (isBookConversationDeleted(conversationId)) discardConversationRun(conversationId);
         else finishConversationRun(conversationId, current);
-        session.current = null;
         runningRef.current = false;
         unregister();
       }
     },
-    [availability, bookId, conversationId, persist, turns],
+    [availability, bookId, conversationId, historyStatus, persist],
   );
 
   const send = useCallback(
-    async (override?: string) => {
+    async (override?: string, onAccepted?: () => void) => {
       const text = (override ?? question).trim();
-      if (!text || runningRef.current || hasUnsavedConversationTurn(conversationId, turns) ||
-        !availability?.book) return false;
+      if (!text || historyStatus !== 'loaded' || runningRef.current || activeConversationRun(conversationId)?.running ||
+        hasUnsavedConversationTurn(conversationId, currentTurns.current) ||
+        !availability?.book || !availability.sourceAvailable) return false;
       if (!availability.config) {
         setConfigurationNotice(availability.configError ?? missingModelNotice);
         return false;
@@ -531,6 +527,7 @@ export function useBookChat(options: UseBookChatOptions) {
       if (conversationOrigin.current === undefined) conversationOrigin.current = origin ?? null;
       selectionUsed.current = true;
       options.presentation?.update({ selectionConsumed: true });
+      onAccepted?.();
       setQuestion('');
       await run({
         display: text,
@@ -540,12 +537,12 @@ export function useBookChat(options: UseBookChatOptions) {
       });
       return true;
     },
-    [availability, bookId, conversationId, options.presentation, options.readingPosition, question, run, setQuestion, turns],
+    [availability, bookId, conversationId, historyStatus, options.presentation, options.readingPosition, question, run, setQuestion],
   );
 
   useEffect(() => {
     if (
-      loading ||
+      historyStatus !== 'loaded' ||
       initialSent.current ||
       !initialQuestion ||
       !availability?.config ||
@@ -554,8 +551,10 @@ export function useBookChat(options: UseBookChatOptions) {
       return;
     initialSent.current = true;
     options.presentation?.update({ initialQuestionConsumed: true });
-    void send(initialQuestion);
-  }, [availability, initialQuestion, loading, options.presentation, send]);
+    // The composer can already be edited while the search index prepares.
+    // Do not send the old route value or clear the reader's updated draft.
+    if (question === initialQuestion) void send(initialQuestion);
+  }, [availability, initialQuestion, historyStatus, options.presentation, question, send]);
 
   const retry = useCallback(
     (turn: ChatTurn) => {
@@ -588,9 +587,15 @@ export function useBookChat(options: UseBookChatOptions) {
     [availability, bookId, conversationId, persist, run],
   );
 
+  const currentSource = availability ?? source;
+  const sourceAvailable = currentSource?.sourceAvailable ?? false;
+  const sourceError = currentSource === null ? sourceLookupError : currentSource.book
+    ? currentSource.sourceError
+    : '原书已移除，仍可查看对话；重新导入后可继续提问。';
   return {
-    availability,
-    loadError,
+    sourceAvailable,
+    loadError: loadError ?? availabilityError ?? sourceError ?? null,
+    checkingAvailability: sourceAvailable && !loading && availability === null && availabilityError === null,
     loading,
     question,
     setQuestion,
@@ -600,15 +605,16 @@ export function useBookChat(options: UseBookChatOptions) {
     contextEstimate,
     hasExternalMaterials: turns.some(turn => turn.sentMaterials?.some(material => material.kind === 'external-tool')),
     conversationId,
-    title: availability?.book?.title ?? bookTitleParam ?? '书内问答',
-    format: availability?.book?.format ?? 'epub',
+    title: currentSource?.book?.title ?? bookTitleParam ?? '书内问答',
+    format: currentSource?.book?.format ?? options.presentation?.source?.format ?? 'epub',
     configMissing: availability !== null && availability.config === null,
     configurationNotice,
     dismissConfigurationNotice,
     indexMissing: availability !== null && !availability.index.available,
     canSend: Boolean(
-      !loading &&
+      historyStatus === 'loaded' &&
         availability?.book &&
+        availability.sourceAvailable &&
         (!availability.config || availability.index.available) &&
         !hasUnsavedConversationTurn(conversationId, turns) &&
         !running &&

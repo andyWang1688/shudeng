@@ -34,6 +34,38 @@ afterEach(async () => {
 });
 
 describe('durable conversation lifecycle', () => {
+  it.each([false, true])('keeps the original migrated question when retrying (old duplicate: %s)', async (oldDuplicate) => {
+    const id = 'legacy-q:OLD:assistant';
+    const conversationId = 'migrated-turn';
+    for (const [messageId, role, content, createdAt] of [
+      ['legacy-q:OLD:user', 'user', '旧版问题', 10], [id, 'assistant', '半句', 10],
+      ['follow:user', 'user', '后续问题', 20], ['follow', 'assistant', '后续回答', 21],
+      ...(oldDuplicate ? [[id + ':user', 'user', '旧版问题', 30]] : []),
+    ]) {
+      await driver.run('INSERT INTO messages(id, conversation_id, role, content, created_at) VALUES(?,?,?,?,?)',
+        [messageId, conversationId, role, content, createdAt]);
+    }
+    if (oldDuplicate) expect(await loadBookConversation(conversationId)).toHaveLength(4);
+    await appendBookChatTurn({ bookId: 'book-1', conversationId, assistantId: id,
+      question: '旧版问题', answer: '完整回答', details: { status: 'done' } });
+    expect((await loadBookConversation(conversationId)).map(m => [m.id, m.text])).toEqual([
+      ['legacy-q:OLD:user', '旧版问题'], [id, '完整回答'], ['follow:user', '后续问题'], ['follow', '后续回答'],
+    ]);
+    expect(await driver.all('SELECT created_at FROM messages WHERE id=?', ['legacy-q:OLD:user'])).toEqual([{ created_at: 10 }]);
+    expect((await driver.all('SELECT id FROM messages WHERE id=?', [id + ':user'])).length).toBe(Number(oldDuplicate));
+    expect((await loadConversationSummaries())[0]).toMatchObject({ submittedCount: 2, turns: 4 });
+  });
+
+  it('retains a different question even if its ID has the shape of a legacy retry copy', async () => {
+    const id = 'legacy-q:OLD:assistant';
+    const conversationId = 'similar-id';
+    await appendBookChatTurn({ assistantId: id, conversationId, bookId: 'book-1', question: '原问题', answer: '半句' });
+    await driver.run('INSERT INTO messages(id, conversation_id, role, content, created_at) VALUES(?,?,?,?,?)',
+      [id + ':user', conversationId, 'user', '另一条问题', Date.now() + 10]);
+    expect((await loadBookConversation(conversationId)).map(m => m.text)).toContain('另一条问题');
+    expect((await loadConversationSummaries())[0].submittedCount).toBe(2);
+  });
+
   it('keeps a completed subscriber snapshot over a stale restoration read after the active run is removed', async () => {
     const turn = {
       id: 'restore-race',
@@ -277,6 +309,13 @@ describe('streaming answer and citation contracts', () => {
   it('shows the JSON answer body and hides the response envelope', () => {
     expect(streamingAnswer('{"ans')).toBe('');
     expect(streamingAnswer('{"answer":"回答","citations":[]}')).toBe('回答');
+  });
+
+  it('keeps extra envelope fields out of the displayed answer while citations arrive', () => {
+    const prefix = '{"answer":"正文","chapter":"第三回","citations":[';
+    for (const ending of ['', '{"id":"E1"', ']}']) {
+      expect(streamingAnswer(prefix + ending)).toBe('正文');
+    }
   });
 
   it('keeps malformed-answer text usable while hiding citations and double encoding', () => {

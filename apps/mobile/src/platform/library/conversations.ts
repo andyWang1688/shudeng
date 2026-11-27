@@ -3,7 +3,7 @@
  * 旧迁移会话只有 UUID（无 bookId）时用 citations 的 quote/chapter/page/href 反查所属书。
  */
 import { createLocalId, type AgentContextEstimate, type AgentContextUsage, type AgentSentMaterial, type LegacyNativeAgentStep, type LegacyNativeEvidence, type LegacyNativeSnapshot, type VerifiedCitation } from '@shudeng/core';
-import type { SQLiteValue } from '@shudeng/core/db';
+import type { MessageRow, SQLiteValue } from '@shudeng/core/db';
 import type { ShudengDataLayer } from '../db';
 import { getDataLayer } from '../db';
 import { citationHref, cleanLegacyAssistantContent, isRecord } from './pure';
@@ -11,6 +11,7 @@ import { parseLegacyJSON } from './legacyMigration';
 import type { ConversationSummary } from './types';
 import { parseQuestionOrigin, type QuestionOriginSnapshot } from './questionOrigin';
 import { parseWebSources, parseWebSearchPresentation, type WebSearchPresentation } from './assistantSources';
+import { questionIdForAnswer } from './conversationMessageIds';
 import type { WebSource } from '@shudeng/core';
 
 export { cleanLegacyAssistantContent } from './pure';
@@ -135,6 +136,7 @@ export async function appendBookChatTurn(input: {
   const conversationId = input.conversationId ?? createBookConversationId();
   if (deletedConversations.has(conversationId)) throw new Error('这段对话已删除');
   const assistantId = input.assistantId ?? createLocalId('message');
+  const questionId = questionIdForAnswer(assistantId);
   const now = Date.now();
   // Freeze the first real book-name snapshot in existing turn details. Source
   // removal and later partial/final writes must not replace that name.
@@ -154,8 +156,9 @@ export async function appendBookChatTurn(input: {
       [conversationId, input.bookId, now, now],
     );
     await tx.run(
-      'INSERT INTO messages (id,conversation_id,role,content,created_at) VALUES (?,?,?, ?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content',
-      [assistantId + ':user', conversationId, 'user', input.question, now],
+      `INSERT INTO messages (id,conversation_id,role,content,created_at) VALUES (?,?,?, ?,?)
+       ON CONFLICT(id) DO UPDATE SET content=excluded.content WHERE messages.id NOT GLOB 'legacy-q:*:user'`,
+      [questionId, conversationId, 'user', input.question, now],
     );
     await tx.run(
       'INSERT INTO messages (id,conversation_id,role,content,reasoning_content,is_error,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content,reasoning_content=excluded.reasoning_content,is_error=excluded.is_error',
@@ -385,10 +388,25 @@ function parseTurnDetails(raw: string | undefined): ConversationTurnDetails {
   }
 }
 
+/** Older RN retries appended a second copy of a migrated question. Keep the stored rows intact. */
+async function conversationMessages(layer: ShudengDataLayer, conversationId: string): Promise<MessageRow[]> {
+  const messages = await layer.store.listMessages(conversationId);
+  const isRetryCopy = (row: MessageRow) => row.role === 'user' &&
+    row.id.startsWith('legacy-q:') && row.id.endsWith(':assistant:user');
+  if (!messages.some(isRetryCopy)) return messages;
+  const byId = new Map(messages.map(message => [message.id, message]));
+  return messages.filter(message => {
+    if (!isRetryCopy(message)) return true;
+    const answerId = message.id.slice(0, -':user'.length);
+    const original = byId.get(questionIdForAnswer(answerId));
+    return !(byId.get(answerId)?.role === 'assistant' && original?.role === 'user' && original.content === message.content);
+  });
+}
+
 export async function loadBookConversation(conversationId: string): Promise<StoredConversationTurn[]> {
   const layer = await getDataLayer();
   const [messages, citations, details] = await Promise.all([
-    layer.store.listMessages(conversationId),
+    conversationMessages(layer, conversationId),
     layer.store.listCitations(conversationId),
     layer.driver.all<{ message_id: string; details_json: string }>(
       'SELECT d.message_id,d.details_json FROM conversation_turn_details d JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=?',
@@ -607,7 +625,7 @@ export async function loadConversationSummaries(): Promise<
 > {
   const layer = await getDataLayer();
   const rows = await layer.driver.all<Record<string, SQLiteValue>>(
-    `SELECT m.conversation_id, COUNT(*) AS turns, MAX(MAX(COALESCE(c.updated_at,0),m.created_at)) AS updated_at,
+    `SELECT m.conversation_id, MAX(MAX(COALESCE(c.updated_at,0),m.created_at)) AS updated_at,
        MAX(CASE WHEN m.id GLOB 'legacy-q:*' THEN 1 ELSE 0 END) AS has_legacy
      FROM messages m LEFT JOIN conversations c ON c.id=m.conversation_id
      WHERE m.role IN ('user','assistant') GROUP BY m.conversation_id ORDER BY updated_at DESC`,
@@ -621,7 +639,7 @@ export async function loadConversationSummaries(): Promise<
   for (const row of rows) {
     if (typeof row.conversation_id !== 'string') continue;
     const conversationId = row.conversation_id;
-    const messages = await layer.store.listMessages(conversationId);
+    const messages = await conversationMessages(layer, conversationId);
     const original = row.has_legacy === 1 ? legacy.get(conversationId) : undefined;
     const firstQuestion = original && messages.find(message => message.id === original.firstQuestionId);
     const question = firstQuestion?.content ?? messages.find((message) => message.role === 'user')?.content ?? '';
@@ -652,7 +670,7 @@ export async function loadConversationSummaries(): Promise<
       ...(bookTitle !== undefined ? { bookTitle } : {}),
       answer,
       searchText: messages.map((message) => cleanLegacyAssistantContent(message.content)).join(' '),
-      turns: typeof row.turns === 'number' ? row.turns : messages.length,
+      turns: messages.filter(message => message.role === 'user' || message.role === 'assistant').length,
       submittedCount: messages.filter(message => message.role === 'user' && !original?.draftMessageIds.has(message.id)).length,
       assistantIds: messages.filter(message => message.role === 'assistant').map(message => message.id),
       updatedAt: typeof row.updated_at === 'number' ? row.updated_at : 0,

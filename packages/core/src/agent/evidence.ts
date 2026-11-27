@@ -6,7 +6,7 @@
 import type { BookExcerpt } from './book-source.js';
 import type { BookFormat } from '../domain/types.js';
 import { normalizedReaderText } from '../rag/reader-location.js';
-import { splitCitationTail } from './citation-tail.js';
+import { answerStringStart, splitCitationTail } from './citation-tail.js';
 import type { VerifiedCitation, WebSource } from './events.js';
 
 export interface RegisteredEvidence extends BookExcerpt {
@@ -179,10 +179,11 @@ export function parseAnswerPayload(text: string): AnswerPayload | null {
   const end = unwrapped.lastIndexOf('}');
   const candidate = end > start ? unwrapped.slice(start, end + 1) : unwrapped.slice(start);
   const parsed = safeParse(candidate);
-  if (parsed && typeof parsed.answer === 'string' && Array.isArray(parsed.citations)) {
+  if (parsed) {
+    if (typeof parsed.answer !== 'string') return null;
     return {
       answer: parsed.answer,
-      citations: parsed.citations as ReadonlyArray<AnswerCitation>,
+      citations: Array.isArray(parsed.citations) ? parsed.citations : [],
     };
   }
   return salvageAnswerPayload(candidate);
@@ -213,9 +214,8 @@ function safeParse(text: string): { answer?: unknown; citations?: unknown } | nu
 }
 
 function salvageAnswerPayload(candidate: string): AnswerPayload | null {
-  const marker = /"answer"\s*:\s*"/.exec(candidate);
-  if (!marker) return null;
-  const answerStart = marker.index + marker[0].length;
+  const answerStart = answerStringStart(candidate);
+  if (answerStart === undefined) return null;
   const citationPattern = /"\s*,\s*"citations"\s*:\s*\[/g;
   citationPattern.lastIndex = answerStart;
   let boundary: RegExpExecArray | null = null;

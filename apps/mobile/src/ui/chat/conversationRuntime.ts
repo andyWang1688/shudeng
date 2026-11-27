@@ -1,4 +1,5 @@
 import type { ChatTurn } from './types';
+import { questionIdForAnswer } from '../../platform/library/conversationMessageIds';
 
 export interface ConversationRunSnapshot {
   readonly turn: ChatTurn;
@@ -75,7 +76,7 @@ export function mergeConversationRun(
   if (turns.some((item) => item.id === turn.id))
     return turns.map((item) => (item.id === turn.id ? turn : item));
   const user: ChatTurn = {
-    id: turn.id + ':user',
+    id: questionIdForAnswer(turn.id),
     role: 'user',
     text: turn.sourceQuestion ?? '',
     reasoning: '',
@@ -83,7 +84,9 @@ export function mergeConversationRun(
     citations: [],
     warnings: [],
     status: 'done',
-    ...(turn.selectionQuote ? { selectionQuote: turn.selectionQuote } : {}),
+    ...(turn.selectionQuote !== undefined ? { selectionQuote: turn.selectionQuote } : {}),
+    ...(turn.selectionContextQuote !== undefined ? { selectionContextQuote: turn.selectionContextQuote } : {}),
+    ...(turn.selectionAttached !== undefined ? { selectionAttached: turn.selectionAttached } : {}),
   };
   return [...turns, ...(turns.some((item) => item.id === user.id) ? [] : [user]), turn];
 }

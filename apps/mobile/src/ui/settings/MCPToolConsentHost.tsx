@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState } from "react-native";
 import { registerMCPToolConsentPresenter, type MCPToolConsentPrompt, type MCPToolConsentScope } from "../../platform/settings/mcpToolConsent";
 import { BookNotice } from "../components/BookNotice";
 
@@ -26,14 +27,18 @@ export function MCPToolConsentHost({ active = true, scope = "fallback", depth = 
     pending.current = null;
     current.signal?.removeEventListener("abort", current.abort);
     if (mounted.current) setRequest(null);
-    current.resolve(granted && mounted.current && !current.signal?.aborted);
+    current.resolve(granted && mounted.current && AppState.currentState === "active" && !current.signal?.aborted);
   }, []);
   useEffect(() => {
     if (!active) return;
     mounted.current = true;
     setRequest(null);
+    const appState = AppState.addEventListener("change", (state) => {
+      if (state !== "active" && pending.current) settle(pending.current, false);
+    });
     const unregister = registerMCPToolConsentPresenter((prompt, signal) => {
-      if (!mounted.current || pending.current || signal?.aborted) return Promise.resolve(false);
+      if (!mounted.current || AppState.currentState !== "active" || pending.current || signal?.aborted)
+        return Promise.resolve(false);
       return new Promise<boolean>((resolve) => {
         const next: ConsentRequest = {
           id: ++sequence.current, prompt, signal, resolve,
@@ -47,6 +52,7 @@ export function MCPToolConsentHost({ active = true, scope = "fallback", depth = 
     }, scope, depth);
     return () => {
       mounted.current = false;
+      appState.remove();
       unregister();
       if (pending.current) settle(pending.current, false);
     };

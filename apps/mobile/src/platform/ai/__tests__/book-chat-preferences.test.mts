@@ -12,6 +12,8 @@ const state = vi.hoisted(() => ({
   },
   preferenceError: null as Error | null,
   configError: null as Error | null,
+  hasFile: true,
+  indexError: null as Error | null,
   toolGate: null as Promise<unknown[]> | null,
   models: [] as Array<Record<string, unknown>>,
   runs: [] as Array<Record<string, unknown>>,
@@ -34,6 +36,7 @@ vi.mock("../../aiConfig", () => ({
   },
 }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
+vi.mock("../../bookFiles", () => ({ findBookFile: () => state.hasFile ? {} : null }));
 vi.mock("../../db", () => ({
   getDataLayer: async () => ({
     store: {
@@ -61,11 +64,10 @@ vi.mock("../legacyIndex", () => ({
   getLegacyIndexStatus: vi.fn(),
 }));
 vi.mock("../bookIndex", () => ({
-  getLocalBookIndexStatus: async () => ({
-    available: true,
-    semantic: true,
-    detail: "已准备",
-  }),
+  getLocalBookIndexStatus: async () => {
+    if (state.indexError) throw state.indexError;
+    return { available: true, semantic: true, detail: "已准备" };
+  },
   createLocalBookSource: async () => ({ search: async () => [] }),
   rebuildBookIndex: vi.fn(),
 }));
@@ -76,6 +78,8 @@ beforeEach(() => {
   state.runs = [];
   state.preferenceError = null;
   state.configError = null;
+  state.hasFile = true;
+  state.indexError = null;
   state.toolGate = null;
   state.preferences = { instructions: "先查原文，再解释。" };
   state.config = {
@@ -89,6 +93,54 @@ beforeEach(() => {
 });
 
 describe("product agent preference snapshots", () => {
+  it("stops waiting for setup on cancellation and never starts the agent after the wait finishes", async () => {
+    let release!: (tools: unknown[]) => void;
+    state.toolGate = new Promise(resolve => { release = resolve; });
+    const controller = new AbortController();
+    const options = { bookId: "book", question: "马上停止", signal: controller.signal };
+    const started = startBookChatTurn(options);
+    const outcome = started.then(() => "started", (error: Error) => error.name);
+    await vi.waitFor(() => expect(state.models).toHaveLength(2));
+    controller.abort();
+    try {
+      const microtasks = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); return "still waiting"; };
+      expect(await Promise.race([outcome, microtasks()])).toBe("AbortError");
+    } finally {
+      release([]);
+      await outcome;
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    expect(state.runs).toEqual([]);
+  });
+
+  it("keeps the book and citations accessible while reading its search index fails", async () => {
+    state.indexError = new Error("SQLite busy");
+    await expect(getBookChatAvailability("book")).resolves.toMatchObject({
+      book: { id: "book" }, sourceAvailable: true,
+      index: { available: false, detail: expect.stringContaining("SQLite busy") },
+    });
+    await expect(startBookChatTurn({ bookId: "book", question: "问题" })).rejects.toThrow("SQLite busy");
+    expect(state.runs).toEqual([]);
+  });
+
+  it("keeps the original book metadata but blocks a new run when only its old index survives", async () => {
+    state.hasFile = false;
+    await expect(getBookChatAvailability("book")).resolves.toMatchObject({
+      book: { id: "book" }, sourceAvailable: false,
+      index: { available: false, detail: expect.stringContaining("重新导入") },
+    });
+    await expect(startBookChatTurn({ bookId: "book", question: "问题" })).rejects.toThrow("书籍文件缺失");
+    expect(state.models).toEqual([]);
+    expect(state.runs).toEqual([]);
+
+    state.hasFile = true;
+    await expect(getBookChatAvailability("book")).resolves.toMatchObject({
+      book: { id: "book" }, sourceAvailable: true, index: { available: true },
+    });
+    await startBookChatTurn({ bookId: "book", question: "继续提问" });
+    expect(state.runs).toHaveLength(1);
+  });
+
   it.each([
     "请先确认此服务的发送说明",
     "已保存的 API Key 无法读取",

@@ -137,12 +137,25 @@ export function useChatListScroll<T extends { readonly id: string }>(presentatio
   const openCitation = useCallback((target: CitationTarget) => {
     appeared.current = false; void capture().then(() => { if (live.current) onOpenCitation(target); });
   }, [capture, onOpenCitation]);
+  const releaseReferenceAnchor = useCallback(() => {
+    // A new question starts a new scroll intent. An in-flight measurement
+    // from the previous citation must not fight the list's auto-scroll.
+    ++captureRevision.current;
+    if (scheduled.current !== undefined) {
+      cancelAnimationFrame(scheduled.current);
+      scheduled.current = undefined;
+    }
+    const scroll = { offset: offset.current };
+    saved.current = scroll;
+    restoration.current = { ...restoring(scroll), done: true, positioned: true };
+    presentation.update({ scroll, referenceFocus: null, restoreReferenceFocus: false }, false);
+  }, [presentation]);
   const beginDrag = useCallback(() => {
     interaction.current += 1; captureRevision.current += 1;
     presentation.update({ restoreReferenceFocus: false }, false);
     const state = restoration.current; state.tracking = false; finish(state);
   }, [finish, presentation]);
-  return { list, viewport, rows, update, restore, registerCitation, openCitation, beginDrag,
+  return { list, viewport, rows, update, restore, registerCitation, openCitation, releaseReferenceAnchor, beginDrag,
     onContentSizeChange: restore,
     onViewableItemsChanged: useRef(({ viewableItems }: { viewableItems: readonly { item: T }[] }) => {
       viewable.current = viewableItems.map(item => item.item.id);

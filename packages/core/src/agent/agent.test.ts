@@ -255,6 +255,42 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
     expect(completed?.type === 'completed' && completed.result.answer).toBe('参数错误也能回答。');
   });
 
+  it.each([false, true])('preserves parallel external tool authorization (granted: %s)', async (granted) => {
+    const requests: unknown[] = [];
+    let promptPending = false;
+    const refused = { status: 'denied' } as const;
+    const model = createScriptedModel([
+      { chunks: [{ toolCalls: [
+        { id: 'first', name: 'external_lookup', args: { query: '甲' } },
+        { id: 'parallel', name: 'external_lookup', args: { query: '乙' } },
+      ] }] },
+      { chunks: [{ toolCalls: [{ id: 'later', name: 'external_lookup', args: { query: '丙' } }] }] },
+      { chunks: [{ toolCalls: [{ id: 'book-call', name: 'search_book', args: { query: '灯' } }] }] },
+      { chunks: [{ text: '{"answer":"继续根据书内资料回答。","citations":[]}' }] },
+    ]);
+    const session = runBookAgent({ model, source: source(), book, question: '根据资料回答',
+      extraTools: [{ name: 'external_lookup', description: '外部资料',
+        inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+        async invoke(args) {
+          requests.push(args);
+          // The platform consent host refuses a second prompt while the first is visible.
+          if (promptPending) return refused;
+          if (requests.length === 1) {
+            promptPending = true;
+            await new Promise<void>(resolve => setImmediate(resolve));
+            promptPending = false;
+          }
+          return granted ? '工具结果' : refused;
+        } }],
+    });
+    const events = await collect(session);
+    expect(events.filter(event => event.type === 'toolFinished' && event.name === 'external_lookup'))
+      .toEqual(['first', 'parallel', 'later'].map(callId => expect.objectContaining({ callId, isError: !granted })));
+    expect(requests).toEqual(granted ? [{ query: '甲' }, { query: '乙' }, { query: '丙' }] : [{ query: '甲' }]);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'toolFinished', name: 'search_book', isError: false }));
+    expect(await session.result).toMatchObject({ answer: '继续根据书内资料回答。' });
+  });
+
   it('取消运行：事件流以 cancelled 结束，没有 completed', async () => {
     const model = createScriptedModel([
       {
@@ -318,6 +354,15 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
     expect(failed?.type === 'failed' && failed.message).toContain('格式不完整');
     expect(failed?.type === 'failed' && failed.message).not.toContain('citations');
     expect(await session.result).toBeNull();
+  });
+
+  it('keeps a complete answer when another field precedes an unusable citation list', async () => {
+    const raw = JSON.stringify({ answer: '迎上来的是黛玉的外祖母。', chapter: '第三回', citations: null });
+    const session = runBookAgent({ model: createScriptedModel([{ chunks: [{ text: raw }] }]),
+      source: source(), book, question: '是谁迎上来？' });
+    await collect(session);
+    expect(await session.result).toMatchObject({ answer: '迎上来的是黛玉的外祖母。', citations: [],
+      warnings: [expect.stringContaining('未提供可核查的书内依据')] });
   });
 
   it('recovers a safe truncated answer instead of showing the envelope (CMP-3 regression)', async () => {
@@ -424,5 +469,26 @@ describe('runBookAgent（官方 LangChain createAgent 工具循环）', () => {
     expect(String(firstCall[1]?.content)).toBe('旧问题');
     expect(String(firstCall[2]?.content)).toBe('旧回答');
     expect(String(firstCall[3]?.content)).toBe('新问题');
+  });
+
+  it('replays saved web citations and search hits as history without registering new sources', async () => {
+    const url = 'https://example.org/official';
+    const hit = 'https://example.org/listing';
+    const model = createScriptedModel([{ chunks: [{ text: JSON.stringify({ answer: '上次来源。', citations: [{ url, after: '上次来源。' }] }) }] }]);
+    const session = runBookAgent({ model, source: source(), book, question: '上次查了吗？',
+      history: [{ question: '查一下说明', answer: '见官方说明。', webSearchStatus: 'complete', webSources: [
+        { id: 'W1', url, title: '说明', provider: 'deepseek' },
+        { id: 'W2', url: hit, title: '列表', provider: 'deepseek', kind: 'search-result' },
+        { id: 'W3', url: 'https://unwanted:secret@example.org/', title: '不可用', provider: 'deepseek' },
+      ] }] });
+    await collect(session);
+    const text = String((model.langChainModel as ScriptedChatModel).calls[0]?.[2]?.content);
+    expect(text).toContain('已完成联网搜索');
+    expect(text).toMatch(/网页引用[^\n]*https:\/\/example\.org\/official/);
+    expect(text).toMatch(/搜索结果[^\n]*https:\/\/example\.org\/listing/);
+    expect(text).not.toContain('secret');
+    const result = await session.result;
+    expect(result?.webSearch?.status).toBe('disabled');
+    expect(result?.webSources ?? []).toEqual([]);
   });
 });

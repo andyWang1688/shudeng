@@ -5,6 +5,7 @@
 export * from './events.js';
 export * from './book-source.js';
 export * from './agent.js';
+export type { BookChatHistoryTurn } from './history.js';
 export { createChatModel, deepSeekThinkingParams } from './providers.js';
 export type {
   AgentModelConfig,
