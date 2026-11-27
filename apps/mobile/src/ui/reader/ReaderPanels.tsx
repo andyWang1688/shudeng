@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Check } from "lucide-react-native";
-import { normalizeReaderSpacing } from "@shudeng/core/domain/reader-spacing";
+import { defaultReaderSpacing, normalizeReaderSpacing } from "@shudeng/core/domain/reader-spacing";
 import type {
   ReaderPreferences,
   ShelfAnnotation,
@@ -42,6 +42,8 @@ export function ReaderSettingsPanel({
   const confirmed = useRef({ supplied: preferences, value: preferences });
   if (confirmed.current.supplied !== preferences)
     confirmed.current = { supplied: preferences, value: preferences };
+  const defaultTypography = preferences.fontScale === 1 &&
+    preferences.letterSpacing === defaultReaderSpacing.letterSpacing && preferences.lineSpacing === defaultReaderSpacing.lineSpacing;
   const apply = async (change: Partial<ReaderPreferences>) => {
     if (savingRef.current) return;
     savingRef.current = true;
@@ -126,6 +128,15 @@ export function ReaderSettingsPanel({
                 }}
               />
             )}
+            <Pressable
+              accessibilityRole="button"
+              disabled={blocked || defaultTypography}
+              accessibilityState={{ disabled: blocked || defaultTypography }}
+              style={[styles.reset, (blocked || defaultTypography) && styles.disabled]}
+              onPress={() => { if (canInteract()) void apply({ fontScale: 1, ...defaultReaderSpacing }); }}
+            >
+              <Text style={styles.resetText}>恢复默认排版</Text>
+            </Pressable>
           </View>
           <Text style={styles.section}>主题</Text>
           <ReaderNavigationTabs
@@ -292,6 +303,8 @@ function makeStyles(palette: Palette) {
     },
     settingsContent: { paddingBottom: 36 },
     themeControl: { marginHorizontal: 20, marginTop: 8, marginBottom: 0 },
+    reset: { minHeight: 44, alignSelf: "flex-start", justifyContent: "center" },
+    resetText: { color: palette.lampInk, fontSize: 15 },
     typography: { marginHorizontal: 20 },
     disabled: { opacity: 0.35 },
     highlightContent: { paddingHorizontal: 26, paddingBottom: 32, gap: 20 },

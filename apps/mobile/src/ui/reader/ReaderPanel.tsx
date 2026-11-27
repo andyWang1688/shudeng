@@ -32,6 +32,8 @@ export function ReaderPanel({
   children,
   action,
   initialHeight = 70,
+  initialIndex = 0,
+  onSnapChange,
   panFromContent = true,
   busy = false,
   testID,
@@ -42,6 +44,8 @@ export function ReaderPanel({
   readonly children: PanelContent;
   readonly action?: PanelContent;
   readonly initialHeight?: number;
+  readonly initialIndex?: 0 | 1;
+  readonly onSnapChange?: (index: number) => void;
   readonly panFromContent?: boolean;
   readonly busy?: boolean;
   readonly testID?: string;
@@ -65,6 +69,8 @@ export function ReaderPanel({
           <AppSheet
             ref={sheet}
             initialHeight={initialHeight}
+            initialIndex={initialIndex}
+            {...(onSnapChange ? { onChange: onSnapChange } : {})}
             palette={palette}
             onClose={didClose}
             onAnimate={onAnimate}

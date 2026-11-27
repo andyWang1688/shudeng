@@ -1,3 +1,5 @@
+import type { EpubScrollViewport } from './protocol'
+
 export interface EpubViewport { left: number; right: number; top: number; bottom: number }
 
 /** Range rects stay in iframe viewport coordinates, including its inner scroll. */
@@ -14,6 +16,25 @@ export function visibleDocumentViewport(doc: Document, host: HTMLElement): EpubV
 }
 
 type AnchorLike = Range | Element | number
+
+/** Measure the CFI's document independently of how WebKit paints its range. */
+export function measureScrollViewport(
+  doc: Document,
+  host: HTMLElement,
+  axis: EpubScrollViewport['axis'],
+): EpubScrollViewport | undefined {
+  const frame = doc.defaultView?.frameElement?.getBoundingClientRect()
+  if (!frame) return
+  const { top, left, width, height } = host.getBoundingClientRect()
+  const vertical = axis === 'scrollTop'
+  const extent = vertical ? frame.height : frame.width
+  const offset = vertical ? frame.top - top : frame.left - left
+  const viewportExtent = vertical ? height : width
+  if (width > 0 && height > 0 && extent > 0 && [width, height, offset, extent].every(Number.isFinite) &&
+    offset + extent >= -1 && offset <= viewportExtent + 1)
+    return { axis, offset, extent, width, height }
+}
+
 const terminalLayout = new WeakMap<Document, Map<HTMLElement, { previous: string; assigned: string }>>()
 
 function setTerminalHeight(element: HTMLElement, doc: Document, height: number): void {

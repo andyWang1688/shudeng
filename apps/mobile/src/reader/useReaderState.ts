@@ -12,7 +12,7 @@ import {
 } from '../platform/library';
 import type { ReaderEvent, ReaderWebViewHandle } from './ReaderWebView';
 import { annotationSeedFromShelfAnnotation, storedLocatorFromReaderLocator, readerLocatorFromStoredLocator } from './readerMapping';
-import type { ReaderAnnotationSeed, ReaderBookmarkContext, ReaderContentsItem, ReaderNavigationReceipt, ReaderSearchResult, SelectionRect } from './readerProtocol';
+import type { ReaderAnnotationSeed, ReaderBookmarkContext, ReaderContentsItem, ReaderNavigationCommand, ReaderNavigationReceipt, ReaderSearchResult, SelectionRect } from './readerProtocol';
 
 export type ReaderSelection = { readonly quote: string; readonly locator: StoredReaderLocator; readonly rects?: readonly SelectionRect[] };
 type Options = {
@@ -21,6 +21,7 @@ type Options = {
   readonly onAnnotationsChanged?: ((annotations: readonly ShelfAnnotation[]) => void) | undefined;
 };
 type ReaderOwner = { active: boolean; readonly bookId: string };
+const progressSaveIntervalMs = 1200;
 
 export function useReaderState({ bookId, initialAnnotations, onAnnotationsChanged }: Options) {
   const readerRef = useRef<ReaderWebViewHandle>(null);
@@ -45,6 +46,7 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
   const [savingNote, setSavingNote] = useState(false);
   const savingNoteRef = useRef(false);
   const [contents, setContents] = useState<readonly ReaderContentsItem[]>([]);
+  const currentTocHref = useRef<string | null>(null);
   const [contentsLoaded, setContentsLoaded] = useState(false);
   const [bookmarked, setBookmarked] = useState(false);
   const visibleBookmark = useRef(false);
@@ -57,6 +59,10 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
   const bookmarkRequests = useRef(new Map<number, { resolve: (context: ReaderBookmarkContext) => void; reject: (cause: Error) => void; timeout: ReturnType<typeof setTimeout> }>());
   const bookmarkSavingRef = useRef(false);
   const navigationRequests = useRef(new Map<string, (receipt: ReaderNavigationReceipt) => void>());
+  const contentsRequest = useRef(0);
+  const [contentsBusy, setContentsBusy] = useState(false);
+  const activeContentsRequest = useRef<string | null>(null);
+  const [contentsOrigin, setContentsOrigin] = useState<Extract<StoredReaderLocator, { type: 'epub' }> | null>(null);
   const [searchResults, setSearchResults] = useState<readonly ReaderSearchResult[]>([]);
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -66,6 +72,7 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
   const latestProgress = useRef<{ locator: StoredReaderLocator; percent: number; chapter: string | null } | null>(null);
   const openingProgress = useRef<typeof latestProgress.current>(null);
   const lastSavedAt = useRef(0);
+  const progressSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readyRef = useRef(false);
   const loadedPreferencesBook = useRef<string | null>(null);
@@ -81,6 +88,7 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
     bookmarkSaveOperation.current = null; bookmarkSavingRef.current = false;
     setSavingNote(false); setNoteBody(''); setNoteSelection(null); setEditingAnnotation(null);
     setSelectedAnnotation(null); setSelection(null); setError(null); setNotice(null);
+    currentTocHref.current = null; setContents([]); setContentsLoaded(false);
     latestProgress.current = null; openingProgress.current = null; lastSavedAt.current = 0; currentChapter.current = null;
     return () => { owner.active = false; };
   }, [bookId]);
@@ -108,6 +116,9 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
     const identity = bookId + ':' + readerReload;
     if (initializedReader.current !== identity) {
       initializedReader.current = identity;
+      activeContentsRequest.current = null;
+      setContentsBusy(false);
+      setContentsOrigin(null);
       readyRef.current = false;
       setReaderReady(false);
       setReaderError(null);
@@ -174,9 +185,14 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
   }, [bookId, onAnnotationsChanged, ownsReaderUI]);
 
   const flushProgress = useCallback(async () => {
+    if (progressSaveTimer.current !== null) {
+      clearTimeout(progressSaveTimer.current);
+      progressSaveTimer.current = null;
+    }
     const owner = readerOwner.current;
     const latest = latestProgress.current;
     if (!latest) return true;
+    lastSavedAt.current = Date.now();
     try { await saveBookProgress(bookId, latest); return true; }
     catch (cause) { if (ownsReaderUI(owner) && owner.bookId === bookId) setError('阅读位置尚未保存：' + message(cause)); return false; }
   }, [bookId, ownsReaderUI]);
@@ -192,10 +208,13 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
 
   const persistProgress = useCallback((locator: StoredReaderLocator, percent: number, nextChapter: string | null) => {
     latestProgress.current = { locator, percent, chapter: nextChapter };
-    const now = Date.now();
-    if (now - lastSavedAt.current < 1200) return;
-    lastSavedAt.current = now;
-    void flushProgress();
+    const remaining = progressSaveIntervalMs - (Date.now() - lastSavedAt.current);
+    if (remaining <= 0) {
+      void flushProgress();
+    } else if (progressSaveTimer.current === null) {
+      // Save the final position even if there is no next relocation or close event.
+      progressSaveTimer.current = setTimeout(() => { void flushProgress(); }, remaining);
+    }
   }, [flushProgress]);
 
   const bookmarkSeeds = useMemo(() => annotations.flatMap(annotation => {
@@ -243,6 +262,7 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
         if (event.receipt.status === 'arrived' && arrived && locator) {
           const percent = Math.min(1, Math.max(0, arrived.fraction));
           persistProgress(locator, percent, arrived.chapter ?? null);
+          currentTocHref.current = arrived.locator.type === 'epub' ? arrived.locator.tocHref ?? null : null;
           currentChapter.current = arrived.chapter ?? null;
           void captureBookmarkContext(false).catch(() => {});
         }
@@ -291,6 +311,7 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
         if (!locator) break;
         const percent = Math.min(1, Math.max(0, event.percent));
         const label = event.locator?.type === 'epub' ? event.locator.chapter ?? null : null;
+        currentTocHref.current = event.locator?.type === 'epub' ? event.locator.tocHref ?? null : null;
         currentChapter.current = label;
         if (readyRef.current) persistProgress(locator, percent, label);
         else openingProgress.current = { locator, percent, chapter: label };
@@ -322,14 +343,49 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
     }
   }, [annotations, bookId, captureBookmarkContext, ownsReaderUI, persistProgress, saveHighlight, updateBookmarkVisibility]);
 
-  const navigateReference = useCallback((command: { readonly operationId: string; readonly locator: StoredReaderLocator; readonly quote: string; readonly ordinal: number; readonly id: string; readonly citation: boolean }): Promise<ReaderNavigationReceipt> => {
+  const requestNavigation = useCallback((command: ReaderNavigationCommand): Promise<ReaderNavigationReceipt> => {
     if (!readyRef.current || !readerRef.current) return Promise.resolve({ operationId: command.operationId, status: 'failed', message: '阅读器尚未准备好' });
     if (navigationRequests.current.has(command.operationId)) return Promise.resolve({ operationId: command.operationId, status: 'failed', message: '重复的定位操作' });
     return new Promise(resolve => {
-      navigationRequests.current.set(command.operationId, resolve);
-      readerRef.current?.navigate({ operationId: command.operationId, locator: JSON.stringify(command.locator), citation: command.citation ? { quote: command.quote, ordinal: command.ordinal, id: command.id } : null });
+      const timeout = setTimeout(() => {
+        navigationRequests.current.delete(command.operationId);
+        resolve({ operationId: command.operationId, status: 'failed', message: '定位未能确认，请重试' });
+      }, 30000);
+      navigationRequests.current.set(command.operationId, receipt => { clearTimeout(timeout); resolve(receipt); });
+      readerRef.current!.navigate(command);
     });
   }, []);
+
+  const navigateReference = useCallback((command: { readonly operationId: string; readonly locator: StoredReaderLocator; readonly quote: string; readonly ordinal: number; readonly id: string; readonly citation: boolean }) =>
+    requestNavigation({ operationId: command.operationId, locator: JSON.stringify(command.locator), citation: command.citation ? { quote: command.quote, ordinal: command.ordinal, id: command.id } : null }), [requestNavigation]);
+
+  const navigateContents = useCallback(async (href?: string) => {
+    const owner = readerOwner.current;
+    const start = latestProgress.current?.locator;
+    const target = href ?? (contentsOrigin && JSON.stringify(contentsOrigin));
+    if (!target || activeContentsRequest.current || !ownsReaderUI(owner) || owner.bookId !== bookId) return;
+    const operationId = 'contents:' + bookId + ':' + ++contentsRequest.current;
+    activeContentsRequest.current = operationId;
+    setContentsBusy(true);
+    setError(null);
+    try {
+      const receipt = await requestNavigation({ operationId, locator: target, citation: null });
+      if (!ownsReaderUI(owner) || activeContentsRequest.current !== operationId) return;
+      const arrived = receipt.progress?.locator;
+      if (receipt.status !== 'arrived' || arrived?.type !== 'epub' || !arrived.cfi) {
+        setError(receipt.message ?? '原文位置未能确认，请重试');
+      } else if (href === undefined || contentsOrigin?.cfi === arrived.cfi) {
+        setContentsOrigin(null);
+      } else if (start?.type === 'epub' && start.cfi && start.cfi !== arrived.cfi) {
+        setContentsOrigin(previous => previous ?? start);
+      }
+    } finally {
+      if (ownsReaderUI(owner) && activeContentsRequest.current === operationId) {
+        activeContentsRequest.current = null;
+        setContentsBusy(false);
+      }
+    }
+  }, [bookId, contentsOrigin, ownsReaderUI, requestNavigation]);
 
   useEffect(() => {
     if (readerReady) void captureBookmarkContext(false).catch(() => {});
@@ -453,7 +509,8 @@ export function useReaderState({ bookId, initialAnnotations, onAnnotationsChange
     highlightSelection, cancelSelection, setSelectionActionsEnabled, retryReader, getLatestLocator, seedAnnotations, onReaderEvent,
     selectedAnnotation, setSelectedAnnotation, editingAnnotation, setEditingAnnotation,
     noteSelection, setNoteSelection,
-    contents, contentsLoaded, searchResults, searchBusy, searchError, search, bookmarked, flushProgress, navigateReference,
+    contents, get currentTocHref() { return currentTocHref.current; }, contentsLoaded, searchResults, searchBusy, searchError, search, bookmarked, flushProgress, navigateReference,
+    contentsBusy, canReturnFromContents: contentsOrigin !== null, navigateContents,
   };
 }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }

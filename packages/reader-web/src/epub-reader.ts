@@ -7,7 +7,7 @@ import { defaultReaderSpacing, normalizeReaderSpacing, type ReaderSpacing } from
 import { foliateResourceLoader } from './foliate-resource-loader'
 import { securePublication } from './epub-sandbox'
 import { bridge } from './bridge'
-import type { AnnotationPayload, ContentsItem, EpubLocator, NavigationCommand, NavigationReceipt, ProgressPayload, ReaderFlow, ReaderTheme, SearchResult, SelectionPayload } from './protocol'
+import type { AnnotationPayload, ContentsItem, EpubLocator, EpubScrollViewport, NavigationCommand, NavigationReceipt, ProgressPayload, ReaderFlow, ReaderTheme, SearchResult, SelectionPayload } from './protocol'
 import type { FoliateContent, FoliateLocation, FoliateView, NavigationTarget, TocEntry } from './foliate-types'
 import { epubChapterTitle, epubTarget, paintedEpubAnchor, publicationStartFraction, samePublicationHref, textRangeForQuote } from './epub-location'
 import { drawNoteWave } from './note-wave'
@@ -15,7 +15,7 @@ import { readiumSelection, rangeFromReadium } from './epub-selection'
 import { visibleBookmark, bookmarkRange, rangeIsVisible } from './epub-bookmarks'
 import { EPUB_GUTTER, epubSpacing, epubTypography, prepareTypographyDocument } from './epub-typography'
 import readiumCjkDefaults from '../../../Vendor/Readium/Sources/Navigator/EPUB/Assets/Static/readium-css/cjk-horizontal/ReadiumCSS-default.css?raw'
-import { restoreTerminalLayout, stabilizeEmptyAnchorBox, stabilizeEmptyTerminalBlock, terminalRecoveryForAnchor, visibleDocumentViewport } from './epub-viewport'
+import { measureScrollViewport, restoreTerminalLayout, stabilizeEmptyAnchorBox, stabilizeEmptyTerminalBlock, terminalRecoveryForAnchor, visibleDocumentViewport } from './epub-viewport'
 
 export interface NativePage {
   cfi: string
@@ -277,13 +277,49 @@ export class EpubReader {
     await this.recoverUnpaintedTarget(target)
   }
 
+  recoveryPosition(): { locator: { type: 'epub'; cfi: string }; scrollViewport: EpubScrollViewport } | null {
+    const cfi = this.currentLocation()
+    const axis = this.view.renderer?.scrollProp
+    if (!cfi || this.flow !== 'scrolled' || this.fixedLayout ||
+      (axis !== 'scrollTop' && axis !== 'scrollLeft')) return null
+    const content = this.targetContent(this.view.resolveCFI(cfi))
+    const scrollViewport = content && measureScrollViewport(content.doc, this.host, axis)
+    return scrollViewport ? { locator: { type: 'epub', cfi }, scrollViewport } : null
+  }
+
+  restoreScrollViewport(cfi: string, saved: EpubScrollViewport): void {
+    const renderer = this.view.renderer
+    const position = renderer?.containerPosition
+    const axis = renderer?.scrollProp
+    if (this.flow !== 'scrolled' || this.fixedLayout || !renderer ||
+      (axis !== 'scrollTop' && axis !== 'scrollLeft') || axis !== saved.axis ||
+      position === undefined || !Number.isFinite(position) ||
+      ![saved.offset, saved.extent, saved.width, saved.height].every(Number.isFinite)) return
+    try {
+      const target = this.view.resolveCFI(cfi)
+      const content = this.targetContent(target)
+      if (!content) return
+      const current = measureScrollViewport(content.doc, this.host, axis)
+      if (!current || Math.abs(current.width - saved.width) > 1 ||
+        Math.abs(current.height - saved.height) > 1 ||
+        Math.abs(current.extent - saved.extent) > 1 ||
+        saved.offset + saved.extent < -1 ||
+        saved.offset > (axis === 'scrollTop' ? current.height : current.width) + 1) return
+      renderer.containerPosition = position + current.offset - saved.offset
+      // The paginator can suppress the first relocation after goTo. Retain
+      // the actual corrected geometry even when the reader does not scroll again.
+      const scrollViewport = measureScrollViewport(content.doc, this.host, axis)
+      if (scrollViewport) bridge.send({ type: 'reader:recovery-position',
+        payload: { locator: { type: 'epub', cfi }, scrollViewport } })
+    } catch { /* Keep the already resolved CFI if the original frame is unavailable. */ }
+  }
+
   async navigateReference(command: NavigationCommand): Promise<NavigationReceipt> {
     this.scrollRevision += 1
     try {
       this.clearTerminalRecovery()
       this.clearSelection()
-      this.citationCfi = null
-      this.drawCitation()
+      this.setCitationLocation(null)
       let target = await this.resolveLocation(command.locator, command.citation?.quote)
       let citation: string | null = null
       if (command.citation?.quote) {
@@ -302,14 +338,25 @@ export class EpubReader {
       target = await this.prepareTargetLayout(target)
       await this.view.renderer.goTo(target)
       await this.waitForPaint()
-      this.citationCfi = citation
-      this.drawCitation()
+      this.setCitationLocation(citation)
       await this.recoverUnpaintedTarget(target)
       await this.waitForPaint()
       return { operationId: command.operationId, status: 'arrived', ...(this.lastProgress ? { progress: this.lastProgress } : {}) }
     } catch (cause) {
       return { operationId: command.operationId, status: 'failed', message: cause instanceof Error ? cause.message : String(cause) }
     }
+  }
+
+  private setCitationLocation(cfi: string | null): void {
+    if (this.citationCfi === cfi) return
+    this.citationCfi = cfi
+    this.drawCitation()
+    bridge.send({ type: 'reader:citation-location', payload: { cfi } })
+  }
+
+  restoreCitationLocation(cfi: string): void {
+    try { this.setCitationLocation(cfi) }
+    catch { this.setCitationLocation(null) } // An optional overlay never prevents reopening the book.
   }
 
   private drawCitation(): void {
@@ -864,15 +911,23 @@ export class EpubReader {
   private progressPayload(detail: FoliateLocation): ProgressPayload | null {
     const cfi = detail?.cfi
     if (!cfi) return null
-    const chapter = this.isChunkedRange(detail.range) ? this.title
+    const chunked = this.isChunkedRange(detail.range)
+    const chapter = chunked ? this.title
       : epubChapterTitle(this.title, detail.tocItem?.label, this.nativeOriginal?.progress.chapter ?? this.lastProgress?.chapter)
+    const axis = this.view.renderer?.scrollProp
+    const doc = detail.range?.startContainer?.ownerDocument
+    const scrollViewport = this.flow === 'scrolled' && !this.fixedLayout && doc &&
+      (axis === 'scrollTop' || axis === 'scrollLeft')
+      ? measureScrollViewport(doc, this.host, axis) : undefined
     return {
       format: 'epub',
+      ...(scrollViewport ? { scrollViewport } : {}),
       fraction: this.startFraction ?? (typeof detail.fraction === 'number' ? detail.fraction : 0),
       locator: {
         type: 'epub',
         cfi,
         chapter,
+        ...(!chunked && detail.tocItem?.href ? { tocHref: detail.tocItem.href } : {}),
         fraction: this.startFraction ?? (typeof detail.fraction === 'number' ? detail.fraction : 0),
         href: this.view.book?.sections?.[detail.section?.current ?? 0]?.id ?? '',
       },

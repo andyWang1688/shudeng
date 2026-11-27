@@ -5,6 +5,7 @@ import {
   StyleSheet,
   Text,
   View,
+  type GestureResponderEvent,
   type StyleProp,
   type ViewStyle,
 } from "react-native";
@@ -84,6 +85,7 @@ export function ReaderNavigationRow({
   depth = 0,
   detailLines = 2,
   selected = false,
+  selectedLabel,
   onPress,
   onDelete,
 }: {
@@ -92,7 +94,8 @@ export function ReaderNavigationRow({
   readonly depth?: number;
   readonly detailLines?: number;
   readonly selected?: boolean;
-  readonly onPress: () => void;
+  readonly selectedLabel?: string;
+  readonly onPress: (event: GestureResponderEvent) => void;
   readonly onDelete?: (() => void) | undefined;
 }) {
   const palette = usePalette();
@@ -117,6 +120,7 @@ export function ReaderNavigationRow({
         >
           {title}
         </Text>
+        {selected && selectedLabel ? <Text style={styles.selectedLabel}>{selectedLabel}</Text> : null}
         {detail ? (
           <Text style={styles.detail} numberOfLines={detailLines}>
             {detail}
@@ -156,6 +160,7 @@ export function ReaderNavigationEmpty({
 
 function makeStyles(palette: Palette) {
   return StyleSheet.create({
+    selectedLabel: { color: palette.lampInk, fontSize: 12, fontWeight: "600" },
     activeTabText: { color: palette.ink, fontWeight: "600" },
     searchBox: {
       marginHorizontal: 24,

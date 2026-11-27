@@ -22,7 +22,24 @@ const classEntry = 'export class Paginator extends HTMLElement {\n'
 assert.equal(instrumentedSource.split(classEntry).length, 2, 'the installed Paginator class must be uniquely identifiable')
 const sourceWithStateSetup = instrumentedSource.replace(classEntry, classEntry
     + '    markNavigationAnchorForSchedulingTest() { this.#justAnchored = true }\n'
-    + '    setStabilizingForSchedulingTest(value) { this.#stabilizing = value }\n')
+    + '    setStabilizingForSchedulingTest(value) { this.#stabilizing = value }\n'
+    + `    seedViewsForSchedulingTest({ heights, primary, offset, selected }, released) {
+        this.#primaryIndex = primary
+        this.#container.scrollTop = offset
+        this.#container.removeChild = () => {}
+        this.sections = heights.map((_, index) => ({ unload: () => released.push(index) }))
+        this.#views = new Map(heights.map((height, index) => [index, {
+            element: { style: {}, getBoundingClientRect: () => ({ height }) },
+            document: { getSelection: () => ({ rangeCount: index === selected ? 1 : 0, isCollapsed: index !== selected }) },
+            destroy() {},
+        }]))
+    }
+    setFillingForSchedulingTest(value) {
+        this.#filling = value
+        if (!value) this.dispatchEvent(new Event('stabilized'))
+    }
+    readViewsForSchedulingTest() { return [...this.#views.keys()] }
+`)
 const compiled = ts.transpileModule(sourceWithStateSetup, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText
@@ -131,8 +148,14 @@ function fixture(surface) {
         paginator.dispatchEvent(loaded)
     }
     let offset = 0
+    const released = []
     return {
-        clock, measurements,
+        clock, measurements, released,
+        seedViews(state) { offset = state.offset; paginator.seedViewsForSchedulingTest(state, released) },
+        readViews: () => Array.from(paginator.readViewsForSchedulingTest()),
+        readOffset: () => container.scrollTop,
+        finishLoading: () => paginator.setFillingForSchedulingTest(false),
+        startLoading: () => paginator.setFillingForSchedulingTest(true),
         markNavigationAnchor: () => paginator.markNavigationAnchorForSchedulingTest(),
         setStabilizing: value => paginator.setStabilizingForSchedulingTest(value),
         setFlow: value => paginator.setAttribute('flow', value),
@@ -154,6 +177,34 @@ function fixture(surface) {
         },
     }
 }
+
+test('settled scrolling unloads old documents and keeps the viewport anchored after a racing preload', async () => {
+    const state = fixture('paginator host')
+    state.seedViews({ heights: Array(15).fill(600), primary: 12, offset: 7_240 })
+    state.startLoading()
+    state.touch('touchstart')
+    state.scroll()
+    await state.clock.tick(500)
+    assert.deepEqual(state.released, [], 'an active touch must never detach chapters')
+    state.touch('touchend')
+    await state.clock.tick(300)
+    assert.deepEqual(state.released, [], 'a preload may be measuring its original start offset')
+    state.finishLoading()
+    await state.clock.tick(300)
+    assert.deepEqual(state.released, [0, 1, 2, 3])
+    assert.deepEqual(state.readViews(), Array.from({ length: 11 }, (_, index) => index + 4))
+    assert.equal(state.readOffset(), 7_260 - 2_400, 'same visible text after removing the prefix')
+})
+
+test('settled scrolling keeps the nearest backward chapter and a chapter with active text selection', async () => {
+    const state = fixture('paginator host')
+    state.seedViews({ heights: [8_000, 8_000, 8_000, 600, 600], primary: 3, offset: 24_020, selected: 1 })
+    state.scroll()
+    await state.clock.tick(300)
+    assert.deepEqual(state.released, [0])
+    assert.deepEqual(state.readViews(), [1, 2, 3, 4])
+    assert.equal(state.readOffset(), 16_040)
+})
 
 for (const surface of ['paginator host', 'publication document']) {
     for (const release of ['touchend', 'touchcancel']) {

@@ -6,6 +6,16 @@ export type ReaderFormat = 'epub' | 'pdf'
 export type ReaderTheme = 'light' | 'dark'
 export type ReaderFlow = 'paginated' | 'scrolled'
 
+/** In-memory geometry for a WebKit restart in the same layout. */
+export interface EpubScrollViewport {
+  axis: 'scrollTop' | 'scrollLeft'
+  /** Origin of the matched publication document relative to the scrollport. */
+  offset: number
+  extent: number
+  width: number
+  height: number
+}
+
 /** 标注锚点：EPUB 用 CFI；PDF 用页码 + 页面归一化矩形。 */
 export interface EpubLocator {
   type: 'epub'
@@ -13,6 +23,7 @@ export interface EpubLocator {
   selection?: ReadiumLocator
   href?: string
   chapter?: string
+  tocHref?: string
   fraction?: number
 }
 
@@ -43,6 +54,9 @@ export interface OpenPayload {
   mimeType?: string
   title?: string
   initialLocation?: string
+  initialScrollViewport?: EpubScrollViewport
+  /** A verified in-session citation range; restoring its overlay must not navigate. */
+  initialCitationLocation?: string
   theme?: ReaderTheme
   fontSize?: number
   spacing?: ReaderSpacing
@@ -64,6 +78,7 @@ export interface ProgressPayload {
   format: ReaderFormat
   fraction: number
   locator: ReaderLocator
+  scrollViewport?: EpubScrollViewport
   page?: number
   totalPages?: number
   chapter?: string
@@ -106,6 +121,8 @@ export type HostToReader =
 
 export type ReaderToHost =
   | { type: 'reader:navigated'; payload: NavigationReceipt }
+  | { type: 'reader:recovery-position'; payload: { locator: Pick<EpubLocator, 'type' | 'cfi'>; scrollViewport: EpubScrollViewport } }
+  | { type: 'reader:citation-location'; payload: { cfi: string | null } }
   | { type: 'reader:bookmark-context'; payload: { requestId: number; locator: EpubLocator | null; quote: string; visibleIds: string[] } }
   | { type: 'reader:hostReady' }
   | { type: 'reader:tap' }

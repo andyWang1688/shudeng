@@ -1,13 +1,13 @@
 export interface TocEntry { label?: string; href?: string; subitems?: TocEntry[] }
 export interface FoliateSection { id?: string; href?: string; size?: number; linear?: string; createDocument?: () => Promise<Document> }
-export interface FoliateLocation { cfi?: string; fraction?: number; tocItem?: { label?: string }; section?: { current?: number }; range?: Range }
+export interface FoliateLocation { cfi?: string; fraction?: number; tocItem?: TocEntry; section?: { current?: number }; range?: Range }
 export interface FoliateContent { doc: Document; index: number; overlayer?: { hitTest: (point: { x: number; y: number }) => [string?, Range?]; add: (key: string, range: Range, draw: unknown, options: unknown) => void; remove: (key: string) => void } }
 export interface NavigationTarget { index: number; anchor?: number | ((doc: Document) => Range | Element | number) }
 export interface FoliateSearchResult { label?: string; cfi?: string; excerpt?: { pre: string; match: string; post: string }; subitems?: FoliateSearchResult[]; progress?: number }
 export interface FoliateView extends HTMLElement {
   isFixedLayout?: boolean
   book?: { metadata?: { language?: string | readonly string[] }; dir?: string; sections?: FoliateSection[]; toc?: TocEntry[]; resolveHref?: (href: string) => NavigationTarget; destroy?: () => void }
-  renderer?: HTMLElement & { primaryIndex?: number; page?: number; pages?: number; start?: number; end?: number; viewSize?: number; scrollProp?: string; atStart?: boolean; atEnd?: boolean; getPageTurnKey?: (delta?: number) => string | null; getViewportState?: () => Record<string, unknown> | null; getContents?: () => FoliateContent[]; setStyles?: (styles: string | readonly [string, string]) => void; render?: () => void; goTo: (target: NavigationTarget) => Promise<void> }
+  renderer?: HTMLElement & { primaryIndex?: number; page?: number; pages?: number; start?: number; end?: number; viewSize?: number; scrollProp?: string; containerPosition?: number; atStart?: boolean; atEnd?: boolean; getPageTurnKey?: (delta?: number) => string | null; getViewportState?: () => Record<string, unknown> | null; getContents?: () => FoliateContent[]; setStyles?: (styles: string | readonly [string, string]) => void; render?: () => void; goTo: (target: NavigationTarget) => Promise<void> }
   lastLocation?: FoliateLocation
   open(book: unknown): Promise<void>
   close(): void

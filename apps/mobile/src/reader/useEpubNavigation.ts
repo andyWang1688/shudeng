@@ -11,6 +11,7 @@ import type { ShelfAnnotation } from "../platform/library";
 import type { ReaderContentsItem } from "./readerProtocol";
 
 export type EpubNavigationTab = "contents" | "bookmarks" | "annotations";
+export type EpubNavigationSource = EpubNavigationTab | "search";
 
 export type EpubNavigationAction =
   | { readonly action: "close" | "searchOpen" | "searchClose" | "prepare" }
@@ -55,11 +56,12 @@ type SearchNavigationSelection = {
 type Options = {
   readonly bookId: string;
   readonly visible: boolean;
+  readonly resumeSearch?: boolean;
   readonly contents: readonly ReaderContentsItem[];
   readonly contentsLoaded: boolean;
   readonly annotations: readonly ShelfAnnotation[];
   readonly onClose: () => void;
-  readonly onNavigate: (locator: string) => void;
+  readonly onNavigate: (locator: string, source: EpubNavigationSource) => void;
   readonly onRemoveBookmark: (annotation: ShelfAnnotation) => Promise<boolean>;
 };
 
@@ -68,6 +70,7 @@ export function useEpubNavigation(options: Options) {
   const {
     bookId,
     visible,
+    resumeSearch = false,
     contents,
     contentsLoaded,
     annotations,
@@ -94,6 +97,7 @@ export function useEpubNavigation(options: Options) {
   const searchNavigationSelection = useRef<SearchNavigationSelection | null>(
     null,
   );
+  const savedSearch = useRef<(SelectableSearchSnapshot & { readonly query: string }) | null>(null);
   const preparingRef = useRef(false);
   useEffect(() => { setTab("contents"); }, [bookId]);
 
@@ -121,8 +125,9 @@ export function useEpubNavigation(options: Options) {
     if (visible || searchNavigationSelection.current?.bookId !== bookId)
       searchNavigationSelection.current = null;
     if (visible) {
-      setSearchOpen(false);
-      setQuery("");
+      if (!resumeSearch || savedSearch.current?.bookId !== bookId) savedSearch.current = null;
+      setSearchOpen(!!savedSearch.current);
+      setQuery(savedSearch.current?.query ?? "");
       setResults([]);
       setSearchError(null);
       setSearchBusy(false);
@@ -133,7 +138,7 @@ export function useEpubNavigation(options: Options) {
     return () => {
       session.current++;
     };
-  }, [bookId, refreshPreparation, visible]);
+  }, [bookId, refreshPreparation, visible, resumeSearch]);
 
   useEffect(() => {
     if (!visible || preparation?.state !== "building") return;
@@ -157,30 +162,23 @@ export function useEpubNavigation(options: Options) {
     setResults([]);
     setSearchBusy(true);
     setSearchError(null);
+    const publish = (hits: readonly Omit<SearchResult, "selectionKey">[]) => {
+      if (signal.signal.aborted || generation !== session.current) return;
+      const rows = hits.map(hit => ({
+        ...hit, selectionKey: "search:" + generation + ":" + ++searchSelectionSerial.current,
+      }));
+      selectableSearchResults.current = { bookId, rows };
+      setResults(rows);
+      setSearchBusy(false);
+    };
+    const saved = savedSearch.current;
+    if (resumeSearch && saved?.bookId === bookId && saved.query === query) {
+      publish(saved.rows);
+      return;
+    }
     const timer = setTimeout(() => {
       void searchBookText(bookId, query, { signal: signal.signal })
-        .then((hits) => {
-          if (!signal.signal.aborted && generation === session.current) {
-            const published = Object.freeze(
-              hits.map((hit) =>
-                Object.freeze({
-                  ...hit,
-                  selectionKey:
-                    "search:" +
-                    generation +
-                    ":" +
-                    ++searchSelectionSerial.current,
-                }),
-              ),
-            );
-            selectableSearchResults.current = Object.freeze({
-              bookId,
-              rows: published,
-            });
-            setResults(published);
-            setSearchBusy(false);
-          }
-        })
+        .then(publish)
         .catch((cause) => {
           if (!signal.signal.aborted && generation === session.current) {
             setSearchError(message(cause));
@@ -193,10 +191,11 @@ export function useEpubNavigation(options: Options) {
       clearTimeout(timer);
       signal.abort();
     };
-  }, [bookId, query, searchOpen, searchRevision, visible]);
+  }, [bookId, query, searchOpen, searchRevision, visible, resumeSearch]);
 
   const prepare = async () => {
     if (preparingRef.current) return;
+    savedSearch.current = null;
     preparingRef.current = true;
     setPreparing(true);
     const generation = session.current;
@@ -288,10 +287,14 @@ export function useEpubNavigation(options: Options) {
         setTab(action.tab);
         break;
       case "query":
-        if (action.query !== query) selectableSearchResults.current = null;
+        if (action.query !== query) {
+          selectableSearchResults.current = null;
+          savedSearch.current = null;
+        }
         setQuery(action.query);
         break;
       case "searchOpen":
+        savedSearch.current = null;
         selectableSearchResults.current = null;
         searchNavigationSelection.current = null;
         setQuery("");
@@ -301,6 +304,7 @@ export function useEpubNavigation(options: Options) {
         void refreshPreparation(session.current);
         break;
       case "searchClose":
+        savedSearch.current = null;
         selectableSearchResults.current = null;
         setSearchOpen(false);
         break;
@@ -329,7 +333,8 @@ export function useEpubNavigation(options: Options) {
             item.id === action.id && item.selectionKey === action.selectionKey,
         );
         const selected = matches.length === 1 ? matches[0] : undefined;
-        if (selected?.locator)
+        if (selected?.locator) {
+          savedSearch.current = { ...published, query };
           searchNavigationSelection.current = Object.freeze({
             status: "pending",
             bookId,
@@ -337,6 +342,7 @@ export function useEpubNavigation(options: Options) {
             selectionKey: selected.selectionKey,
             locator: selected.locator,
           });
+        }
         break;
       }
       case "navigate": {
@@ -354,7 +360,7 @@ export function useEpubNavigation(options: Options) {
             ...selected,
             status: "consumed",
           });
-          onNavigate(selected.locator);
+          onNavigate(selected.locator, action.source);
           break;
         }
         const locator =
@@ -376,7 +382,7 @@ export function useEpubNavigation(options: Options) {
               ...selected,
               status: "consumed",
             });
-          onNavigate(locator);
+          onNavigate(locator, action.source);
         } else {
           setFeedback("这条记录缺少可用的原文位置，仍可查看内容。");
         }

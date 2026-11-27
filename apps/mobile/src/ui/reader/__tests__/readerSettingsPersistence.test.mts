@@ -218,3 +218,17 @@ test("new parent preferences replace the confirmed base without stale controls r
   assert.deepEqual(writes, [{ ...changed, fontScale: 1.5 }]);
   ui.unmount();
 });
+
+test("reset saves all three typography values together and retains this book's theme and flow", async () => {
+  const writes: any[] = [];
+  const ui = epub(async next => { writes.push(next); return true; });
+  try {
+    const preferences = { ...initialPreferences, theme: "dark", flow: "scrolled", fontScale: 1.75, letterSpacing: -2, lineSpacing: 120 };
+    const reset = settingControl(ui.render({ preferences }).body, "恢复默认排版");
+    assert.equal(reset.disabled, false);
+    reset.onPress();
+    await Promise.resolve();
+    assert.deepEqual(writes, [{ ...initialPreferences, theme: "dark", flow: "scrolled" }]);
+    assert.equal(settingControl(ui.render({ preferences: writes[0] }).body, "恢复默认排版").disabled, true);
+  } finally { ui.unmount(); }
+});

@@ -59,6 +59,18 @@ export type PdfSelection = {
   readonly locator: Extract<StoredReaderLocator, { type: "pdf" }>;
 };
 type NoteDraft = PdfSelection & { readonly annotation: ShelfAnnotation | null };
+export type PdfSearchPosition = {
+  readonly index: number;
+  readonly offset: number;
+  readonly sheet: 0 | 1;
+};
+type PdfSearchResults = {
+  readonly bookId: string;
+  readonly fileUri: string;
+  readonly query: string;
+  readonly hits: readonly PdfSearchHit[];
+};
+const NO_SEARCH_HITS: readonly PdfSearchHit[] = [];
 type PaletteTarget = PdfSelection & {
   readonly annotation: ShelfAnnotation | null;
 };
@@ -138,7 +150,18 @@ export function usePdfReader(options: PdfReaderOptions) {
         : previous,
     );
   }, []);
-  const [hits, setHits] = useState<readonly PdfSearchHit[]>([]);
+  const [searchResults, setSearchResults] = useState<PdfSearchResults | null>(null);
+  const [reviewedSearch, setReviewedSearch] = useState<{
+    results: PdfSearchResults;
+    position: PdfSearchPosition;
+  } | null>(null);
+  const searchText = trimPdfSearchQuery(query);
+  const currentResults = searchResults?.bookId === bookId &&
+    searchResults.fileUri === fileUri && searchResults.query === searchText
+    ? searchResults : null;
+  const hits = currentResults?.hits ?? NO_SEARCH_HITS;
+  const searchPosition = reviewedSearch && reviewedSearch.results === currentResults
+    ? reviewedSearch.position : null;
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [textPageCount, setTextPageCount] = useState<number | null>(null);
@@ -323,29 +346,30 @@ export function usePdfReader(options: PdfReaderOptions) {
   }, [bookId, fileUri]);
 
   useEffect(() => {
-    cancelPdfSearch();
     if (panel !== "contents" || contentsTab !== "search") return;
-    const text = trimPdfSearchQuery(query);
     setSearchError(null);
-    if (!text) {
-      setHits([]);
+    if (!searchText) {
+      setSearchResults(null);
+      setReviewedSearch(null);
+    }
+    if (!searchText || currentResults) {
       setSearching(false);
       return;
     }
+    setSearchResults(null);
+    setReviewedSearch(null);
     setSearching(true);
-    setHits([]);
     let active = true;
     const timer = setTimeout(() => {
-      void searchPdf(fileUri, text)
+      void searchPdf(fileUri, searchText)
         .then((results) => {
-          if (active) setHits(results);
+          if (active) setSearchResults({ bookId, fileUri, query: searchText, hits: results });
         })
         .catch((cause: unknown) => {
           if (active) {
             setSearchError(
               cause instanceof Error ? cause.message : String(cause),
             );
-            setHits([]);
           }
         })
         .finally(() => {
@@ -357,7 +381,7 @@ export function usePdfReader(options: PdfReaderOptions) {
       clearTimeout(timer);
       cancelPdfSearch();
     };
-  }, [contentsTab, fileUri, panel, query]);
+  }, [bookId, contentsTab, currentResults, fileUri, panel, searchText]);
 
   const refreshAnnotations = useCallback(
     async (owner?: ReaderOwner) => {
@@ -742,7 +766,7 @@ export function usePdfReader(options: PdfReaderOptions) {
   );
 
   const jumpTo = useCallback(
-    (locator: StoredReaderLocator) => {
+    (locator: StoredReaderLocator, position?: PdfSearchPosition) => {
       if (locator.type !== "pdf") return;
       if (
         !Number.isSafeInteger(locator.page) ||
@@ -752,6 +776,12 @@ export function usePdfReader(options: PdfReaderOptions) {
         setError("此位置不在当前 PDF 中");
         return;
       }
+      if (position) {
+        const hit = currentResults?.hits[position.index];
+        if (!currentResults || !hit || hit.page !== locator.page ||
+          panel !== "contents" || contentsTab !== "search") return;
+        setReviewedSearch({ results: currentResults, position });
+      }
       setPanel(null);
       clearSelection();
       sendCommand({
@@ -760,8 +790,14 @@ export function usePdfReader(options: PdfReaderOptions) {
         ...(locator.rects ? { rects: locator.rects } : {}),
       });
     },
-    [clearSelection, sendCommand, total],
+    [clearSelection, contentsTab, currentResults, panel, sendCommand, total],
   );
+
+  const returnToSearch = useCallback(() => {
+    if (!searchPosition) return;
+    setContentsTab("search");
+    setPanel("contents");
+  }, [searchPosition]);
 
   const navigateReference = useCallback(
     (command: ReferenceCommand): Promise<NavigationReceipt> => {
@@ -902,6 +938,8 @@ export function usePdfReader(options: PdfReaderOptions) {
     queryEventCount,
     setQuery,
     hits,
+    searchPosition,
+    returnToSearch,
     searching,
     searchError,
     textPageCount,

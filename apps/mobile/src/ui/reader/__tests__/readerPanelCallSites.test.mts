@@ -328,7 +328,8 @@ test("the actual EPUB search result, query and preparation callbacks stop at the
   const ui = epub({ searchOpen: true });
   const navigate = firstPdfRow(ui.tree).onPress;
   const input = find(ui.tree, "ReaderSearchField").props.onChange;
-  const prepare = pressable(ui.tree, "准备书内资料");
+  assert.equal(nodes(ui.tree, "Pressable").some(node => node.props.accessibilityLabel === "准备书内资料"), false);
+  const prepare = pressable(find(ui.tree, "FlatList").props.ListFooterComponent, "准备书内资料");
   navigate();
   input("正常查询");
   prepare();
@@ -380,4 +381,53 @@ test("PDF keeps page navigation beside annotations and forwards valid original l
   assert.equal(jumps.length, 1);
   content.onChanged([]);
   assert.deepEqual(changed, [[]]);
+});
+
+test("EPUB directory selects and opens at the engine's exact fragment among identical chapter titles", () => {
+  const contents = Array.from({ length: 70 }, (_, i) => ({ label: "小结", href: "one.xhtml#part" + i, depth: 1 }));
+  const ui = epub({ contents: contents.map((item, i) => ({ id: String(i), title: item.label })) },
+    { contents, currentTocHref: "one.xhtml#part42" });
+  const list = find(ui.tree, "FlatList").props;
+  assert.equal(list.initialScrollIndex, 42);
+  assert.equal(list.renderItem({ item: list.data[42], index: 42 }).props.selected, true);
+  assert.equal(list.renderItem({ item: list.data[41], index: 41 }).props.selected, false);
+});
+
+test("returning to a deep result positions the tapped row after layout and stops repositioning on drag", async () => {
+  const rows = Array.from({ length: 80 }, (_, i) => ({ id: String(i), selectionKey: "key-" + i, title: "命中 " + i }));
+  const props = { bookId: "book", title: "测试", contents: [], annotations: [], visible: true, resumeSearch: false, onClose() {} };
+  const panel = readerComponent(new URL("../../../reader/EpubNavigationPanel.tsx", import.meta.url), "EpubNavigationPanel", props, {
+    "../ui/reader/ReaderPanel": { ReaderPanel: "ReaderPanel" },
+    "../ui/theme": { usePalette: () => palette },
+    "../ui/reader/ReaderNavigation": navigation,
+    "../ui/annotations/BookAnnotationsContent": { BookAnnotationsContent: "BookAnnotationsContent" },
+    "./useEpubNavigation": { useEpubNavigation: () => ({
+      snapshot: { searchOpen: true, query: "GDP", results: rows, tab: "contents" }, onAction() {},
+    }) },
+    "@gorhom/bottom-sheet": { BottomSheetFlatList: "FlatList" },
+  });
+  const body = (outer: any) => outer.props.children({ canInteract: () => true });
+  try {
+    const outer = panel.render();
+    outer.props.onSnapChange(1);
+    const tree = body(outer);
+    nodes(tree, "View").find(node => node.props.ref).props.ref.current = { getBoundingClientRect: () => ({ top: 204 }) };
+    const first = find(tree, "FlatList").props;
+    first.renderItem({ item: rows[39], index: 39 }).props.onPress({
+      currentTarget: { getBoundingClientRect: () => ({ top: 436 }) },
+    });
+    panel.render({ ...props, visible: false });
+    const reopened = panel.render({ ...props, resumeSearch: true });
+    assert.equal(reopened.props.initialIndex, 1);
+    const restored = find(body(reopened), "FlatList").props;
+    const scrolls: unknown[] = [];
+    restored.ref.current = { scrollToIndex: (command: unknown) => scrolls.push(command) };
+    restored.onContentSizeChange(375, 10000);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepEqual(scrolls, [{ index: 39, animated: false, viewOffset: 232 }]);
+    restored.onScrollBeginDrag();
+    restored.onLayout();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(scrolls.length, 1);
+  } finally { panel.unmount(); }
 });

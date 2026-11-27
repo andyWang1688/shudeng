@@ -68,7 +68,7 @@ function pdfView(visible: boolean, state: any = {}, props: any = {}) {
   const content = ui.render();
   return content.type(content.props);
 }
-function chrome(props: any) {
+function chrome(props: any, fontScale = 1) {
   const ui = readerComponent(
     new URL("./ReaderChrome.tsx", import.meta.url),
     "ReaderChrome",
@@ -86,6 +86,7 @@ function chrome(props: any) {
         Text: "Text",
         View: "View",
         StyleSheet: { create: (value: any) => value },
+        useWindowDimensions: () => ({ fontScale }),
       },
       "../ui/theme": { usePalette: () => palette },
       "../ui/chat/useReduceMotion": { useReduceMotion: () => false },
@@ -93,6 +94,29 @@ function chrome(props: any) {
   );
   return ui.render();
 }
+
+test("a PDF search return stays available beside return to question", () => {
+  let returns = 0;
+  const view = pdfView(true, {
+    searchPosition: { index: 8, offset: 501, sheet: 1 },
+    returnToSearch: () => returns++,
+    questions: { referenceMode: true, busy: false },
+  });
+  const props = find(view, "ReaderChrome").props;
+  assert.equal(props.referenceMode, true);
+  assert.equal(typeof props.onReturnToSearch, "function");
+  props.onReturnToSearch();
+  assert.equal(returns, 1);
+});
+
+test("large text uses short visual reader actions with the full accessibility labels", () => {
+  const tree = chrome({ title: "测试", visible: true, onBack() {}, onAsk() {}, onSettings() {} }, 3);
+  const buttons = JSON.stringify(tree);
+  assert.match(buttons, /"accessibilityLabel":"问问这本书"/);
+  assert.match(buttons, /"accessibilityLabel":"阅读设置"/);
+  assert.match(buttons, /"children":"问答"/);
+  assert.match(buttons, /"children":"设置"/);
+});
 
 for (const visible of [true, false]) {
   test(`the actual PDF reader retains native menu boundaries while chrome is ${visible ? "visible" : "hidden"}`, () => {

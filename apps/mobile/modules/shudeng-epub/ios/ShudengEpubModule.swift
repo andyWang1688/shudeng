@@ -142,6 +142,18 @@ private final class EpubScriptHandler: NSObject, WKScriptMessageHandler {
   }
 }
 
+/// WebKit owns text selection and handles. ReaderShell presents the book actions.
+private final class EpubWebView: WKWebView {
+  override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool { false }
+
+  override func buildMenu(with builder: UIMenuBuilder) {
+    super.buildMenu(with: builder)
+    guard builder.system == .context else { return }
+    builder.remove(menu: .standardEdit)
+    if #available(iOS 16.0, *) { builder.remove(menu: .lookup) }
+  }
+}
+
 @MainActor
 private final class EpubPresentationController: UIViewController, WKNavigationDelegate,
   UIPageViewControllerDataSource, UIPageViewControllerDelegate {
@@ -161,7 +173,7 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
       var style=document.createElement('style');style.textContent='#chrome,#footer{display:none!important}#app{padding:0!important;height:100%!important}#reader{height:100vh!important}';document.head.appendChild(style);
       """
     configuration.userContentController.addUserScript(WKUserScript(source: chrome, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-    let web = WKWebView(frame: .zero, configuration: configuration)
+    let web = EpubWebView(frame: .zero, configuration: configuration)
     web.navigationDelegate = self
     web.isOpaque = false
     web.scrollView.isScrollEnabled = false
@@ -196,6 +208,8 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
   private var dirty = true
   private var restartAttempts = 0
   private var latestLocation: String?
+  private var latestScrollViewport: [String: Any]?
+  private var latestCitationLocation: String?
   private var viewport = CGSize.zero
   private var revision = 0
   private var webGeneration = 0
@@ -242,6 +256,8 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
     restartAttempts = 0
     restartPending = false
     latestLocation = nil
+    latestScrollViewport = nil
+    latestCitationLocation = nil
     appliedCurl = nil
     clearCache()
     resourceScheme.setReaderHTML(html)
@@ -375,6 +391,8 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
     case "reader:hostReady": hostReady(); return
     case "reader:ready": ready = true; restartAttempts = 0; restartPending = false; dirty = true; schedule()
     case "reader:progress": rememberProgress(event)
+    case "reader:recovery-position": rememberProgress(event); return
+    case "reader:citation-location": rememberCitationLocation(event); return
     case "reader:selection": selecting = true; setGesturesEnabled(false)
     case "reader:selectionCleared": selecting = false; setGesturesEnabled(true); schedule()
     case "reader:turnRequested":
@@ -410,10 +428,28 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
       locator["type"] as? String == "epub",
       let cfi = locator["cfi"] as? String, !cfi.isEmpty else { return }
     latestLocation = cfi
+    latestScrollViewport = payload["scrollViewport"] as? [String: Any]
+  }
+
+  func rememberCitationLocation(_ event: [String: Any]) {
+    guard let payload = event["payload"] as? [String: Any] else { return }
+    let cfi = payload["cfi"] as? String
+    latestCitationLocation = cfi?.hasPrefix("epubcfi(") == true ? cfi : nil
   }
 
   func applicationWillResignActive() {
     applicationActive = false
+    guard ready, latestScrollViewport != nil, !disposed else { return }
+    let generation = webGeneration
+    // A touch or layout can move the live scrollport after its last relocation.
+    // Read existing geometry while WebKit is alive; never wake it to recover.
+    Task { @MainActor [weak self] in
+      guard let self,
+        let result = try? await self.native("recoveryPosition"),
+        let payload = result as? [String: Any],
+        !self.disposed, !self.applicationActive, self.webGeneration == generation else { return }
+      self.rememberProgress(["payload": payload])
+    }
   }
 
   func applicationDidBecomeActive() {
@@ -450,6 +486,8 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
     restartPending = false
     var payload: [String: Any] = ["acknowledgedCommandId": lastCommand]
     if let latestLocation { payload["initialLocation"] = latestLocation }
+    if let latestScrollViewport { payload["initialScrollViewport"] = latestScrollViewport }
+    if let latestCitationLocation { payload["initialCitationLocation"] = latestCitationLocation }
     emitJSON(["type": "native:restarting", "payload": payload])
     web.load(URLRequest(url: resourceScheme.pageURL))
   }
@@ -696,7 +734,9 @@ private final class EpubPresentationController: UIViewController, WKNavigationDe
     // The payload was produced and verified by TypeScript when this snapshot was made.
     // Publish the completed user turn before an app interruption can save the old page.
     if let progress = target.page.metadata["progress"] as? [String: Any] {
-      emitJSON(["type": "reader:progress", "payload": progress])
+      let event: [String: Any] = ["type": "reader:progress", "payload": progress]
+      rememberProgress(event)
+      emitJSON(event)
     }
     schedule()
   }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   Bookmark,
@@ -12,6 +12,7 @@ import {
 } from "lucide-react-native";
 import { usePalette, type Palette } from "../ui/theme";
 import { useReduceMotion } from "../ui/chat/useReduceMotion";
+import { ReaderReturnButton } from "./ReaderReturnButton";
 
 export type ReaderChromeProps = {
   readonly title: string;
@@ -27,6 +28,8 @@ export type ReaderChromeProps = {
   readonly onAsk: () => void;
   readonly controlsEnabled?: boolean;
   readonly onToggleChrome?: () => void;
+  readonly onReturnToSearch?: () => void;
+  readonly onReturnToPosition?: () => void;
 };
 
 /** Reading occupies a stable viewport; these surfaces float above it on every platform. */
@@ -44,10 +47,14 @@ export function ReaderChrome({
   bookmarked = false,
   onAsk,
   onToggleChrome,
+  onReturnToPosition,
+  onReturnToSearch,
 }: ReaderChromeProps) {
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
+  const { fontScale } = useWindowDimensions();
+  const compactLabels = fontScale >= 1.8;
   const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const reduceMotion = useReduceMotion();
   useEffect(() => {
@@ -140,10 +147,9 @@ export function ReaderChrome({
           ) : null}
         </View>
         <View
-          testID={format === "pdf" ? "pdf-reader-footer" : undefined}
-          collapsable={false}
+          pointerEvents="box-none"
           style={[
-            styles.footer,
+            styles.footerStack,
             {
               bottom: Math.max(insets.bottom, 12),
               left: Math.max(16, insets.left),
@@ -151,40 +157,51 @@ export function ReaderChrome({
             },
           ]}
         >
-          {onAnnotations ? (
+          {onReturnToSearch ? (
+            <ReaderReturnButton paper={palette.paper + "F5"} ink={palette.ink2} label="返回搜索结果"
+              disabled={!controlsEnabled} onPress={onReturnToSearch} />
+          ) : onReturnToPosition ? (
+            <ReaderReturnButton paper={palette.paper + "F5"} ink={palette.ink2}
+              disabled={!controlsEnabled} onPress={onReturnToPosition} />
+          ) : null}
+          <View testID={format === "pdf" ? "pdf-reader-footer" : undefined} collapsable={false} style={styles.footer}>
+            {onAnnotations ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="目录、书签与标注"
+                onPress={onAnnotations}
+                disabled={!controlsEnabled}
+                style={[styles.tool, !controlsEnabled && styles.disabled]}
+              >
+                <List size={20} color={palette.ink2} />
+                <Text style={styles.toolLabel}>目录</Text>
+              </Pressable>
+            ) : null}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="目录、书签与标注"
-              onPress={onAnnotations}
+              accessibilityLabel="问问这本书"
+              onPress={onAsk}
               disabled={!controlsEnabled}
-              style={[styles.tool, !controlsEnabled && styles.disabled]}
+              style={[styles.ask, compactLabels && styles.compactAsk, !controlsEnabled && styles.disabled]}
             >
-              <List size={20} color={palette.ink2} />
-              <Text style={styles.toolLabel}>目录</Text>
+              <MessageCircle size={18} color={palette.lampInk} />
+              <Text style={compactLabels ? [styles.toolLabel, styles.compactAskText] : styles.askText}>
+                {compactLabels ? "问答" : "问问这本书"}
+              </Text>
             </Pressable>
-          ) : null}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="问问这本书"
-            onPress={onAsk}
-            disabled={!controlsEnabled}
-            style={[styles.ask, !controlsEnabled && styles.disabled]}
-          >
-            <MessageCircle size={18} color={palette.lampInk} />
-            <Text style={styles.askText}>问问这本书</Text>
-          </Pressable>
-          {onSettings ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="阅读设置"
-              onPress={onSettings}
-              disabled={!controlsEnabled}
-              style={[styles.tool, !controlsEnabled && styles.disabled]}
-            >
-              <Settings2 size={20} color={palette.ink2} />
-              <Text style={styles.toolLabel}>阅读设置</Text>
-            </Pressable>
-          ) : null}
+            {onSettings ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="阅读设置"
+                onPress={onSettings}
+                disabled={!controlsEnabled}
+                style={[styles.tool, !controlsEnabled && styles.disabled]}
+              >
+                <Settings2 size={20} color={palette.ink2} />
+                <Text style={styles.toolLabel}>{compactLabels ? "设置" : "阅读设置"}</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
       </Animated.View>
     </>
@@ -243,8 +260,11 @@ function makeStyles(palette: Palette) {
       alignItems: "center",
       justifyContent: "center",
     },
-    footer: {
+    footerStack: {
       position: "absolute",
+      gap: 8,
+    },
+    footer: {
       paddingHorizontal: 12,
       paddingVertical: 6,
       flexDirection: "row",
@@ -279,6 +299,8 @@ function makeStyles(palette: Palette) {
       borderRadius: 24,
     },
     askText: { color: palette.lampInk, fontSize: 15, lineHeight: 23 },
+    compactAsk: { flexDirection: "column", minHeight: 50, paddingHorizontal: 10, gap: 3 },
+    compactAskText: { color: palette.lampInk },
     disabled: { opacity: 0.35 },
   });
 }

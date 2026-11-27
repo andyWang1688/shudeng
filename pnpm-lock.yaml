@@ -14,7 +14,7 @@ patchedDependencies:
     hash: 7eb578c9eb068e80002aa6887821d4f2723ad6918bf80d27c3d3015904a69dac
     path: patches/expo-symbols@58.0.4.patch
   foliate-js@0.0.0:
-    hash: c784227e998ffbf8645485072b7e85ddb9c961796fc733e6fef4637d1291029c
+    hash: 3961166ab03287e70917f98c752eb47c1a60b01df19b9062bcba27276ed1539f
     path: patches/foliate-js@0.0.0.patch
   onnxruntime-react-native@1.24.3:
     hash: 03b879966ea5790f8fbb81c9c33e7838344e21de97e859a893eeff1fb59f0093
@@ -266,7 +266,7 @@ importers:
         version: link:../core
       foliate-js:
         specifier: https://codeload.github.com/readest/foliate-js/tar.gz/b34a0aa63163d19cd13e2ecd19b678394c32fee5
-        version: https://codeload.github.com/readest/foliate-js/tar.gz/b34a0aa63163d19cd13e2ecd19b678394c32fee5(patch_hash=c784227e998ffbf8645485072b7e85ddb9c961796fc733e6fef4637d1291029c)
+        version: https://codeload.github.com/readest/foliate-js/tar.gz/b34a0aa63163d19cd13e2ecd19b678394c32fee5(patch_hash=3961166ab03287e70917f98c752eb47c1a60b01df19b9062bcba27276ed1539f)
       pdfjs-dist:
         specifier: 6.5.438
         version: 6.5.438
@@ -7302,7 +7302,7 @@ snapshots:
     dependencies:
       flow-estree: 0.336.0
 
-  foliate-js@https://codeload.github.com/readest/foliate-js/tar.gz/b34a0aa63163d19cd13e2ecd19b678394c32fee5(patch_hash=c784227e998ffbf8645485072b7e85ddb9c961796fc733e6fef4637d1291029c):
+  foliate-js@https://codeload.github.com/readest/foliate-js/tar.gz/b34a0aa63163d19cd13e2ecd19b678394c32fee5(patch_hash=3961166ab03287e70917f98c752eb47c1a60b01df19b9062bcba27276ed1539f):
     dependencies:
       construct-style-sheets-polyfill: 3.1.0
 

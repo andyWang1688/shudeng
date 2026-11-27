@@ -17,7 +17,7 @@ export type ReaderAnnotationSeed = {
 };
 
 export type ReaderLocator =
-  | { readonly type: 'epub'; readonly cfi: string; readonly selection?: ReadiumLocator; readonly href?: string; readonly chapter?: string; readonly fraction?: number; readonly totalProgression?: number; readonly position?: number }
+  | { readonly type: 'epub'; readonly cfi: string; readonly selection?: ReadiumLocator; readonly href?: string; readonly tocHref?: string; readonly chapter?: string; readonly fraction?: number; readonly totalProgression?: number; readonly position?: number }
   | { readonly type: 'pdf'; readonly page: number; readonly rects?: readonly PdfRect[]; readonly text?: string };
 
 export type PdfRect = {

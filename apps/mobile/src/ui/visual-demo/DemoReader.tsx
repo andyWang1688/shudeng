@@ -25,10 +25,11 @@ import { DemoPdfSurface } from "./DemoPdfSurface";
 import { DemoSheet } from "./DemoSheet";
 import { DemoAnnotationEditor } from "./DemoAnnotationEditor";
 import { ReaderSpacingControls, ReaderValueStepper } from "../reader/ReaderSpacingControls";
+import { ReaderReturnButton } from "../../reader/ReaderReturnButton";
 import type { DemoBook } from "./demoBooks";
 import { demoColors as c } from "./demoTheme";
 import {
-  readerSamples,
+  defaultReadingPreferences, readerSamples,
   type DemoReadingPreferences,
   type DemoReadingState,
   type DemoAnnotation,
@@ -73,6 +74,7 @@ export function DemoReader({
   const [focused, setFocused] = useState(false);
   const [panel, setPanel] = useState<Panel>(null);
   const [section, setSection] = useState<"contents" | "bookmarks">("contents");
+  const [returnPosition, setReturnPosition] = useState<number | null>(null);
   const [editing, setEditing] = useState<DemoAnnotation | null>(() => {
     const preview = process.env.EXPO_PUBLIC_UI_DEMO_DETAIL;
     return reading.annotations.find((item) => item.kind === preview) ?? null;
@@ -100,6 +102,12 @@ export function DemoReader({
   const navigate = (position: number) => {
     onReadingChange({ ...reading, position });
     setJump((old) => ({ position, revision: old.revision + 1 }));
+  };
+  const navigateFromPanel = (position: number) => {
+    if (!isPdf && section === "contents" && position !== reading.position) {
+      setReturnPosition((origin) => origin ?? reading.position);
+    }
+    navigate(position);
     closePanel();
   };
   const blocked = panel !== null || editing !== null;
@@ -206,16 +214,26 @@ export function DemoReader({
           />
         </View>
         <View
-          pointerEvents={focused ? "none" : "auto"}
+          pointerEvents={focused ? "none" : "box-none"}
           accessibilityElementsHidden={focused}
           importantForAccessibility={focused ? "no-hide-descendants" : "auto"}
           style={[
-            s.bottomBar,
+            s.bottomStack,
             { bottom: Math.max(insets.bottom, 12) },
             focused && s.hidden,
           ]}
         >
-          <View style={s.tools}>
+          {!isPdf && returnPosition !== null ? (
+            <ReaderReturnButton
+              paper={c.paper + "F5"}
+              ink={c.secondary}
+              onPress={() => {
+                navigate(returnPosition);
+                setReturnPosition(null);
+              }}
+            />
+          ) : null}
+          <View style={s.bottomBar}>
             <Tool
               label="目录"
               icon={List}
@@ -333,6 +351,11 @@ export function DemoReader({
                   palette={stepperPalette}
                   onAdjust={(field, delta) => onPreferencesChange({ ...preferences, [field]: normalizeReaderSpacing(field, preferences[field] + delta) })}
                 />}
+                {!isPdf && <Pressable accessibilityRole="button" style={s.done}
+                  onPress={() => onPreferencesChange({ ...preferences, fontSize: defaultReadingPreferences.fontSize,
+                    letterSpacing: defaultReadingPreferences.letterSpacing, lineSpacing: defaultReadingPreferences.lineSpacing })}>
+                  <Text style={s.doneLabel}>恢复默认排版</Text>
+                </Pressable>}
               </>
             ) : (
               <>
@@ -379,7 +402,7 @@ export function DemoReader({
                             selected:
                               item.chapterIndex === current.chapterIndex,
                           }}
-                          onPress={() => navigate(index)}
+                          onPress={() => navigateFromPanel(index)}
                           style={({ pressed }) => [
                             s.chapterRow,
                             pressed && s.pressed,
@@ -421,7 +444,7 @@ export function DemoReader({
                                 "：" +
                                 item.text.slice(0, 12)
                               }
-                              onPress={() => navigate(position)}
+                              onPress={() => navigateFromPanel(position)}
                               style={s.bookmarkContent}
                             >
                               <Text style={s.bookmarkTitle}>
@@ -568,10 +591,17 @@ const s = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  bottomBar: {
+  bottomStack: {
     position: "absolute",
     left: 16,
     right: 16,
+    gap: 8,
+  },
+  bottomBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
     paddingHorizontal: 12,
     paddingVertical: 6,
     backgroundColor: "rgba(250,249,246,0.96)",
@@ -581,12 +611,6 @@ const s = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 4 },
-  },
-  tools: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8,
   },
   tool: {
     minHeight: 50,

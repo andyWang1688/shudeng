@@ -167,6 +167,9 @@ function PdfReadingView({
         onAnnotations={() => onChromeAction("contents")}
         onSettings={() => onChromeAction("settings")}
         onAsk={() => onChromeAction("ask")}
+        {...(reader.searchPosition && !reader.selection
+          ? { onReturnToSearch: reader.returnToSearch }
+          : {})}
         {...(reader.scannedPageCount > 0
           ? { onHelp: () => onChromeAction("help") }
           : {})}
@@ -241,6 +244,7 @@ function PdfReadingView({
           reader.textPageCount !== null && reader.textPageCount > 0
         }
         hits={reader.hits}
+        searchPosition={reader.searchPosition}
         preferences={reader.preferences}
         onPreferences={reader.updatePreferences}
         onJump={reader.jumpTo}

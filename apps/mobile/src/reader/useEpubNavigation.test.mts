@@ -261,3 +261,36 @@ test("annotation navigation uses its original EPUB locator and missing locations
     assert.deepEqual(h.alerts, []);
   } finally { await h.unmount(); }
 });
+
+test("returning to hits restores this query without searching again and issues fresh selection keys", async () => {
+  let searches = 0;
+  const h = await mount(async () => {
+    searches++;
+    return [hit("first"), { ...hit("second"), id: "second" }];
+  });
+  const openHit = (row: any) => h.act(() => {
+    h.navigation.onAction({ action: "selectSearchResult", ...selection(row) });
+    h.navigation.onAction({ action: "navigate", source: "search", ...selection(row) });
+  });
+  try {
+    await h.search("原文");
+    const first = h.navigation.snapshot.results[0];
+    await openHit(first);
+    await h.update({ visible: false });
+    await h.update({ visible: true, resumeSearch: true });
+    assert.equal(h.navigation.snapshot.query, "原文");
+    assert.equal(h.navigation.snapshot.searchOpen, true);
+    assert.equal(h.navigation.snapshot.results.length, 2);
+    assert.notEqual(h.navigation.snapshot.results[0].selectionKey, first.selectionKey);
+    await openHit(first);
+    await openHit(h.navigation.snapshot.results[1]);
+    assert.deepEqual(h.navigated, ["first", "second"]);
+    assert.equal(searches, 1);
+    await h.update({ visible: false, resumeSearch: false });
+    await h.update({ visible: true });
+    assert.equal(h.navigation.snapshot.searchOpen, false);
+    assert.equal(h.navigation.snapshot.query, "");
+    await h.update({ bookId: "book-b", resumeSearch: true });
+    assert.equal(h.navigation.snapshot.results.length, 0);
+  } finally { await h.unmount(); }
+});

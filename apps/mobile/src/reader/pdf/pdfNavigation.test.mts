@@ -24,6 +24,7 @@ function panel(overrides: any = {}) {
   const exports: any = {};
   const mocks: Record<string, any> = {
     react: {
+      useEffect() {},
       useMemo: (fn: any) => fn(),
       useRef: (value: any) => (slots[cursor++] ??= { current: value }),
       useState: (initial: any) => {
@@ -69,6 +70,8 @@ function panel(overrides: any = {}) {
   };
   runInNewContext(code, {
     exports,
+    setTimeout,
+    clearTimeout,
     require: (id: string) => {
       if (!(id in mocks)) throw new Error(id);
       return mocks[id];
@@ -162,4 +165,42 @@ test("a changed search revokes the old row callback", () => {
   ui.render({ query: "新版", hits: [] });
   press();
   assert.equal(ui.jumps.length, 0);
+});
+
+test("PDF returns a deep search hit to its measured position in the expanded sheet", async () => {
+  const hits = Array.from({ length: 45 }, (_, index) => ({ page: index + 1, text: "原文", rects: [] }));
+  let position: any = null;
+  const ui = panel({
+    tab: "search", query: "原文", hits,
+    onJump: (_locator: any, next: any) => { position = next; },
+  });
+  ui.render().props.onSnapChange(1);
+  ui.nodes().find((node) => node.props.ref && node.type === "View").props.ref.current = {
+    getBoundingClientRect: () => ({ top: 202 }),
+  };
+  const list = ui.list().props;
+  list.renderItem({ item: list.data[38], index: 38 }).props.onPress({
+    currentTarget: { getBoundingClientRect: () => ({ top: 423 }) },
+  });
+  assert.equal(position.index, 38);
+  assert.equal(position.offset, 221);
+  assert.equal(position.sheet, 1);
+  ui.render({ panel: null });
+  const returned = ui.render({ panel: "contents", searchPosition: position });
+  assert.equal(returned.props.initialIndex, 1);
+  const reopened = ui.list().props;
+  assert.equal(reopened.initialScrollIndex, 37);
+  const selected = reopened.renderItem({ item: reopened.data[38], index: 38 }).props;
+  assert.equal(selected.selected, true);
+  assert.equal(selected.selectedLabel, "上次查看");
+  const scrolls: any[] = [];
+  reopened.ref.current = { scrollToIndex: (options: any) => scrolls.push(options) };
+  reopened.onContentSizeChange();
+  await new Promise(resolve => setTimeout(resolve, 55));
+  assert.equal(scrolls[0]?.index, 38);
+  assert.equal(scrolls[0]?.viewOffset, 221);
+  reopened.onScrollBeginDrag();
+  reopened.onLayout();
+  await new Promise(resolve => setTimeout(resolve, 55));
+  assert.equal(scrolls.length, 1, "manual scrolling must not be undone by layout callbacks");
 });

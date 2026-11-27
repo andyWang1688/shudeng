@@ -125,7 +125,11 @@ async function open(payload: OpenPayload): Promise<void> {
           )
         : payload.url)
       await epub.open(epubSource, currentTitle, { theme: currentTheme, fontSize: currentFontSize, flow: currentFlow, ...(payload.spacing ? { spacing: payload.spacing } : {}) })
-      if (payload.initialLocation) await epub.goTo(payload.initialLocation)
+      if (payload.initialLocation) {
+        await epub.goTo(payload.initialLocation)
+        if (payload.initialScrollViewport) epub.restoreScrollViewport(payload.initialLocation, payload.initialScrollViewport)
+      }
+      if (payload.initialCitationLocation) epub.restoreCitationLocation(payload.initialCitationLocation)
     } else {
       if (!PdfReaderClassRef) throw new Error('此构建不包含 PDF 阅读器')
       const pdf = new PdfReaderClassRef(readerEl, onProgress)
@@ -255,6 +259,7 @@ declare global {
     __readerNative?: {
       setCurl: (enabled: boolean) => Promise<void>
       page: () => Promise<unknown>
+      recoveryPosition: () => ReturnType<EpubReader['recoveryPosition']>
       begin: () => Promise<unknown>
       step: (direction: number) => Promise<unknown>
       restore: (page: import('./epub-reader').NativePage) => Promise<unknown>
@@ -278,6 +283,7 @@ function nativeCommand<T>(operation: (epub: EpubReader) => Promise<T> | T): Prom
 window.__readerNative = {
   setCurl: enabled => nativeCommand(epub => epub.setNativeCurl(enabled)),
   page: () => nativeCommand(epub => epub.nativePage()),
+  recoveryPosition: () => epubReader()?.recoveryPosition() ?? null,
   begin: () => nativeCommand(epub => epub.beginNativePreparation()),
   step: direction => nativeCommand(epub => epub.nativeStep(direction)),
   restore: page => nativeCommand(epub => epub.nativeRestore(page)),

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import Module, { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeReaderSpacing, readerSpacingSettings } from "@shudeng/core/domain/reader-spacing";
+import { defaultReaderSpacing, normalizeReaderSpacing, readerSpacingSettings } from "@shudeng/core/domain/reader-spacing";
 
 const require = createRequire(
   new URL("../../../../package.json", import.meta.url),
@@ -75,7 +75,7 @@ export function readerComponent(
   const jsx = (type: any, props: any) => ({ type, props });
   const mocks: Record<string, any> = {
     "@expo/ui/community/segmented-control": { SegmentedControl: "SegmentedControl" },
-    "@shudeng/core/domain/reader-spacing": { normalizeReaderSpacing, readerSpacingSettings },
+    "@shudeng/core/domain/reader-spacing": { defaultReaderSpacing, normalizeReaderSpacing, readerSpacingSettings },
     react: { ...hooks, useLayoutEffect: hooks.useEffect },
     "react/jsx-runtime": { jsx, jsxs: jsx },
     "react-native": {

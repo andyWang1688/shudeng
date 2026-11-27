@@ -245,15 +245,23 @@ test("native EPUB restores the reading position and annotations after WebKit rec
       },
     });
     await reader.update({ theme: "dark", fontScale: 1.2, flow: "scrolled" });
+    const scrollViewport = { axis: "scrollTop", offset: 123, width: 375, height: 667 };
     await reader.emit({
       type: "native:restarting",
-      payload: { acknowledgedCommandId: reader.acknowledgedId, initialLocation: "epubcfi(/6/24!/4/2/2:5)" },
+      payload: {
+        acknowledgedCommandId: reader.acknowledgedId,
+        initialLocation: "epubcfi(/6/24!/4/2/2:5)",
+        initialScrollViewport: scrollViewport,
+        initialCitationLocation: "epubcfi(/6/22!/4/2,/1:0,/1:12)",
+      },
     });
     assert.equal(reader.events.at(-1)?.type, "restarting");
     await reader.loaded();
     const reopened = await reader.drain();
     const openingAgain = reopened.find(message => message.type === "reader:open");
     assert.equal(openingAgain?.payload.initialLocation, "epubcfi(/6/24!/4/2/2:5)");
+    assert.deepEqual(openingAgain?.payload.initialScrollViewport, scrollViewport);
+    assert.equal(openingAgain?.payload.initialCitationLocation, "epubcfi(/6/22!/4/2,/1:0,/1:12)");
     assert.equal(openingAgain?.payload.theme, "dark");
     assert.equal(openingAgain?.payload.fontSize, 1.2 * 18.5);
     assert.equal(openingAgain?.payload.flow, "scrolled");

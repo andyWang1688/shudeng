@@ -78,6 +78,7 @@ function harness(input: { text?: string; read?: () => Promise<string>; annotatio
     if (id.endsWith('/library/readerPreferences')) return { loadReaderPreferences: async () => null };
     if (id.endsWith('/library/legacyMigration')) return {};
     if (id.endsWith('/platform/pdfNative')) return {
+      trimPdfSearchQuery: (text: string) => text.trim(),
       readPdfPageText: async (uri: string, page: number) => {
         reads.push({ uri, page });
         return input.read ? input.read() : input.text ?? '  原始 PDF 首行  \n第二行';

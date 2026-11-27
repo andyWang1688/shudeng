@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Pressable, StyleSheet, Text, View, type ViewInstance } from "react-native";
 import {
   BottomSheetFlatList,
   BottomSheetScrollView,
+  type BottomSheetFlatListMethods,
 } from "@gorhom/bottom-sheet";
 import { ChevronLeft, Search } from "lucide-react-native";
 import type {
@@ -23,6 +24,7 @@ import {
   ReaderSearchField,
 } from "../../ui/reader/ReaderNavigation";
 import { usePalette, type Palette } from "../../ui/theme";
+import type { PdfSearchPosition } from "./usePdfReader";
 
 export type PdfPanel = "contents" | "settings" | null;
 export type PdfContentsTab =
@@ -87,11 +89,12 @@ type PanelProps = {
   readonly searchError: string | null;
   readonly searchAvailable: boolean;
   readonly hits: readonly PdfSearchHit[];
+  readonly searchPosition?: PdfSearchPosition | null;
   readonly preferences: ReaderPreferences | null;
   readonly onPreferences: (
     change: Partial<Pick<ReaderPreferences, "flow" | "theme">>,
   ) => Promise<void>;
-  readonly onJump: (locator: StoredReaderLocator) => void;
+  readonly onJump: (locator: StoredReaderLocator, position?: PdfSearchPosition) => void;
   readonly onDeleteBookmark: (annotation: ShelfAnnotation) => void;
   readonly onAnnotationsChanged: (update: AnnotationUpdate) => void;
   readonly onClose: () => void;
@@ -115,6 +118,7 @@ export function PdfReaderPanels({
   searchError,
   searchAvailable,
   hits,
+  searchPosition,
   preferences,
   onPreferences,
   onJump,
@@ -129,6 +133,12 @@ export function PdfReaderPanels({
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const navigationTab = useRef<Exclude<PdfContentsTab, "search">>("contents");
+  const sheetIndex = useRef<0 | 1>(0);
+  const list = useRef<BottomSheetFlatListMethods>(null);
+  const viewport = useRef<ViewInstance>(null);
+  const restoreTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const restoreAttempts = useRef(0);
+  const userScrolled = useRef(false);
   if (tab !== "search") navigationTab.current = tab;
   const [annotationFeedback, setAnnotationFeedback] = useState<string | null>(
     null,
@@ -210,11 +220,30 @@ export function PdfReaderPanels({
     }
   };
   const search = panel === "contents" && tab === "search";
+  const resume = search ? searchPosition : null;
+  useEffect(() => {
+    restoreAttempts.current = 0;
+    userScrolled.current = false;
+    return () => clearTimeout(restoreTimer.current);
+  }, [resume]);
+  const restorePosition = (delay = 32) => {
+    clearTimeout(restoreTimer.current);
+    if (!resume || userScrolled.current) return;
+    const mountedList = list.current;
+    restoreTimer.current = setTimeout(() => {
+      if (mountedList && mountedList === list.current && !userScrolled.current)
+        mountedList.scrollToIndex({ index: resume.index, viewOffset: resume.offset, animated: false });
+    }, delay);
+  };
   return (
     <ReaderPanel
       visible={panel !== null}
       title={panel === "settings" ? "阅读设置" : search ? "书内搜索" : title}
       initialHeight={panel === "settings" ? 46 : 70}
+      initialIndex={resume?.sheet ?? 0}
+      onSnapChange={(index) => {
+        if (index === 0 || index === 1) sheetIndex.current = index;
+      }}
       panFromContent={panel !== "contents"}
       busy={saving}
       onClose={onClose}
@@ -338,47 +367,75 @@ export function PdfReaderPanels({
                   />
                 </>
               ) : (
-                <BottomSheetFlatList<PanelRow>
-                  style={styles.viewport}
-                  data={rows}
-                  keyExtractor={(row: PanelRow) => row.id}
-                  keyboardShouldPersistTaps="handled"
-                  contentContainerStyle={styles.list}
-                  ListEmptyComponent={
-                    <ReaderNavigationEmpty busy={searching && search}>
-                      {status}
-                    </ReaderNavigationEmpty>
-                  }
-                  renderItem={({ item }: { item: PanelRow }) => (
-                    <ReaderNavigationRow
-                      title={item.title}
-                      detail={item.detail}
-                      depth={item.depth}
-                      detailLines={search ? 4 : 2}
-                      selected={
-                        !search &&
-                        item.locator.type === "pdf" &&
-                        item.locator.page === currentPage
-                      }
-                      onPress={() => {
-                        if (canInteract() && latestRows.current.includes(item))
-                          onJump(item.locator);
-                      }}
-                      onDelete={
-                        item.annotation
-                          ? () => {
-                              if (
-                                canInteract() &&
-                                item.annotation &&
-                                latestRows.current.includes(item)
-                              )
-                                onDeleteBookmark(item.annotation);
-                            }
-                          : undefined
-                      }
-                    />
-                  )}
-                />
+                <View ref={viewport} collapsable={false} style={styles.viewport}>
+                  <BottomSheetFlatList<PanelRow>
+                    ref={list}
+                    key={search ? "search:" + query : tab}
+                    style={styles.viewport}
+                    data={rows}
+                    {...(resume && resume.index > 1 ? { initialScrollIndex: resume.index - 1 } : {})}
+                    onContentSizeChange={() => restorePosition()}
+                    onLayout={() => restorePosition()}
+                    onScrollBeginDrag={() => {
+                      userScrolled.current = true;
+                      clearTimeout(restoreTimer.current);
+                    }}
+                    onScrollToIndexFailed={({ index, averageItemLength }) => {
+                      if (!resume || userScrolled.current || ++restoreAttempts.current > 3) return;
+                      if (averageItemLength > 0)
+                        list.current?.scrollToOffset({ offset: index * averageItemLength, animated: false });
+                      restorePosition(100);
+                    }}
+                    keyExtractor={(row: PanelRow) => row.id}
+                    keyboardShouldPersistTaps="handled"
+                    contentContainerStyle={styles.list}
+                    ListEmptyComponent={
+                      <ReaderNavigationEmpty busy={searching && search}>
+                        {status}
+                      </ReaderNavigationEmpty>
+                    }
+                    renderItem={({ item, index }) => (
+                      <ReaderNavigationRow
+                        title={item.title}
+                        detail={item.detail}
+                        depth={item.depth}
+                        detailLines={search ? 4 : 2}
+                        selected={
+                          search ? index === resume?.index :
+                            item.locator.type === "pdf" && item.locator.page === currentPage
+                        }
+                        {...(search ? { selectedLabel: "上次查看" } : {})}
+                        onPress={(event) => {
+                          if (!canInteract() || !latestRows.current.includes(item)) return;
+                          if (search) {
+                            const row = event?.currentTarget;
+                            onJump(item.locator, {
+                              index,
+                              offset: row && typeof row !== "number" && viewport.current
+                                ? row.getBoundingClientRect().top - viewport.current.getBoundingClientRect().top
+                                : 0,
+                              sheet: sheetIndex.current,
+                            });
+                          } else {
+                            onJump(item.locator);
+                          }
+                        }}
+                        onDelete={
+                          item.annotation
+                            ? () => {
+                                if (
+                                  canInteract() &&
+                                  item.annotation &&
+                                  latestRows.current.includes(item)
+                                )
+                                  onDeleteBookmark(item.annotation);
+                              }
+                            : undefined
+                        }
+                      />
+                    )}
+                  />
+                </View>
               )}
             </>
           )}

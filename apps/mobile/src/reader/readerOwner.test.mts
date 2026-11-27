@@ -42,7 +42,11 @@ function gate() {
   return { promise, release };
 }
 
-async function mount(io: Record<string, any> = {}, initialAnnotations: any[] = [a]) {
+async function mount(io: Record<string, any> = {}, initialAnnotations: any[] = [a], clock?: {
+  readonly now: () => number;
+  readonly setTimeout: typeof setTimeout;
+  readonly clearTimeout: typeof clearTimeout;
+}) {
   const {
     installDOM,
   } = require("../platform/library/__tests__/annotation-react-dom-host.cjs");
@@ -95,11 +99,11 @@ async function mount(io: Record<string, any> = {}, initialAnnotations: any[] = [
       if (!(id in stubs)) throw Error("Unmocked " + id);
       return stubs[id];
     },
-    setTimeout,
-    clearTimeout,
+    setTimeout: clock?.setTimeout ?? setTimeout,
+    clearTimeout: clock?.clearTimeout ?? clearTimeout,
     Error,
     Map,
-    Date,
+    Date: clock ? { now: clock.now } : Date,
     JSON,
     Promise,
   });
@@ -151,6 +155,53 @@ async function mount(io: Record<string, any> = {}, initialAnnotations: any[] = [
   };
 }
 
+test("directory excursions keep the first paragraph through repeated jumps and retry a failed return", async () => {
+  const reader = await mount({}, []);
+  const commands: any[] = [];
+  const paragraph = (offset: number) => ({
+    type: "epub", cfi: "epubcfi(/6/4!/4/2/1:" + offset + ")", href: "same-chapter.xhtml",
+  });
+  const arrive = (offset: number) => reader.state.onReaderEvent({
+    type: "navigated",
+    receipt: { operationId: commands.at(-1).operationId, status: "arrived", progress: { locator: paragraph(offset), fraction: 0.25 } },
+  });
+  try {
+    reader.state.readerRef.current = { requestContents() {}, navigate: (command: any) => commands.push(command) };
+    await reader.act(() => reader.state.onReaderEvent({ type: "ready" }));
+    await reader.act(() => reader.state.onReaderEvent({ type: "progress", percent: 0.1, locator: paragraph(27) }));
+    const jump = (href?: string) => reader.act(() => { void reader.state.navigateContents(href); });
+    await jump("same-chapter.xhtml#later");
+    await jump("duplicate");
+    assert.equal(commands.length, 1);
+    assert.equal(reader.state.canReturnFromContents, false);
+    await reader.act(() => arrive(371));
+    assert.equal(reader.state.canReturnFromContents, true);
+    await jump("same-chapter.xhtml#further");
+    await reader.act(() => arrive(521));
+    await jump();
+    assert.deepEqual(JSON.parse(commands.at(-1).locator), paragraph(27));
+    await reader.act(() => reader.state.onReaderEvent({
+      type: "navigated", receipt: { operationId: commands.at(-1).operationId, status: "failed", message: "请重试" },
+    }));
+    assert.equal(reader.state.error, "请重试");
+    assert.equal(reader.state.canReturnFromContents, true);
+    await jump();
+    assert.deepEqual(JSON.parse(commands.at(-1).locator), paragraph(27));
+    await reader.act(() => arrive(27));
+    assert.equal(reader.state.canReturnFromContents, false);
+    assert.equal(reader.state.getLatestLocator().cfi, paragraph(27).cfi);
+    await jump("same-chapter.xhtml#start");
+    await reader.act(() => arrive(27));
+    assert.equal(reader.state.canReturnFromContents, false, "staying at the same position adds no return action");
+    await jump("another.xhtml");
+    await reader.switchBook();
+    await reader.act(() => arrive(900));
+    assert.equal(reader.state.canReturnFromContents, false);
+    assert.equal(reader.state.contentsBusy, false);
+    assert.equal(reader.state.getLatestLocator(), null);
+  } finally { await reader.unmount(); }
+});
+
 test("an EPUB without bookmarks sends no bookmark context requests while its viewport progresses", async () => {
   const requests: any[] = [];
   const h = await mount({}, []);
@@ -187,6 +238,51 @@ test("reading progress updates the saved location without rerendering the EPUB i
     assert.equal(writes.at(-1)[1].locator.cfi, locator.cfi);
     assert.equal(writes.at(-1)[1].percent, 0.5);
     assert.equal(writes.at(-1)[1].chapter, "Chapter 5");
+  } finally { await h.unmount(); }
+});
+
+test("a fast directory round trip saves the restored paragraph even when the reader stays idle", async () => {
+  let now = 2_000;
+  let sequence = 0;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  const clock = {
+    now: () => now,
+    setTimeout: ((run: () => void, delay: number) => {
+      timers.set(++sequence, { at: now + delay, run });
+      return sequence;
+    }) as typeof setTimeout,
+    clearTimeout: ((id: number) => timers.delete(id)) as typeof clearTimeout,
+  };
+  const advance = (duration: number) => {
+    now += duration;
+    for (const [id, timer] of timers) if (timer.at <= now) { timers.delete(id); timer.run(); }
+  };
+  const writes: string[] = [];
+  const h = await mount({ saveBookProgress: async (_bookId: string, value: any) => writes.push(value.locator.cfi) }, [], clock);
+  const origin = { type: "epub", cfi: "epubcfi(/6/2!/4/8/1:220)" };
+  const away = { type: "epub", cfi: "epubcfi(/6/4!/4/2/1:0)" };
+  let pending: any;
+  try {
+    h.state.readerRef.current = { requestContents() {}, navigate(command: any) { pending = command; } };
+    await h.act(() => {
+      h.state.onReaderEvent({ type: "progress", percent: 0.4, locator: origin });
+      h.state.onReaderEvent({ type: "ready" });
+    });
+    const returnFrom = async (locator: any, percent: number, href?: string) => {
+      await h.act(async () => {
+        const navigating = h.state.navigateContents(href);
+        h.state.onReaderEvent({ type: "navigated", receipt: { operationId: pending.operationId,
+          status: "arrived", progress: { locator, fraction: percent } } });
+        await navigating;
+      });
+    };
+    await returnFrom(away, 0.7, "chapter-2.xhtml");
+    advance(100);
+    await returnFrom(origin, 0.4);
+    assert.equal(h.state.canReturnFromContents, false);
+    assert.deepEqual(writes, [away.cfi]);
+    await h.act(() => advance(1_100));
+    assert.deepEqual(writes, [away.cfi, origin.cfi], "idle time must be enough to save the latest location");
   } finally { await h.unmount(); }
 });
 

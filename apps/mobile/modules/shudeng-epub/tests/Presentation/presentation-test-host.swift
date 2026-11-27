@@ -66,6 +66,7 @@ final class ResourceScheme {
   var engineCurl = false
   var onNative: ((String) -> Void)?
   var failures: [String] = []
+  var recoveryPosition: [String: Any]?
 /* PRODUCTION_STATE */
 
   init() {
@@ -86,6 +87,7 @@ final class ResourceScheme {
     onNative?(method)
     if method == "setCurl" { engineCurl = arguments["enabled"] as? Bool ?? false }
     if method == "navigate" { return ["operationId": "nav", "status": "arrived"] }
+    if method == "recoveryPosition" { return recoveryPosition }
     return nil
   }
   func prepare() async throws {
@@ -124,7 +126,11 @@ extension PresentationHost {
   func attach(to target: UIView) { attachWeb(to: target) }
   func holdUntilLoaded() { loaded = false; ready = false }
   func becameLoaded() { loaded = true; schedule() }
+  func becameReady() { loaded = true; ready = true }
   func queueTurn() { pendingTurn = EpubPage(metadata: ["key": "page-a"]); schedule() }
+  func completeTurn(to cfi: String) {
+    completedTurn(EpubCurlPage(EpubPage(metadata: ["progress": ["locator": ["type": "epub", "cfi": cfi]]])))
+  }
   func selectText() { selecting = true }
   func invalidatePresentation() { invalidate() }
   var restingInHost: Bool { web.superview === view && !usingCurl && current == nil && cover == nil }
@@ -141,15 +147,46 @@ extension PresentationHost {
         "format": "epub",
         "fraction": 0.42,
         "locator": ["type": "epub", "cfi": "epubcfi(/6/24!/4/2/2:5)"],
+        "scrollViewport": ["axis": "scrollTop", "width": 375, "height": 667, "offset": 123],
       ],
     ])
+    host.rememberCitationLocation(["payload": ["cfi": "epubcfi(/6/22!/4/2,/1:0,/1:12)"]])
     host.recoverTerminatedWebContent()
     check(host.web.loadCount == 1, "terminated web content was not reloaded")
     check(host.emitted.count == 1, "recovery must emit exactly one native event")
     check(host.emitted.first?["type"] as? String == "native:restarting", "recovery did not reset the TypeScript bridge")
     let payload = host.emitted.first?["payload"] as? [String: Any]
     check(payload?["initialLocation"] as? String == "epubcfi(/6/24!/4/2/2:5)", "recovery lost the latest reading position")
+    let viewport = payload?["initialScrollViewport"] as? [String: Any]
+    check(viewport?["offset"] as? Int == 123, "recovery lost the screen position of the original text")
+    check(payload?["initialCitationLocation"] as? String == "epubcfi(/6/22!/4/2,/1:0,/1:12)", "recovery lost the active citation range")
     check(!host.emitted.contains { $0["type"] as? String == "reader:error" }, "recovery presented a terminal reader error")
+  }
+
+  await run("recovery does not draw a citation cleared by a later navigation") {
+    let host = PresentationHost()
+    host.load("<html>reader</html>")
+    host.rememberCitationLocation(["payload": ["cfi": "epubcfi(/6/22!/4/2,/1:0,/1:12)"]])
+    host.rememberCitationLocation(["payload": ["cfi": NSNull()]])
+    host.resetTrace()
+    host.recoverTerminatedWebContent()
+    let payload = host.emitted.first?["payload"] as? [String: Any]
+    check(payload?["initialCitationLocation"] == nil, "cleared citation must not be restored")
+  }
+
+  await run("recovery uses the completed curl page before WebKit confirms the turn") {
+    let host = PresentationHost()
+    host.load("<html>reader</html>")
+    host.rememberProgress(["payload": [
+      "locator": ["type": "epub", "cfi": "epubcfi(/6/22)"],
+      "scrollViewport": ["axis": "scrollTop", "width": 375, "height": 667, "offset": 123],
+    ]])
+    host.completeTurn(to: "epubcfi(/6/24)")
+    host.resetTrace()
+    host.recoverTerminatedWebContent()
+    let payload = host.emitted.first?["payload"] as? [String: Any]
+    check(payload?["initialLocation"] as? String == "epubcfi(/6/24)", "recovery used the preceding page of a completed curl")
+    check(payload?["initialScrollViewport"] == nil, "recovery attached the previous scroll geometry to a page turn")
   }
 
   await run("a repeated web content termination stops after one automatic recovery") {
@@ -175,6 +212,22 @@ extension PresentationHost {
     host.applicationDidBecomeActive()
     check(host.web.loadCount == 1, "foregrounding must reload the terminated reader")
     check(host.emitted.first?["type"] as? String == "native:restarting", "foregrounding must reset the TypeScript bridge")
+  }
+
+  await run("backgrounding captures the current scroll geometry before reclamation") {
+    let host = PresentationHost()
+    host.load("<html>reader</html>")
+    host.becameReady()
+    let locator = ["type": "epub", "cfi": "epubcfi(/6/24)"]
+    host.rememberProgress(["payload": ["locator": locator, "scrollViewport": ["offset": -41510]]])
+    host.recoveryPosition = ["locator": locator, "scrollViewport": ["offset": -41590]]
+    host.applicationWillResignActive()
+    await host.settle()
+    host.recoverTerminatedWebContent()
+    host.applicationDidBecomeActive()
+    let payload = host.emitted.first?["payload"] as? [String: Any]
+    let viewport = payload?["initialScrollViewport"] as? [String: Any]
+    check(viewport?["offset"] as? Int == -41590, "background snapshot must supersede an older relocation")
   }
 
   await run("expected web content termination and cancellation do not replace recovery with an error") {

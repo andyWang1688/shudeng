@@ -20,7 +20,7 @@ build:inline 由[脚本](scripts/build-inline.mjs)生成 dist-inline/index.html�
 
 引擎及 `construct-style-sheets-polyfill@3.1.0` 的完整 MIT 声明收录在[移动端第三方许可](../../apps/mobile/src/ui/settings/thirdPartyNotices.json)，随“我的 → 关于”可查看。构建通过 [foliate-build.ts](foliate-build.ts) 处理上游可选 PDF 适配器，书灯 PDF 继续由自己的实现负责；开发原型关闭依赖预扫描不能替代正式 bundle 检查。
 
-固定 fork 另应用 [pnpm 补丁](../../patches/foliate-js@0.0.0.patch)：上下滚动期间用真实触摸状态延后位置测量，松手或取消后补报最终位置；无触摸的连续滚动仍保留周期更新。滚动位移、惯性、排版与邻章预载继续由引擎处理。补丁随锁文件安装，升级引擎时须复核补丁与 [调度回归](scripts/foliate-scroll-scheduling.test.mjs)，不能直接沿用同为 `0.0.0` 的版本号。
+固定 fork 另应用 [pnpm 补丁](../../patches/foliate-js@0.0.0.patch)：上下滚动期间用真实触摸状态延后位置测量，松手或取消后补报最终位置；无触摸的连续滚动仍保留周期更新。滚动停止且邻章加载结束后，回收较远的已读文档，保留向后阅读的缓冲和当前原文位置。滚动位移、惯性、排版与邻章预载继续由引擎处理。升级引擎时须复核补丁与 [调度回归](scripts/foliate-scroll-scheduling.test.mjs)，不能直接沿用同为 `0.0.0` 的版本号。
 
 中日韩出版物的可重排章节使用书内段距与缩进。未带出版社样式的章节通过 Foliate 的加载事件接入仓库已有的 [Readium CSS 默认样式](../../Vendor/Readium/Sources/Navigator/EPUB/Assets/Static/readium-css/cjk-horizontal/ReadiumCSS-default.css)。字号、字距、行距与主题仍由阅读设置控制。Readium 的许可随移动端发布包分发。
 
@@ -36,7 +36,7 @@ build:inline 由[脚本](scripts/build-inline.mjs)生成 dist-inline/index.html�
 
 整书连续的门槛是相邻章节同屏、同一滚动动作跨章和回滚位置稳定，不能以旧版边缘手势成功整章切换代替。固定 fork 已接入并部署至 Small 独立开发包的 Release，双向连续跨章、旧高亮和书签回跳后继续滑动、字号调整、横排分页/仿真手势及受控引用到达已通过。具体输入、包身份和未验证范围见本次[验收记录](../../docs/validation/2026-11-09/continuous-epub.md)，选型证据见[研究](../../docs/archive/research/2026-11-09-continuous-epub-scroll.md)。
 
-40 章浏览器原型中，连续 15 次 `wheel deltaY=900` 使 live document 从 5 增至 16，已读文档未被回收；`goTo` 后约为 3 章，`close()` 后原型 document/Blob 计数归零。预载循环的 8 章不是全局上限；这些计数不证明原生 session/lease 回收或真实 App/WK RSS 达标。巨型 spine 的 chunk 占位还会影响上游 TOC 章节标题：当前保存书名作为章节标签后备，CFI 仍准确，精确章节标题仍有限制。
+40 章浏览器样书对照中，连续 28 次滚动并稳定后，同一结束位置的活跃文档从旧版 26 个降至 9 个，反向可重新加载。回收只作用于已完全离开屏幕的旧文档，至少保留最近一个前章，已选择文字的文档不会被回收。此结果不是全局硬上限，也不证明原生内存峰值达标。巨型 spine 的 chunk 共享资源和切片缓存仍由上游持有，精确章节标题也仍有限制。详见[验收](../../docs/validation/2026-11-09/continuous-epub.md#连续滚动回收已读章节)。
 
 验证滚动时须包含长章内上下拖动、章首/章尾衔接、短章、书籍起止，以及模式/字号切换后重开；同时核对实际位置。单独检查保存值或使用 JavaScript `next/scrollTo` 不能证明触摸滚动。移动端设置只发送变化项，避免无关设置重复清空原生卷页缓存。
 

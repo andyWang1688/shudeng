@@ -4,6 +4,57 @@ import { readerHarness } from './epub-reader-test-harness.mjs'
 
 const CFI = 'epubcfi(/6/2!/4/2/1:0)'
 
+test('scrolled WebKit recovery preserves an EPUB document offset even when the CFI paints a different text rectangle', async () => {
+  const reports = []
+  const messages = []
+  const h = readerHarness({ onProgress: report => reports.push(report), onMessage: message => messages.push(message) })
+  h.host.getBoundingClientRect = () => ({ width: 375, height: 667, top: 10, left: 0 })
+  let frameTop = -41500, frameHeight = 68000, rectTop = 41537
+  const doc = { defaultView: { frameElement: { getBoundingClientRect: () => ({ top: frameTop, left: 0, width: 375, height: frameHeight }) } } }
+  const range = {
+    startContainer: { nodeType: 3, ownerDocument: doc, parentElement: {} },
+    getClientRects: () => [{ height: 20, width: 20, top: rectTop, left: 15 }],
+  }
+  h.reader.element.resolveCFI = () => ({ index: 0, anchor: () => range })
+  h.renderer.getContents = () => [{ index: 0, doc }]
+  await h.reader.open('book.epub', 'Book', { flow: 'scrolled' })
+  h.emitRelocate({ cfi: CFI, range, section: { current: 0 } })
+  const viewport = reports.at(-1).scrollViewport
+  assert.deepEqual(viewport, { axis: 'scrollTop', offset: -41510, extent: 68000, width: 375, height: 667 })
+
+  frameTop -= 80 // The native view backgrounds before another relocation arrives.
+  assert.deepEqual(h.reader.recoveryPosition(), {
+    locator: { type: 'epub', cfi: CFI },
+    scrollViewport: { ...viewport, offset: -41590 },
+  })
+
+  frameTop = -41360
+  rectTop = 41397 // The text rect agrees, but the document is 140 px too low.
+  let position = 41360
+  Object.defineProperty(h.renderer, 'containerPosition', {
+    get: () => position,
+    set(next) {
+      frameTop -= next - position
+      position = next
+    },
+  })
+  h.reader.restoreScrollViewport(CFI, viewport)
+  assert.equal(h.renderer.containerPosition, 41500, 'the original document position wins over the text rectangle')
+  assert.deepEqual(messages.at(-1), {
+    type: 'reader:recovery-position', payload: { locator: { type: 'epub', cfi: CFI }, scrollViewport: viewport },
+  }, 'another recovery must use the corrected screen position even without another user scroll')
+
+  frameTop = -41360
+  frameHeight += 100
+  h.reader.restoreScrollViewport(CFI, viewport)
+  assert.equal(h.renderer.containerPosition, 41500, 'changed document layout uses the CFI alone')
+
+  frameHeight -= 100
+  h.host.getBoundingClientRect = () => ({ width: 667, height: 375, top: 10, left: 0 })
+  h.reader.restoreScrollViewport(CFI, viewport)
+  assert.equal(h.renderer.containerPosition, 41500, 'rotation uses the CFI alone')
+})
+
 function domElement(tag) {
   return {
     tag,

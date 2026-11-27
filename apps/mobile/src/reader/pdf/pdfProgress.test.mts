@@ -15,7 +15,7 @@ const code = ts.transpileModule(
     },
   },
 ).outputText;
-async function mount(initialPage?: number, ports: Record<string, any> = {}) {
+async function mount(initialPage?: number, ports: Record<string, any> = {}, searchPdf?: (fileUri: string, query: string) => Promise<unknown>) {
   const {
     installDOM,
   } = require("../../platform/library/__tests__/annotation-react-dom-host.cjs");
@@ -59,6 +59,7 @@ async function mount(initialPage?: number, ports: Record<string, any> = {}) {
     "../../platform/pdfNative": {
       getLegacyHighlightColor: () => null,
       cancelPdfSearch() {},
+      searchPdf,
       trimPdfSearchQuery: (value: string) => value.trim(),
       startPdfInspection: () => ({ promise: Promise.resolve({}), cancel() {} }),
       releasePdf: async () => {},
@@ -123,6 +124,36 @@ const pageEvent = (page: number) => ({
   page,
   pageCount: 50,
   pageHasText: true,
+});
+
+test("PDF search returns to the same cached results and drops their position when the file changes", async () => {
+  const hit = { page: 18, text: "索尼", rects: [{ x: 0.2, y: 0.3, width: 0.1, height: 0.1 }] };
+  let searches = 0;
+  const fixture = await mount(7, {}, async () => { searches++; return [hit]; });
+  try {
+    await fixture.act(() => {
+      fixture.state.onEvent({ type: "ready", pageCount: 50, outline: [] });
+      fixture.state.setPanel("contents");
+      fixture.state.setContentsTab("search");
+      fixture.state.setQuery("索尼", 1);
+    });
+    await fixture.act(() => new Promise(resolve => setTimeout(resolve, 330)));
+    const position = { index: 0, offset: 52, sheet: 1 };
+    await fixture.act(() => fixture.state.jumpTo({ type: "pdf", page: hit.page, rects: hit.rects }, position));
+    assert.equal(fixture.state.panel, null);
+    assert.equal(JSON.parse(fixture.state.command).page, 18);
+    assert.equal(fixture.state.searchPosition?.offset, 52, "a result jump must retain a return point");
+    await fixture.act(() => fixture.state.returnToSearch());
+    await fixture.act(() => new Promise(resolve => setTimeout(resolve, 330)));
+    assert.equal(fixture.state.panel, "contents");
+    assert.equal(fixture.state.contentsTab, "search");
+    assert.equal(fixture.state.query, "索尼");
+    assert.equal(fixture.state.hits[0], hit);
+    assert.equal(searches, 1, "return should not rerun the PDFKit search");
+    await fixture.update({ bookId: "other", fileUri: "file:///other.pdf" });
+    assert.equal(fixture.state.searchPosition, null);
+    assert.equal(fixture.state.hits.length, 0);
+  } finally { await fixture.unmount(); }
 });
 
 test("PDF citations pass the verified quote to PDFKit on both navigation paths", async () => {

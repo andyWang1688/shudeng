@@ -10,6 +10,7 @@ import {
 } from "../reader/ReaderWebView";
 import { NativeEpubSurface } from "../reader/NativeEpubSurface";
 import { EpubNavigationPanel } from "../reader/EpubNavigationPanel";
+import type { EpubNavigationSource } from "../reader/useEpubNavigation";
 import { useReaderState } from "../reader/useReaderState";
 import { useReaderExit } from "../reader/useReaderExit";
 import type { ShelfAnnotation, StoredReaderLocator } from "../platform/library";
@@ -52,7 +53,7 @@ export function ReaderShell(props: ReaderShellProps) {
   });
   return (
     <AppearanceOverride mode={reader.readerTheme}>
-      <ReaderContent {...props} reader={reader} />
+      <ReaderContent key={props.bookId} {...props} reader={reader} />
     </AppearanceOverride>
   );
 }
@@ -72,7 +73,7 @@ function ReaderContent({
   const insets = useSafeAreaInsets();
   const [chromeVisible, setChromeVisible] = useState(true);
   const toggleChrome = useCallback(() => setChromeVisible(value => !value), []);
-  const [navigationOpen, setNavigationOpen] = useState(false);
+  const [navigation, setNavigation] = useState<"closed" | "directory" | "searchHit" | "results">("closed");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [annotationBusy, setAnnotationBusy] = useState(false);
@@ -188,8 +189,12 @@ function ReaderContent({
       setAnnotationBusy(false);
     }
   };
-  const navigate = (locator: string) => {
-    setNavigationOpen(false);
+  const navigate = (locator: string, source: EpubNavigationSource) => {
+    setNavigation(source === "search" ? "searchHit" : "closed");
+    if (source === "contents" && !viewingReference) {
+      void reader.navigateContents(locator);
+      return;
+    }
     reader.readerRef.current?.goTo(locator);
   };
   const ask = (includeSelection: boolean) => {
@@ -253,9 +258,14 @@ function ReaderContent({
         referenceMode={viewingReference}
         visible={chromeVisible}
         onBack={() => void closeReader()}
-        controlsEnabled={reader.readerReady && !questions.busy}
+        controlsEnabled={reader.readerReady && !questions.busy && !reader.contentsBusy}
+        {...(reader.canReturnFromContents && reader.readerReady && !viewingReference && !reader.selection
+          ? { onReturnToPosition: () => void reader.navigateContents() }
+          : {})}
         onToggleChrome={toggleChrome}
-        onAnnotations={() => setNavigationOpen(true)}
+        {...(navigation === "searchHit" && reader.readerReady && !reader.selection
+          ? { onReturnToSearch: () => setNavigation("results") } : {})}
+        onAnnotations={() => setNavigation("directory")}
         onSettings={() => setSettingsOpen(true)}
         onAsk={() => ask(false)}
         onBookmark={() => void reader.saveBookmark()}
@@ -286,11 +296,13 @@ function ReaderContent({
       <EpubNavigationPanel
         bookId={bookId}
         title={title ?? "阅读"}
-        visible={navigationOpen}
+        visible={navigation === "directory" || navigation === "results"}
+        resumeSearch={navigation === "results"}
+        currentTocHref={reader.currentTocHref}
         contents={reader.contents}
         contentsLoaded={reader.contentsLoaded}
         annotations={reader.annotations}
-        onClose={() => setNavigationOpen(false)}
+        onClose={() => setNavigation("closed")}
         onNavigate={navigate}
         onRemoveBookmark={reader.removeAnnotation}
         onAnnotationsChanged={reader.replaceAnnotations}
