@@ -66,6 +66,28 @@ describe('citations require original text actually dispatched in this run', () =
     expect(check(nextRun, next.id, '尾段').citations).toEqual([]);
   });
 
+  it('matches a Chinese PDF line wrap and saves the extracted source text for navigation', () => {
+    const registry = new EvidenceRegistry('pdf');
+    const quote = '理性有时\n候难以抗衡。';
+    const evidence = registry.register({ ...excerpt, quote });
+    registry.recordTransmitted(evidence.id, quote);
+    expect(check(registry, evidence.id, '理性有时候难以抗衡。').citations)
+      .toMatchObject([{ quote, locator: excerpt.locator }]);
+    expect(check(registry, evidence.id, '理性有时候能够抗衡。').citations).toEqual([]);
+  });
+
+  it.each([
+    ['pdf', '书中原文\n\n接着写', ['书中原文\n\n接着写'], '原文接着写'],
+    ['epub', '书中原文\n接着写', ['书中原文\n接着写'], '原文接着写'],
+    ['pdf', '书中原文\n接着写', ['书中原文', '接着写'], '原文接着写'],
+    ['pdf', 'data\nbase', ['data\nbase'], 'database'],
+  ] as const)('keeps unrelated or undispatched text out of %s citations', (format, source, sent, quote) => {
+    const registry = new EvidenceRegistry(format);
+    const evidence = registry.register({ ...excerpt, quote: source });
+    for (const text of sent) registry.recordTransmitted(evidence.id, text);
+    expect(check(registry, evidence.id, quote).citations).toEqual([]);
+  });
+
   it('skips a null citation instead of throwing and keeps a trusted citation in the same batch', () => {
     const registry = new EvidenceRegistry();
     const evidence = registry.register(excerpt);

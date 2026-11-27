@@ -291,7 +291,7 @@ let runSequence = 0;
  */
 export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
   const runId = `run-${Date.now()}-${++runSequence}`;
-  const registry = new EvidenceRegistry();
+  const registry = new EvidenceRegistry(options.book.format);
   const controller = new AbortController();
   const guidance = createReadingGuidance(options.assistantInstructions);
   const webSearch = new ProviderWebSearch(options.model.webSearch ?? { state: { status: 'disabled' }, maxUses: 3 }, event => queue.push(event));

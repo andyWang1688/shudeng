@@ -6,7 +6,7 @@ import type { StoredReaderLocator } from '../../platform/library/types';
 import { QuestionPresentation, ReaderQuestionRegistry, type CitationTarget, type QuestionLaunch, type ReaderReferencePort, type ReferenceResult, type ReferenceRoute } from './session';
 
 type Transition = Readonly<{ target?: string; data: Readonly<{ closing: boolean }> }>;
-type PendingTransition = { finish: (completed: boolean) => void };
+type PendingDismissal = Readonly<{ readerKey: string; finish: (completed: boolean) => void }>;
 type RootSnapshot = Readonly<{ keys: readonly string[]; activeKey: string | undefined }>;
 type QuestionReturn = Readonly<{ questionKey: string; coveringRouteKey: string }>;
 type ReaderStackRoute = Readonly<{ key: string; name: string; params?: unknown; state?: unknown }>;
@@ -28,7 +28,7 @@ export function ReaderQuestionProvider({ children }: { readonly children: ReactN
   const rootState = readerQuestionStackFromRoot(useRootNavigationState());
   const current = useRef({ router, rootState });
   current.current = { router, rootState };
-  const pending = useRef(new Map<string, PendingTransition>());
+  const pending = useRef(new Map<string, PendingDismissal>());
   const appearances = useRef(new Map<string, Set<() => void>>());
   const appearedQuestion = useRef<string | null>(null);
   const previousRoot = useRef<RootSnapshot | null>(null);
@@ -54,17 +54,21 @@ export function ReaderQuestionProvider({ children }: { readonly children: ReactN
       if (!state || state.routes[state.index]?.key !== questionRouteKey || state.routes[state.index - 1]?.key !== readerRouteKey || signal.aborted) return Promise.resolve(false);
       appearedQuestion.current = null; returningQuestion.current = null;
       return new Promise<boolean>(resolve => {
+        const cancel = () => finish(false);
+        const timeout = setTimeout(cancel, 5000);
         const finish = (completed: boolean) => {
           if (pending.current.get(questionRouteKey)?.finish !== finish) return;
           pending.current.delete(questionRouteKey);
+          clearTimeout(timeout);
           signal.removeEventListener('abort', cancel);
           resolve(completed);
         };
-        const cancel = () => finish(false);
-        pending.current.set(questionRouteKey, { finish });
+        pending.current.set(questionRouteKey, { readerKey: readerRouteKey, finish });
         signal.addEventListener('abort', cancel, { once: true });
-        Keyboard.dismiss();
-        current.current.router.back();
+        try {
+          Keyboard.dismiss();
+          current.current.router.back();
+        } catch { cancel(); }
       });
     },
     presentQuestion: presentation => {
@@ -93,7 +97,6 @@ export function ReaderQuestionProvider({ children }: { readonly children: ReactN
     return questionPresentationIdFromRoute(route) === presentationId || registry.get(presentationId)?.routeKeys.has(route.key);
   }, [registry]);
   const transitionEnd = useCallback((event: Transition) => {
-    if (event.target && event.data.closing) pending.current.get(event.target)?.finish(true);
     const state = current.current.rootState;
     const active = state?.routes[state.index];
     // A history reader carries the presentation token too, but is not the question.
@@ -119,6 +122,14 @@ export function ReaderQuestionProvider({ children }: { readonly children: ReactN
   }, [hasCurrentAppearance]);
   useEffect(() => {
     if (!rootState?.routes.length) return;
+    const activeKey = rootState.routes[rootState.index]?.key;
+    // Expo Router can discard transitionEnd from a popped route. The reader
+    // beneath the transparent question is already mounted and can navigate
+    // once the stack commits the pop back to that exact reader.
+    for (const [questionKey, dismissal] of pending.current) {
+      if (activeKey === questionKey) continue;
+      dismissal.finish(activeKey === dismissal.readerKey && !rootState.routes.some(route => route.key === questionKey));
+    }
     const questionRoutes = new Map<string, string>();
     const referenceRoutes = new Map<string, ReferenceRoute>();
     for (const route of rootState.routes) {
@@ -212,7 +223,7 @@ export function useReaderQuestions(options: ReaderQuestionOptions) {
     if (!origin) { Alert.alert('尚未取得阅读位置', '正文就绪后再提问。'); return; }
     registry.openQuestion(owner.id, { bookId: owner.bookId, title: value.title, theme: value.theme, origin, selection });
   }, [owner, registry, returnToQuestion]);
-  return { ask, referenceMode: owner.format === 'epub' && reference.reference !== null, busy: reference.busy, returnToQuestion, readerSessionId: owner.id };
+  return { ask, referenceMode: reference.reference !== null, busy: reference.busy, returnToQuestion, readerSessionId: owner.id };
 }
 
 export function useQuestionPresentation(input: QuestionLaunch & Readonly<{ presentationId?: string | undefined }>): QuestionPresentation {

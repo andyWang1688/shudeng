@@ -213,6 +213,7 @@ export default function ReaderRoute() {
         title={book.title}
         fileUri={fileUri}
         referenceMode={referenceMode}
+        {...(referenceMode && referenceQuote ? { initialReferenceQuote: referenceQuote } : {})}
         initialAnnotations={annotations}
         onAnnotationsChanged={acceptAnnotations}
         {...(locator

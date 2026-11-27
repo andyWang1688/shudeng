@@ -504,6 +504,21 @@ private struct PdfCommand: Decodable {
   let rects: [PdfRect]?
   let operationId: String?
   let citation: Bool?
+  let quote: String?
+}
+
+/// Match on a single page. Only whitespace may vary from the verified quote.
+private func uniquePdfQuoteRange(_ quote: String, in text: String) -> NSRange? {
+  let terms = quote.split(whereSeparator: \.isWhitespace)
+  guard !terms.isEmpty, quote.utf16.count <= 2_000 else { return nil }
+  let pattern = terms.map { NSRegularExpression.escapedPattern(for: String($0)) }.joined(separator: #"\s+"#)
+  guard let matcher = try? NSRegularExpression(pattern: pattern) else { return nil }
+  let bounds = NSRange(text.startIndex..<text.endIndex, in: text)
+  guard let match = matcher.firstMatch(in: text, range: bounds)?.range else { return nil }
+  // Search one code unit after the start to reject overlapping occurrences too.
+  let next = match.location + 1
+  let remaining = NSRange(location: next, length: NSMaxRange(bounds) - next)
+  return matcher.firstMatch(in: text, range: remaining) == nil ? match : nil
 }
 
 private final class ImmersivePdfView: PDFView {
@@ -758,6 +773,7 @@ public final class ShudengPdfView: ExpoView, UIGestureRecognizerDelegate {
     overrideUserInterfaceStyle = dark ? .dark : .light
     pdfView.tintColor = PdfAppearance.lamp
     pdfView.currentSelection?.color = highlightColor("yellow", dark: dark)
+    pdfView.highlightedSelections?.forEach { $0.color = highlightColor("yellow", dark: dark) }
     renderMarks()
   }
 
@@ -830,7 +846,19 @@ public final class ShudengPdfView: ExpoView, UIGestureRecognizerDelegate {
     applyingNavigation = true
     clearSelection()
     if pdfView.currentPage !== target { pdfView.go(to: target) }
-    if let rect = command.rects?.first?.inPage(target.bounds(for: .cropBox)) { pdfView.go(to: rect, on: target) }
+    let cropBox = target.bounds(for: .cropBox)
+    var destination = command.rects?.first?.inPage(cropBox)
+    pdfView.highlightedSelections = nil
+    if command.citation == true, let quote = command.quote, let text = target.string,
+       let range = uniquePdfQuoteRange(quote, in: text), let selection = target.selection(for: range) {
+      let rect = selection.bounds(for: target).intersection(cropBox)
+      if !rect.isEmpty {
+        selection.color = highlightColor("yellow", dark: dark)
+        pdfView.highlightedSelections = [selection]
+        destination = destination ?? rect
+      }
+    }
+    if let destination { pdfView.go(to: destination, on: target) }
     pdfView.layoutIfNeeded()
     applyingNavigation = false
     if command.operationId == nil { pendingNavigation = nil }

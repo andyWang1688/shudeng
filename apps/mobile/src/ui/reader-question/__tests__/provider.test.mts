@@ -93,6 +93,43 @@ function harness(wrapRoot = false) {
   };
 }
 
+for (const page of [41, 60]) test(`PDF exposes return to question from page ${page} to a citation on page 41`, async () => {
+  const h = harness(true);
+  h.setReaderRoot();
+  const origin = { type: 'pdf' as const, page };
+  const citation = { ...target, locator: { type: 'pdf' as const, page: 41 } };
+  const destinations: Array<{ page: number; citation: boolean }> = [];
+  const options = {
+    bookId: 'book', format: 'pdf', theme: 'light',
+    getLocator: () => origin, documentFailed: false, flushProgress: async () => true,
+    navigate: async (command: { locator: { page: number }; citation: boolean; operationId: string }) => {
+      destinations.push({ page: command.locator.page, citation: command.citation });
+      return { operationId: command.operationId, status: 'arrived' };
+    },
+  };
+  const reader = h.readerQuestions('pdf-reader', options);
+  assert.equal(reader.referenceMode, false);
+  reader.ask();
+  h.render();
+  const route = h.state.routes[h.state.index];
+  const presentation = h.presentation('pdf-question', {
+    presentationId: route.params.questionPresentationId, bookId: 'book', theme: 'light', origin,
+  });
+  presentation.update({ draft: '追问草稿', sheetDetent: 1 });
+  const opened = h.registry.openReference(presentation, route.key, citation);
+  h.render();
+  assert.equal((await opened).status, 'opened');
+  const reference = h.readerQuestions('pdf-reader', options);
+  assert.equal(reference.busy, false);
+  assert.equal(reference.referenceMode, true);
+  assert.equal(await reference.returnToQuestion(), true);
+  assert.equal(h.state.routes[h.state.index].params.questionPresentationId, presentation.id);
+  assert.equal(presentation.getSnapshot().draft, '追问草稿');
+  assert.equal(presentation.getSnapshot().sheetDetent, 1);
+  assert.deepEqual(destinations, [{ page: 41, citation: true }]);
+  assert.equal(h.readerQuestions('pdf-reader', options).referenceMode, false);
+});
+
 for (const wrapRoot of [false, true]) describe(wrapRoot ? 'Expo root wrapper' : 'flat app stack', () => {
 test('Provider replays a completed question appearance to a list mounted after loading', () => {
   const h = harness(wrapRoot);
@@ -295,7 +332,7 @@ test('ordinary question reopens after route removal with retained effects', () =
   assert.equal(h.state.routes.filter((route: any) => route.name === 'book-chat').length, 1);
 });
 
-test('the citation hook dismisses the app question route and reaches the owning reader', async () => {
+test('the citation hook reaches the owning reader even when the removed question emits no closing event', async () => {
   const h = harness(wrapRoot); h.setReaderRoot();
   const origin = { type: 'epub' as const, cfi: 'epubcfi(/6/2!/4)' };
   const navigated: any[] = [];
@@ -310,11 +347,14 @@ test('the citation hook dismisses the app question route and reaches the owning 
   });
   h.citation('citation-hook', presentation)(target);
   assert.equal(h.state.routes[h.state.index].key, 'source-reader', 'citation must dismiss the app Stack question');
-  assert.equal(navigated.length, 0, 'reader navigation must wait for this question to finish closing');
-  h.render(); h.transition(route.key, true);
+  assert.equal(navigated.length, 0, 'reader navigation must wait for the committed pop');
+  h.render();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(navigated.length, 1);
   assert.deepEqual(navigated[0].locator, target.locator);
   assert.equal(h.registry.readerSnapshot(questions.readerSessionId).reference, presentation);
+  assert.equal(h.registry.readerSnapshot(questions.readerSessionId).busy, false);
+  assert.equal(await questions.returnToQuestion(), true);
+  assert.equal(h.state.routes[h.state.index].params.conversationId, presentation.conversationId);
 });
 });

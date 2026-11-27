@@ -4,7 +4,9 @@
  * 且 id 必须是本轮登记过的证据 id；否则剔除并记录 warning。绝不“放宽到任意文本”。
  */
 import type { BookExcerpt } from './book-source.js';
-import { splitCitationTail } from './citation-tail.js';
+import type { BookFormat } from '../domain/types.js';
+import { normalizedReaderText } from '../rag/reader-location.js';
+import { answerStringStart, splitCitationTail } from './citation-tail.js';
 import type { VerifiedCitation, WebSource } from './events.js';
 
 export interface RegisteredEvidence extends BookExcerpt {
@@ -26,6 +28,8 @@ export class EvidenceRegistry {
   private readonly rendered = new Map<string, readonly RenderedEvidenceMaterial[]>();
   private readonly transmitted = new Map<string, Set<string>>();
 
+  constructor(readonly format?: BookFormat) {}
+
   recordRendered(content: string, materials: readonly RenderedEvidenceMaterial[]): string {
     this.rendered.set(content, materials.map(material => Object.freeze({ ...material })));
     return content;
@@ -37,15 +41,15 @@ export class EvidenceRegistry {
 
   recordTransmitted(id: string, content: string): void {
     if (!this.byId.has(id)) return;
-    const normalized = normalizeWhitespace(content);
-    if (!normalized) return;
+    if (!content.trim()) return;
     const versions = this.transmitted.get(id) ?? new Set<string>();
-    versions.add(normalized);
+    versions.add(content);
     this.transmitted.set(id, versions);
   }
 
-  includesTransmittedQuote(id: string, normalizedQuote: string): boolean {
-    return [...(this.transmitted.get(id) ?? [])].some(content => content.includes(normalizedQuote));
+  includesTransmittedQuote(id: string, normalizedQuote: string, pdfLineWrap = false): boolean {
+    const normalize = pdfLineWrap ? (content: string) => normalizePdfCitationText(content).text : normalizeWhitespace;
+    return [...(this.transmitted.get(id) ?? [])].some(content => normalize(content).includes(normalizedQuote));
   }
 
   /** A budget trim may cut inside a quote; preserve only its transmitted prefix. */
@@ -96,6 +100,37 @@ export class EvidenceRegistry {
 /** 归一化空白：折叠连续空白为单个空格（与 Swift 版引用核对口径一致）。 */
 export function normalizeWhitespace(text: string): string {
   return text.trim().replace(/\s+/g, ' ');
+}
+
+/** PDFKit may insert a visual line break inside a Chinese word. Preserve the
+ * offsets so persisted citations still contain the original PDF text. */
+function normalizePdfCitationText(source: string): { text: string; offsets: number[] } {
+  const { text, offsets } = normalizedReaderText(source);
+  const han = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+  const kept: number[] = [];
+  let output = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    const offset = offsets[index]!;
+    if (char === ' ' && index > 0 && index + 1 < text.length &&
+        han.test(text[index - 1]!) && han.test(text[index + 1]!) &&
+        /^[ \t\u3000]*(?:\r\n|\n|\r)[ \t\u3000]*$/.test(source.slice(offset, offsets[index + 1]))) continue;
+    output += char;
+    kept.push(offset);
+  }
+  return { text: output, offsets: kept };
+}
+
+function verifiedQuote(quote: string, evidence: RegisteredEvidence, registry: EvidenceRegistry): string | undefined {
+  const normalized = normalizeWhitespace(quote);
+  if (!normalized) return undefined;
+  if (normalizeWhitespace(evidence.quote).includes(normalized) && registry.includesTransmittedQuote(evidence.id, normalized)) return quote;
+  if (registry.format !== 'pdf') return undefined;
+  const pdfQuote = normalizePdfCitationText(quote).text;
+  const source = normalizePdfCitationText(evidence.quote);
+  const start = source.text.indexOf(pdfQuote);
+  if (start < 0 || !registry.includesTransmittedQuote(evidence.id, pdfQuote, true)) return undefined;
+  return evidence.quote.slice(source.offsets[start], source.offsets[start + pdfQuote.length - 1]! + 1);
 }
 
 type AnswerCitation = { id?: unknown; quote?: unknown; url?: unknown; after?: unknown };
@@ -307,9 +342,8 @@ export function verifyCitations(
       droppedIds.push(id || '(missing-id)');
       continue;
     }
-    const normalizedQuote = normalizeWhitespace(quote);
-    if (!normalizedQuote || !normalizeWhitespace(evidence.quote).includes(normalizedQuote) ||
-        !registry.includesTransmittedQuote(id, normalizedQuote)) {
+    const sourceQuote = verifiedQuote(quote, evidence, registry);
+    if (!sourceQuote) {
       droppedIds.push(id);
       continue;
     }
@@ -317,7 +351,7 @@ export function verifyCitations(
     const anchor = answerAnchor(payload.answer, reference.after);
     const citation: VerifiedCitation = {
       id,
-      quote,
+      quote: sourceQuote,
       locator: evidence.locator,
       ...(anchor ? { answerAnchor: anchor } : {}),
       ...(evidence.chunkId ? { chunkId: evidence.chunkId } : {}),

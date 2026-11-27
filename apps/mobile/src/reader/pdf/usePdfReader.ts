@@ -74,6 +74,7 @@ export type PdfReaderOptions = {
   readonly fileUri: string;
   readonly initialPage?: number;
   readonly initialLocator?: Extract<StoredReaderLocator, { type: "pdf" }>;
+  readonly initialReferenceQuote?: string;
   readonly initialAnnotations?: readonly ShelfAnnotation[];
   readonly onAnnotationsChanged?: (
     annotations: readonly ShelfAnnotation[],
@@ -89,6 +90,7 @@ export function usePdfReader(options: PdfReaderOptions) {
     fileUri,
     initialPage,
     initialLocator,
+    initialReferenceQuote,
     onAnnotationsChanged,
     onPageChanged,
     onLoadComplete,
@@ -268,6 +270,7 @@ export function usePdfReader(options: PdfReaderOptions) {
       readonly rects?: Extract<StoredReaderLocator, { type: "pdf" }>["rects"];
       readonly operationId?: string;
       readonly citation?: boolean;
+      readonly quote?: string;
     }) => {
       setCommand(
         JSON.stringify({ ...payload, sequence: ++commandSequence.current }),
@@ -280,15 +283,17 @@ export function usePdfReader(options: PdfReaderOptions) {
     sendCommand({ type: "clearSelection" });
   }, [sendCommand]);
 
-  useEffect(() => {
+  const openAtInitialLocation = useCallback(() => {
     if (initialLocator)
       sendCommand({
         type: "goTo",
         page: initialLocator.page,
         ...(initialLocator.rects ? { rects: initialLocator.rects } : {}),
+        ...(initialReferenceQuote ? { citation: true, quote: initialReferenceQuote } : {}),
       });
     else if (initialPage) sendCommand({ type: "goTo", page: initialPage });
-  }, [initialLocator, initialPage, sendCommand]);
+  }, [initialLocator, initialPage, initialReferenceQuote, sendCommand]);
+  useEffect(openAtInitialLocation, [openAtInitialLocation]);
 
   useEffect(() => {
     let active = true;
@@ -391,14 +396,7 @@ export function usePdfReader(options: PdfReaderOptions) {
               );
             // Native detach/attach reopens at its last requested page. Do not replay the
             // original entry locator when returning from a question or another screen.
-            if (initialLocator)
-              sendCommand({
-                type: "goTo",
-                page: initialLocator.page,
-                ...(initialLocator.rects
-                  ? { rects: initialLocator.rects }
-                  : {}),
-              });
+            if (initialLocator) openAtInitialLocation();
           }
           break;
         case "page":
@@ -483,9 +481,9 @@ export function usePdfReader(options: PdfReaderOptions) {
       initialLocator,
       onLoadComplete,
       onPageChanged,
+      openAtInitialLocation,
       queueProgress,
       resolvedMode,
-      sendCommand,
       total,
     ],
   );
@@ -799,6 +797,7 @@ export function usePdfReader(options: PdfReaderOptions) {
           page: locator.page,
           operationId: command.operationId,
           citation: command.citation,
+          ...(command.citation && command.quote ? { quote: command.quote } : {}),
           ...(locator.rects ? { rects: locator.rects } : {}),
         });
       });

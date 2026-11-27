@@ -31,6 +31,7 @@ async function mount(initialPage?: number, ports: Record<string, any> = {}) {
     initialPage,
     onAnnotationsChanged: (rows: any[]) => published.push(rows),
   };
+  let referencePort: any;
   const mocks: Record<string, any> = {
     react: React,
     "react-native": { Alert: { alert() {} } },
@@ -40,7 +41,7 @@ async function mount(initialPage?: number, ports: Record<string, any> = {}) {
     },
     "../../ui/appearance": { useAppearance: () => ({ resolvedMode: "light" }) },
     "../../ui/reader-question/ReaderQuestionProvider": {
-      useReaderQuestions: () => ({ ask() {}, busy: false }),
+      useReaderQuestions: (port: any) => { referencePort = port; return { ask() {}, busy: false }; },
     },
     "../../platform/library": {
       saveBookProgress: async (id: string, progress: any) =>
@@ -103,6 +104,7 @@ async function mount(initialPage?: number, ports: Record<string, any> = {}) {
     act,
     writes,
     published,
+    navigate: (command: any) => referencePort.navigate(command),
     get state() {
       return state;
     },
@@ -121,6 +123,24 @@ const pageEvent = (page: number) => ({
   page,
   pageCount: 50,
   pageHasText: true,
+});
+
+test("PDF citations pass the verified quote to PDFKit on both navigation paths", async () => {
+  const fixture = await mount(7);
+  try {
+    const locator = { type: "pdf", page: 18 };
+    const quote = "核对这段文字。";
+    await fixture.update({ initialLocator: locator, initialReferenceQuote: quote });
+    const initial = JSON.parse(fixture.state.command);
+    assert.equal(initial.quote, quote);
+    assert.equal(initial.citation, true);
+    await fixture.act(() => fixture.state.onEvent({ type: "ready", pageCount: 50, outline: [] }));
+    assert.equal(JSON.parse(fixture.state.command).quote, quote);
+    await fixture.act(() => { fixture.navigate({ locator, quote, citation: true, operationId: "quote" }); });
+    const live = JSON.parse(fixture.state.command);
+    assert.equal(live.quote, quote);
+    assert.equal(live.operationId, "quote");
+  } finally { await fixture.unmount(); }
 });
 
 test("the real PDF hook keeps its latest confirmed page across error and native retry", async () => {
