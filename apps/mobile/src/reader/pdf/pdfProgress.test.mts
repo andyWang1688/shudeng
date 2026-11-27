@@ -238,6 +238,48 @@ test("asynchronous entry progress navigates once and normal turns save the arriv
   }
 });
 
+test("flushing progress reports a failure if a newer PDF page arrives during the save", async () => {
+  let storedPage = 0;
+  let releaseSave!: () => void;
+  const savePending = new Promise<void>((resolve) => { releaseSave = resolve; });
+  let reportSaving!: () => void;
+  const saving = new Promise<void>((resolve) => { reportSaving = resolve; });
+  let holdSave = false;
+  let failLatestPage = true;
+  const h = await mount(40, {
+    saveBookProgress: async (_id: string, { locator }: { locator: { page: number } }) => {
+      if (locator.page === 40 && holdSave) {
+        reportSaving();
+        await savePending;
+      }
+      if (locator.page === 41 && failLatestPage) throw new Error("save failed");
+      storedPage = locator.page;
+    },
+  });
+  try {
+    await h.act(() => h.state.onEvent(pageEvent(40)));
+    assert.equal(storedPage, 40);
+    holdSave = true;
+    await h.act(async () => {
+      const returning = h.state.flushProgress();
+      await saving;
+      h.state.onEvent(pageEvent(41));
+      releaseSave();
+      assert.equal(await returning, false, "the old page's save cannot clear the return");
+    });
+    assert.equal(h.state.page, 41);
+    assert.equal(storedPage, 40);
+    failLatestPage = false;
+    await h.act(async () => {
+      assert.equal(await h.state.flushProgress(), true);
+    });
+    assert.equal(storedPage, 41);
+  } finally {
+    releaseSave();
+    await h.unmount();
+  }
+});
+
 test("PDF annotation edits update the current renderer without navigation and old book callbacks are revoked", async () => {
   const h = await mount(17);
   const rows = [

@@ -227,16 +227,22 @@ export function usePdfReader(options: PdfReaderOptions) {
   );
   const flushProgress = useCallback(async () => {
     const progress = latestProgress.current;
-    try {
-      if (progress) await queueProgress(progress);
-      else await progressWrite.current;
-      return true;
-    } catch (cause) {
-      setError(
-        "阅读进度保存失败：" +
-          (cause instanceof Error ? cause.message : String(cause)),
-      );
-      return false;
+    let write = progress ? queueProgress(progress) : progressWrite.current;
+    // PDFKit can deliver another page change while an earlier save is pending.
+    while (true) {
+      try {
+        await write;
+        if (write === progressWrite.current) return true;
+      } catch (cause) {
+        if (write === progressWrite.current) {
+          setError(
+            "阅读进度保存失败：" +
+              (cause instanceof Error ? cause.message : String(cause)),
+          );
+          return false;
+        }
+      }
+      write = progressWrite.current;
     }
   }, [queueProgress]);
 
