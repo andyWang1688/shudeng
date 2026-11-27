@@ -6,7 +6,7 @@
 import type { BookExcerpt } from './book-source.js';
 import type { BookFormat } from '../domain/types.js';
 import { normalizedReaderText } from '../rag/reader-location.js';
-import { answerStringStart, splitCitationTail } from './citation-tail.js';
+import { splitCitationTail } from './citation-tail.js';
 import type { VerifiedCitation, WebSource } from './events.js';
 
 export interface RegisteredEvidence extends BookExcerpt {

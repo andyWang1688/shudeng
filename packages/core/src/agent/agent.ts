@@ -169,7 +169,6 @@ function looksLikeAnswerEnvelope(text: string): boolean {
   return startsLikeObject ? hasAnswer || hasCitations : hasAnswer && hasCitations;
 }
 
-function failureCode(error: unknown): AgentFailureCode {
 class InterruptedModelStreamError extends Error {
   constructor() {
     super('AI 服务的回答在传输途中中断，请重试。');
@@ -191,11 +190,12 @@ function assertStreamFinished(model: AgentModelHandle, end: ProviderStreamEnd | 
   if (end === 'incomplete') throw new Error('AI 服务报告本次回答未完成，请调整问题后重试。');
 }
 
+function failureCode(error: unknown): AgentFailureCode {
   if (error instanceof ContextBudgetError) return 'capacity';
-  if (providerBoundaryError(error)) return 'configuration';
   // LangChain and LangGraph may re-wrap middleware errors while retaining the name.
   if (error instanceof Error && error.name === 'InterruptedModelStreamError') return 'network';
   if (error instanceof Error && error.name === 'ModelOutputLimitError') return 'capacity';
+  if (providerBoundaryError(error)) return 'configuration';
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
   if (message.includes('api key') || message.includes('401') || message.includes('unauthorized')) {
     return 'authentication';
@@ -324,8 +324,6 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
   const bookToolNames = new Set(bookTools.map(item => item.name));
   const tools = [
     ...bookTools,
-    ...(options.extraTools ?? []).map((external) =>
-      tool(async (args: unknown) => external.invoke(args, controller.signal), {
     ...(webSearch.questionLinks.length && model.bindTools ? [tool(async (_args, config) => {
       // Multiple calls in one turn reuse the same result; native web results
       // already present in graph messages never trigger a duplicate request.
@@ -338,6 +336,8 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
       description: '打开当前读者问题提供的网页链接并查证网页内容。联网由 DeepSeek 完成。',
       schema: { type: 'object' as const, properties: {}, additionalProperties: false },
     })] : []),
+    ...(options.extraTools ?? []).map((external) =>
+      tool(async (args: unknown) => external.invoke(args, controller.signal), {
         name: external.name,
         description: external.description,
         schema: { ...external.inputSchema, type: 'object' as const },
@@ -357,17 +357,6 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
     clearModelIdle();
     modelIdleTimer = setTimeout(() => { timedOut = true; controller.abort(); }, options.modelIdleTimeoutMs ?? 90000);
   };
-  const sentMaterials = new Map<string, AgentSentMaterial>();
-  const summaryHandle = options.summaryModel ?? options.model;
-  const summaryModel = summaryHandle.langChainModel as BaseChatModel;
-  const context = options.contextWindowTokens !== undefined ? new NativeContextManager({
-    window: options.contextWindowTokens,
-    ...(options.outputReserveTokens !== undefined ? { outputReserve: options.outputReserveTokens } : {}),
-    ...(options.historySummary ? { summary: options.historySummary } : {}),
-  }, async oldMessages => {
-    const transcript = summaryTranscript(oldMessages);
-    if (!transcript) return '';
-    const summarySystem = new SystemMessage('你是简洁的对话摘要器。');
   let linkReading: ReturnType<typeof readQuestionLinks> | undefined;
   async function readQuestionLinks(): Promise<string | { error: string }> {
     const nativeTools = webSearch.tools();
@@ -427,6 +416,17 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
   function assertRunTime(): void {
     if (Date.now() - runStartedAt > (options.runTimeoutMs ?? 240000)) throw new Error('本次问答超时，请稍后重试。');
   }
+  const sentMaterials = new Map<string, AgentSentMaterial>();
+  const summaryHandle = options.summaryModel ?? options.model;
+  const summaryModel = summaryHandle.langChainModel as BaseChatModel;
+  const context = options.contextWindowTokens !== undefined ? new NativeContextManager({
+    window: options.contextWindowTokens,
+    ...(options.outputReserveTokens !== undefined ? { outputReserve: options.outputReserveTokens } : {}),
+    ...(options.historySummary ? { summary: options.historySummary } : {}),
+  }, async oldMessages => {
+    const transcript = summaryTranscript(oldMessages);
+    if (!transcript) return '';
+    const summarySystem = new SystemMessage('你是简洁的对话摘要器。');
     const summaryQuestion = new HumanMessage('把下面的对话历史压缩成不超过 2000 字的中文摘要，保留读者问题、已确认结论、未完成事项与工具调用线索；不要新增事实，不要编造原文，只输出摘要正文。\n\n' + transcript);
     // Compression cannot send an oversized request before the main request's preflight.
     // The summary is a one-shot call, so enforce the hard input + output window rather
@@ -506,6 +506,11 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
             (item.type.startsWith('web_search') || isDeepSeekWebTool(item.type)))), ...searchTools],
           modelSettings: { ...request.modelSettings, shudengWebSearchBudget: webSearch.remaining },
         });
+        assertStreamFinished(options.model, options.model.streamEnd?.(response));
+        return response;
+      };
+      const stopActivity = options.model.subscribeActivity?.(refreshModelIdle);
+      try {
         const firstDispatch = !hasDispatchedModel;
         hasDispatchedModel = true;
         let response;
@@ -515,11 +520,6 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
           searchFallbackUsed = true;
           webSearch.disableUnsupported();
           response = await dispatch();
-        assertStreamFinished(options.model, options.model.streamEnd?.(response));
-        return response;
-      };
-      const stopActivity = options.model.subscribeActivity?.(refreshModelIdle);
-      try {
         }
         webSearch.observeMessage(response);
         webSearch.assertWithinBudget();
@@ -676,6 +676,7 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
       webSearch.assertWithinBudget();
       const rawText = finalMessage?.tool_calls?.length ? '' : contentText(finalMessage?.content);
       const payload = parseAnswerPayload(rawText);
+      webSearch.finish(payload?.citations);
       const warnings: string[] = [];
       let citations: AgentRunResult['citations'] = [];
       let droppedCitationIds: string[] = [];
@@ -686,7 +687,6 @@ export function runBookAgent(options: RunBookAgentOptions): AgentRunSession {
         citations = outcome.citations;
         droppedCitationIds = outcome.droppedIds;
         if (droppedCitationIds.length > 0) {
-      webSearch.finish(payload?.citations);
           warnings.push('部分出处未通过本次原文核验，未显示为有效引用。');
         }
         if (citations.length === 0 && payload.citations.length === 0) {
