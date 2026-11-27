@@ -200,6 +200,21 @@ test("the actual ReaderAssistantThread composer keeps its draft through theme, m
   }
 });
 
+test("a delayed React update cannot undo the most recent composer edit", async () => {
+  const h = createRuntime();
+  try {
+    await h.mount();
+    await h.openHistory("saved-conversation");
+    await h.editDraftAtDifferentPriorities("问", "问一下\n原文怎么说？");
+    assert.equal(h.draft(), "问一下\n原文怎么说？");
+    assert.equal(h.presentation.getSnapshot().draft, h.draft());
+    await h.back();
+    await h.openHistory("saved-conversation");
+    assert.equal(h.draft(), "问一下\n原文怎么说？");
+    assert.equal(h.sent.length, 0);
+  } finally { await h.close(); }
+});
+
 test("the actual history composer restores an unsent draft into a new presentation without sending", async () => {
   const h = createRuntime();
   try {

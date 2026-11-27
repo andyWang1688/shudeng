@@ -127,11 +127,14 @@ function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat', sou
         return { ChatSheet: props => React.createElement(Sheet, props, props.children, props.footer),
           useBookChat: input => {
             chatInputs.push(input);
-            const view = React.useSyncExternalStore(input.presentation.subscribe, input.presentation.getSnapshot, input.presentation.getSnapshot);
+            const [question, setLocalQuestion] = React.useState(() => input.presentation.getSnapshot().draft);
             const values = React.useSyncExternalStore(subscribeChat, () => turns, () => turns);
-            const setQuestion = React.useCallback(draft => input.presentation.update({ draft }), [input.presentation]);
+            const setQuestion = React.useCallback(draft => {
+              input.presentation.update({ draft });
+              setLocalQuestion(draft);
+            }, [input.presentation]);
             return { loading: false, turns: values, title: 'Book', format, sourceAvailable,
-              question: view.draft, setQuestion, running: false, canSend: true, inputEnabled: true, configMissing: false,
+              question, setQuestion, running: false, canSend: true, inputEnabled: true, configMissing: false,
               selectionPending: false, service: 'fixture', placeholder: '追问', send: async text => { sent.push(text); return true; }, cancel() {}, retry() {} };
           },
         };
@@ -179,6 +182,13 @@ function createRuntime({ format = 'pdf', params, initialRoute = 'book-chat', sou
     async transition(routeKey, closing = false) { await act(() => transition({ target: routeKey, data: { closing } })); },
     async openMaterials() { await act(() => find('Pressable', record => record.props.testID === 'question-more-answer-1').props.onPress()); },
     async editDraft(value) { await act(() => find('TextInput', record => record.props.testID === 'runtime-composer-input').props.onChangeText(value)); },
+    async editDraftAtDifferentPriorities(first, last) {
+      await act(() => {
+        const edit = find('TextInput', record => record.props.testID === 'runtime-composer-input').props.onChangeText;
+        edit(first);
+        React.startTransition(() => edit(last));
+      });
+    },
     draft() { return find('TextInput', record => record.props.testID === 'runtime-composer-input').props.value; },
     async citation(target, twice = false, inline = false) {
       const key = stack.routes[stack.index].key;

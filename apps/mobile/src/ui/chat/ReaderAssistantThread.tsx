@@ -43,8 +43,10 @@ export function ReaderAssistantThread({ chat, presentation, onOpenSettings, onOp
   });
   const composer = runtime.thread.composer;
   useLayoutEffect(() => {
-    if (composer.getState().text !== chat.question) composer.setText(chat.question);
-  }, [chat.question, composer]);
+    // A React commit may carry an older question than the last input event.
+    const draft = presentation.getSnapshot().draft;
+    if (composer.getState().text !== draft) composer.setText(draft);
+  }, [chat.question, composer, presentation]);
   useEffect(() => composer.subscribe(() => {
     const text = composer.getState().text;
     if (text !== presentation.getSnapshot().draft) chat.setQuestion(text);
