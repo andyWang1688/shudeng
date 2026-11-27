@@ -4,14 +4,14 @@ layout: home
 hero:
   name: 书灯
   text: 一盏照书的灯
-  tagline: v0.5.8 · iOS 模拟器版
+  tagline: v0.5.9 · iOS 模拟器版
   actions:
     - theme: brand
       text: 快速开始
       link: /quick-start
     - theme: alt
-      text: 下载 v0.5.8
-      link: https://github.com/andyWang1688/shudeng/releases/tag/v0.5.8
+      text: 下载 v0.5.9
+      link: https://github.com/andyWang1688/shudeng/releases/tag/v0.5.9
 
 features:
   - title: 在书里问
