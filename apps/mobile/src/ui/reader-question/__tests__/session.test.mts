@@ -118,8 +118,23 @@ test('PDF reopens activeQuestion at the citation page, without EPUB origin resto
   assert.equal((await f.registry.returnToQuestion(f.owner.id)).status, 'returned');
   assert.equal(f.navigated.length, 1);
   assert.equal(f.navigated[0]!.locator.type, 'pdf');
-  assert.equal(f.control.flushes, 0);
+  assert.equal(f.control.flushes, 1);
   assert.equal(f.shown.at(-1), f.presentation);
+});
+
+test('PDF save failure keeps the citation reader open and a later successful save returns to the same question', async () => {
+  const f = fixture('pdf');
+  await f.registry.openReference(f.presentation, 'question-route', { ...citation, locator: { type: 'pdf', page: 40 } });
+  f.control.saved = false;
+  assert.equal((await f.registry.returnToQuestion(f.owner.id)).status, 'save-failed');
+  assert.equal(f.registry.readerSnapshot(f.owner.id).reference, f.presentation);
+  assert.equal(f.registry.readerSnapshot(f.owner.id).busy, false);
+  assert.equal(f.navigated.length, 1);
+  f.control.saved = true;
+  assert.equal((await f.registry.returnToQuestion(f.owner.id)).status, 'returned');
+  assert.equal(f.registry.readerSnapshot(f.owner.id).reference, null);
+  assert.equal(f.control.flushes, 2);
+  assert.equal(f.navigated.length, 1);
 });
 
 test('PDF explicit selection at a citation replaces activeQuestion instead of reopening the old question', async () => {

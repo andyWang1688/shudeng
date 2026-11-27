@@ -105,7 +105,7 @@ test("PDF inline citation/return deduplicates and keeps origin/state while follo
       1,
       "PDF return keeps citation page without restoring origin",
     );
-    assert.equal(h.flushes, 0);
+    assert.equal(h.flushes, 1);
     assert.equal(h.palette().paper, DARK);
     assert.deepEqual(original.getSnapshot(), {
       ...statePatch,

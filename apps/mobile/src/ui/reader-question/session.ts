@@ -319,7 +319,7 @@ export class ReaderQuestionRegistry {
     const abort = new AbortController(); reader.abort = abort;
     this.publish(reader, { reference: presentation, busy: true });
     try {
-      if (reader.owner.format === 'epub' && !allowUnsaved && !await reader.port.flushProgress()) return { status: 'save-failed', message: '返回问答后，未保存的阅读位置或设置可能丢失。' };
+      if (!allowUnsaved && !await reader.port.flushProgress()) return { status: 'save-failed', message: '返回问答后，未保存的阅读位置或设置可能丢失。' };
       if (!this.valid(reader, epoch)) return { status: 'failed', message: '阅读会话已关闭' };
       // Native PDF reopens activeQuestion at the citation page. Only EPUB restores origin.
       let originMessage: string | undefined;
