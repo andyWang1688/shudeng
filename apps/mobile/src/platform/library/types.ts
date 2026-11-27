@@ -25,12 +25,18 @@ export type StoredPdfRect = {
   readonly height: number;
 };
 
+export type StoredPdfPageRects = {
+  readonly page: number;
+  readonly rects: ReadonlyArray<StoredPdfRect>;
+};
+
 export type StoredReaderLocator =
   | { readonly type: 'epub'; readonly cfi: string; readonly selection?: ReadiumLocator; readonly href?: string; readonly chapter?: string; readonly totalProgression?: number; readonly position?: number }
   | {
       readonly type: 'pdf';
       readonly page: number;
       readonly rects?: ReadonlyArray<StoredPdfRect>;
+      readonly additionalPages?: ReadonlyArray<StoredPdfPageRects>;
       readonly text?: string;
     };
 

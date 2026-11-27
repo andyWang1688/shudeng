@@ -258,6 +258,31 @@ describe('real React owner replacement and save operation ownership', () => {
   });
 });
 
+it.each(['note', 'highlight'] as const)('persists both PDF pages of a cross-page %s under one annotation', async action => {
+  const { database } = await setup('pdf');
+  const harness = await realPdfHookHarness();
+  const rects = [{ x: 0.2, y: 0.1, width: 0.5, height: 0.025 }];
+  const additionalPages = [{ page: 8, rects: [{ x: 0.1, y: 0.8, width: 0.3, height: 0.025 }] }];
+  try {
+    await harness.act(() => {
+      harness.state.onSelectionAction({ type: 'selectionAction', action, text: '第一页\n第二页', page: 7, rects, additionalPages });
+      if (action === 'note') harness.state.setNoteBody('跨页笔记');
+    });
+    await harness.act(() => action === 'note' ? harness.state.saveNote() : harness.state.pickColor('green'));
+    const annotations = await loadBookAnnotations('owned-book');
+    expect(annotations).toHaveLength(1);
+    expect(annotations[0]).toMatchObject({
+      kind: action,
+      quote: '第一页\n第二页',
+      page: 7,
+      locator: { type: 'pdf', page: 7, rects, additionalPages },
+    });
+    expect(database.db.prepare('SELECT COUNT(*) AS total FROM anchors').get()).toEqual({ total: 1 });
+  } finally {
+    await harness.unmount();
+  }
+});
+
 describe('PDF anchor and annotation write atomicity', () => {
   it.each(['note', 'highlight', 'bookmark'] as const)('rolls back failed %s and leaves prior records and another book byte-for-byte unchanged', async kind => {
     const { database, store } = await setup('pdf');

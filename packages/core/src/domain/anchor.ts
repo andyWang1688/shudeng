@@ -90,6 +90,7 @@ export interface PdfLocator {
   readonly pageCount?: number;
   /** 多行选区归一化矩形；旧数据没有几何时为空数组。 */
   readonly rects: ReadonlyArray<PdfNormRect>;
+  readonly additionalPages?: ReadonlyArray<{ readonly page: number; readonly rects: ReadonlyArray<PdfNormRect> }>;
 }
 
 interface AnchorBase {

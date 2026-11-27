@@ -846,6 +846,9 @@ export function usePdfReader(options: PdfReaderOptions) {
           page: event.page,
           rects: event.rects,
           text: event.text,
+          ...((event.action === "highlight" || event.action === "note") && event.additionalPages?.length
+            ? { additionalPages: event.additionalPages }
+            : {}),
         },
       };
       switch (event.action) {

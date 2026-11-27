@@ -11,6 +11,7 @@ import {
   annotationReadingOrder,
   formatOf,
   isRecord,
+  legacyPdfAdditionalPages,
   legacyPdfRects,
   readerLocatorFromLegacy,
   storedLocatorFromUnknown,
@@ -47,7 +48,11 @@ function anchorToStoredLocator(anchor: AnchorRow, format: BookFormat): StoredRea
       }
       if (typeof parsed.kind === 'string' && parsed.kind === 'pdf' && typeof locator.page === 'number') {
         const rects = legacyPdfRects(locator.rects);
-        return { type: 'pdf', page: locator.page, ...(rects ? { rects } : {}) };
+        const additionalPages = legacyPdfAdditionalPages(locator.additionalPages, locator.page);
+        return {
+          type: 'pdf', page: locator.page, ...(rects ? { rects } : {}),
+          ...(additionalPages.length ? { additionalPages } : {}),
+        };
       }
       const readium = isRecord(parsed.readium) ? parsed.readium : undefined;
       const readiumLocations = readium && isRecord(readium.locations) ? readium.locations : undefined;

@@ -74,7 +74,8 @@ function PdfReadingView({
                 rect.width > 0 &&
                 rect.height > 0,
             ) ?? [];
-          if (!rects.length) return [];
+          const additionalPages = item.locator.additionalPages;
+          if (!rects.length && !additionalPages?.length) return [];
           return [
             {
               id: item.id,
@@ -83,6 +84,7 @@ function PdfReadingView({
               body: item.body,
               page: item.locator.page,
               rects,
+              additionalPages,
             },
           ];
         }),

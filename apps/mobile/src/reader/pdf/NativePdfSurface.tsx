@@ -1,13 +1,13 @@
 import { requireNativeView, requireOptionalNativeModule } from 'expo';
 import type { NativeSyntheticEvent, ViewProps } from 'react-native';
-import type { StoredPdfRect } from '../../platform/library';
+import type { StoredPdfPageRects } from '../../platform/library';
 import type { PdfOutlineItem } from '../../platform/pdfNative';
 
 export type PdfViewEvent =
   | { readonly type: 'ready'; readonly pageCount: number; readonly outline: readonly PdfOutlineItem[] }
   | { readonly type: 'page'; readonly page: number; readonly pageCount: number; readonly pageHasText: boolean }
-  | { readonly type: 'selection'; readonly page: number; readonly text: string; readonly rects: readonly StoredPdfRect[] }
-  | { readonly type: 'selectionAction'; readonly action: 'highlight' | 'note' | 'ask' | 'cancel'; readonly page: number; readonly text: string; readonly rects: readonly StoredPdfRect[] }
+  | (StoredPdfPageRects & { readonly type: 'selection'; readonly text: string })
+  | (StoredPdfPageRects & { readonly type: 'selectionAction'; readonly action: 'highlight' | 'note' | 'ask' | 'cancel'; readonly text: string; readonly additionalPages?: readonly StoredPdfPageRects[] })
   | { readonly type: 'annotation'; readonly id: string }
   | { readonly type: 'navigation'; readonly operationId: string; readonly status: 'arrived' | 'failed'; readonly message?: string }
   | { readonly type: 'selectionCleared' | 'tap' }

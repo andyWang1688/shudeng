@@ -445,9 +445,13 @@ private func outlineItems(_ document: PDFDocument, shouldContinue: () -> Bool = 
 /// Coordinates intentionally use the PDF crop box, with the PDF bottom-left origin.
 /// This is the same normalized geometry stored by the original iOS application.
 private func normalizedRects(_ selection: PDFSelection, page: PDFPage) -> [[String: Double]] {
+  normalizedRects(selection.selectionsByLine(), page: page)
+}
+
+private func normalizedRects(_ lines: [PDFSelection], page: PDFPage) -> [[String: Double]] {
   let bounds = page.bounds(for: .cropBox)
   guard bounds.width > 0, bounds.height > 0 else { return [] }
-  return selection.selectionsByLine().compactMap { line in
+  return lines.compactMap { line in
     let rect = line.bounds(for: page).intersection(bounds)
     guard !rect.isNull, rect.width > 0, rect.height > 0 else { return nil }
     return ["x": Double((rect.minX - bounds.minX) / bounds.width),
@@ -471,6 +475,11 @@ private struct PdfRect: Decodable {
   }
 }
 
+private struct PdfMarkPage: Decodable {
+  let page: Int
+  let rects: [PdfRect]
+}
+
 private struct PdfMark: Decodable {
   let id: String
   let kind: String
@@ -478,6 +487,15 @@ private struct PdfMark: Decodable {
   let body: String?
   let page: Int
   let rects: [PdfRect]
+  let additionalPages: [PdfMarkPage]?
+
+  var pages: [PdfMarkPage] {
+    [PdfMarkPage(page: page, rects: rects)] + (additionalPages ?? [])
+  }
+
+  func rects(on page: Int) -> [PdfRect] {
+    page == self.page ? rects : additionalPages?.first(where: { $0.page == page })?.rects ?? []
+  }
 }
 
 private struct PdfCommand: Decodable {
@@ -568,6 +586,7 @@ private final class PdfSelectionMenu: UIView {
 public final class ShudengPdfView: ExpoView, UIGestureRecognizerDelegate {
   let onPdfEvent = EventDispatcher()
   private let pdfView = ImmersivePdfView()
+  private lazy var annotationTap = UITapGestureRecognizer(target: self, action: #selector(tappedAnnotation(_:)))
   private let openingQueue = DispatchQueue(label: "dev.shudeng.pdf.viewer", qos: .userInitiated)
   private var openCancellation: PdfViewerOpenCancellation?
   private var uri = ""
@@ -596,9 +615,12 @@ public final class ShudengPdfView: ExpoView, UIGestureRecognizerDelegate {
     pdfView.pageBreakMargins = .zero
     pdfView.pageShadowsEnabled = false
     addSubview(pdfView)
+    annotationTap.delegate = self
+    pdfView.addGestureRecognizer(annotationTap)
     let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
     tap.cancelsTouchesInView = false
     tap.delegate = self
+    tap.require(toFail: annotationTap)
     pdfView.addGestureRecognizer(tap)
     let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
     pan.cancelsTouchesInView = false
@@ -749,24 +771,27 @@ public final class ShudengPdfView: ExpoView, UIGestureRecognizerDelegate {
     guard let document = pdfView.document else { return }
     rendered.forEach { $0.page?.removeAnnotation($0) }
     rendered.removeAll(keepingCapacity: true)
-    for mark in marks {
-      guard mark.kind != "bookmark", mark.page > 0, mark.page <= document.pageCount, let page = document.page(at: mark.page - 1) else { continue }
-      for (index, normalized) in mark.rects.enumerated() {
-        guard let rect = normalized.inPage(page.bounds(for: .cropBox)) else { continue }
-        let note = mark.kind == "note"
-        let annotation = PDFAnnotation(bounds: rect, forType: note ? .underline : .highlight, withProperties: nil)
-        annotation.color = highlightColor(mark.color, dark: dark)
-        annotation.userName = "shudeng:\(mark.id)"
-        annotation.contents = mark.body
-        page.addAnnotation(annotation)
-        rendered.append(annotation)
-        if note, index == mark.rects.count - 1 {
-          let icon = PDFAnnotation(bounds: noteIconRect(rect), forType: .text, withProperties: nil)
-          icon.color = annotation.color
-          icon.contents = mark.body
-          icon.userName = annotation.userName
-          page.addAnnotation(icon)
-          rendered.append(icon)
+    for mark in marks where mark.kind != "bookmark" {
+      for section in mark.pages {
+        guard section.page > 0, section.page <= document.pageCount, let page = document.page(at: section.page - 1) else { continue }
+        let box = page.bounds(for: .cropBox)
+        for (index, normalized) in section.rects.enumerated() {
+          guard let rect = normalized.inPage(box) else { continue }
+          let note = mark.kind == "note"
+          let annotation = PDFAnnotation(bounds: rect, forType: note ? .underline : .highlight, withProperties: nil)
+          annotation.color = highlightColor(mark.color, dark: dark)
+          annotation.userName = "shudeng:\(mark.id)"
+          annotation.contents = mark.body
+          page.addAnnotation(annotation)
+          rendered.append(annotation)
+          if note, section.page == mark.page, index == section.rects.count - 1 {
+            let icon = PDFAnnotation(bounds: noteIconRect(rect), forType: .text, withProperties: nil)
+            icon.color = annotation.color
+            icon.contents = mark.body
+            icon.userName = annotation.userName
+            page.addAnnotation(icon)
+            rendered.append(icon)
+          }
         }
       }
     }
@@ -871,23 +896,38 @@ public final class ShudengPdfView: ExpoView, UIGestureRecognizerDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
   }
 
-  private func selectionPayload(_ selection: PDFSelection) -> [String: Any]? {
+  private func selectionPayload(_ selection: PDFSelection, includeAdditionalPages: Bool = false) -> [String: Any]? {
+    let pages = selection.pages
     guard let document = pdfView.document,
-          let page = selection.pages.first, let text = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+          let page = pages.first, let text = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
       return nil
     }
     let pageIndex = document.index(for: page)
     guard pageIndex != NSNotFound else { return nil }
-    // Native PDFNoteGeometry keeps the entire PDFKit quote, including internal
-    // line/page breaks, while anchoring its geometry to the first selected page.
-    return ["type": "selection", "page": pageIndex + 1, "text": text,
-            "rects": normalizedRects(selection, page: page)]
+    let lines = selection.selectionsByLine()
+    var payload: [String: Any] = ["type": "selection", "page": pageIndex + 1, "text": text,
+                                  "rects": normalizedRects(lines, page: page)]
+    if includeAdditionalPages && pages.count > 1 {
+      var linesByPage: [PDFPage: [PDFSelection]] = [:]
+      for line in lines {
+        for linePage in line.pages { linesByPage[linePage, default: []].append(line) }
+      }
+      let additionalPages: [[String: Any]] = pages.dropFirst().compactMap { next in
+        let index = document.index(for: next)
+        guard index != NSNotFound, index > pageIndex else { return nil }
+        let rects = normalizedRects(linesByPage[next] ?? [], page: next)
+        return rects.isEmpty ? nil : ["page": index + 1, "rects": rects]
+      }
+      if !additionalPages.isEmpty { payload["additionalPages"] = additionalPages }
+    }
+    return payload
   }
 
   private func showSelectionMenu(for selection: PDFSelection) {
     hideSelectionMenu()
     let menu = PdfSelectionMenu { [weak self] action in
-      guard let self, let current = self.pdfView.currentSelection, var payload = self.selectionPayload(current) else { return }
+      guard let self, let current = self.pdfView.currentSelection,
+            var payload = self.selectionPayload(current, includeAdditionalPages: action == "note" || action == "highlight") else { return }
       self.hideSelectionMenu()
       payload["type"] = "selectionAction"
       payload["action"] = action
@@ -933,29 +973,32 @@ public final class ShudengPdfView: ExpoView, UIGestureRecognizerDelegate {
     dismissSystemMenu(pdfView)
   }
 
-  @objc private func tapped(_ gesture: UITapGestureRecognizer) {
-    guard CACurrentMediaTime() - lastDrag >= 0.4 else { return }
-    let point = gesture.location(in: pdfView)
+  private func annotationId(at point: CGPoint) -> String? {
     if let document = pdfView.document, let page = pdfView.page(for: point, nearest: false) {
       let index = document.index(for: page) + 1
       let location = pdfView.convert(point, to: page)
       let box = page.bounds(for: .cropBox)
-      for mark in marks where mark.page == index {
-        let hit = mark.rects.enumerated().contains { index, normalized in
+      for mark in marks {
+        let rects = mark.rects(on: index)
+        let hit = rects.enumerated().contains { rectIndex, normalized in
           guard var rect = normalized.inPage(box) else { return false }
-          if mark.kind == "note", index == mark.rects.count - 1 { rect = rect.union(noteIconRect(rect)) }
+          if mark.kind == "note", mark.page == index, rectIndex == rects.count - 1 { rect = rect.union(noteIconRect(rect)) }
           return rect.insetBy(dx: -6, dy: -6).contains(location)
         }
-        if hit {
-          clearSelection()
-          let documentView = pdfView.documentView
-          documentView?.isUserInteractionEnabled = false
-          DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak documentView] in documentView?.isUserInteractionEnabled = true }
-          onPdfEvent(["type": "annotation", "id": mark.id])
-          return
-        }
+        if hit { return mark.id }
       }
     }
+    return nil
+  }
+
+  @objc private func tappedAnnotation(_ gesture: UITapGestureRecognizer) {
+    guard let id = annotationId(at: gesture.location(in: pdfView)) else { return }
+    clearSelection()
+    onPdfEvent(["type": "annotation", "id": id])
+  }
+
+  @objc private func tapped(_ gesture: UITapGestureRecognizer) {
+    guard CACurrentMediaTime() - lastDrag >= 0.4 else { return }
     if hadSelectionAtTouchStart || pdfView.currentSelection != nil {
       hadSelectionAtTouchStart = false
       clearSelection()
@@ -969,11 +1012,22 @@ public final class ShudengPdfView: ExpoView, UIGestureRecognizerDelegate {
   }
 
   public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+    if gestureRecognizer === annotationTap {
+      return CACurrentMediaTime() - lastDrag >= 0.4 && annotationId(at: touch.location(in: pdfView)) != nil
+    }
     if gestureRecognizer is UITapGestureRecognizer { hadSelectionAtTouchStart = pdfView.currentSelection != nil }
     return true
   }
 
-  public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+  public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+    guard gestureRecognizer === annotationTap, otherGestureRecognizer is UITapGestureRecognizer,
+          let view = otherGestureRecognizer.view else { return false }
+    return view === pdfView || view.isDescendant(of: pdfView)
+  }
+
+  public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+    gestureRecognizer !== annotationTap && otherGestureRecognizer !== annotationTap
+  }
 
   private func disableInsets(_ view: UIView) {
     if let scroll = view as? UIScrollView {

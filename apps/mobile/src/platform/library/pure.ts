@@ -3,6 +3,7 @@ import { decodeEpubAnchor, encodeEpubAnchor, epubDestination } from '@shudeng/co
 import type {
   BookFormat,
   SaveReaderAnnotationInput,
+  StoredPdfPageRects,
   StoredPdfRect,
   StoredReaderLocator,
 } from './types';
@@ -51,6 +52,22 @@ export function storedPdfRects(value: unknown): StoredPdfRect[] | undefined {
 
 export function legacyPdfRects(value: unknown): StoredPdfRect[] | undefined {
   return pdfRectsFrom(value, 'w', 'h');
+}
+
+export function legacyPdfAdditionalPages(value: unknown, firstPage: number): StoredPdfPageRects[] {
+  if (!Array.isArray(value)) return [];
+  const pages: StoredPdfPageRects[] = [];
+  let previousPage = firstPage;
+  for (const section of value) {
+    if (!isRecord(section) || typeof section.page !== 'number' ||
+        !Number.isSafeInteger(section.page) || section.page <= previousPage) continue;
+    const rects = legacyPdfRects(section.rects)?.filter(rect =>
+      [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) && rect.width > 0 && rect.height > 0);
+    if (!rects?.length) continue;
+    pages.push({ page: section.page, rects });
+    previousPage = section.page;
+  }
+  return pages;
 }
 
 /** Read-only ordering metadata; keep native local fallback separate from whole-book progress. */
@@ -250,12 +267,19 @@ export function citationHref(locatorJson: string | null): string | null {
 export function anchorJsonForSelection(input: SaveReaderAnnotationInput): string {
   const base = { schema: 'shudeng.anchor.v3', version: 3 } as const;
   if (input.locator.type === 'pdf') {
+    const normRects = (rects: readonly StoredPdfRect[]) =>
+      rects.map(rect => ({ x: rect.x, y: rect.y, w: rect.width, h: rect.height }));
+    const additionalPages = input.locator.additionalPages?.map(section => ({
+      page: section.page,
+      rects: normRects(section.rects),
+    }));
     return JSON.stringify({
       ...base,
       kind: 'pdf',
       locator: {
         page: input.locator.page,
-        rects: (input.locator.rects ?? []).map((rect) => ({ x: rect.x, y: rect.y, w: rect.width, h: rect.height })),
+        rects: normRects(input.locator.rects ?? []),
+        ...(additionalPages?.length ? { additionalPages } : {}),
       },
     });
   }
