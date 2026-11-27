@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.6",
+  "build": "19",
+  "release_date": "2026-11-27",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "6726ec40f6cf162d5a2614d5b7707ebd68a92689",
+    "tag": "v0.5.6",
+    "mobile_tree": "0bc1b2d083720e6b0f63bdfe436cb8a54bfc0482",
+    "core_tree": "ff3c74825ed68d1393d8e28509231fb6067f0add",
+    "reader_web_tree": "ca47363a6db6acc9748601b1920f42f01f414def"
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": [
+      "arm64"
+    ],
+    "validated_runtime": "iOS 26.5",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "binary_sha256": "76faf52753d5d0dafb96a51234356168406e95d3f422aead7030c7df07341ef0",
+    "js_bundle_sha256": "5baa954a91af503451108c7aecd31e6332d0b7ce772485a242f1fb73cf1dc684",
+    "signing": "Simulator ad hoc"
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.6-ios-simulator.zip",
+      "bytes": 29229246,
+      "sha256": "067ea085e77d8fbb76af99644fec2ab64eb1d4a3aca583e8b6b7ede84930f5da"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 918,
+      "sha256": "d689552f27089f5b812a436ae37e1a48f44ab1be107167e413661ce779f96ee9"
+    }
+  ],
+  "packaging": {
+    "native_compile_rerun": true,
+    "xcode": "Xcode 27.2 (27B52)",
+    "minimum_ios": "16.4",
+    "js": "Production Hermes bundle with matching third-party notices"
+  },
+  "validation": {
+    "tests": {
+      "passed": 1163,
+      "skipped": 9,
+      "failed": 0,
+      "mobile_rerun": "Isolated mobile rerun passed following timeouts during the concurrent Xcode build."
+    },
+    "typecheck": "passed",
+    "website_build": "passed",
+    "package_audit": "passed",
+    "zip_integrity": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "bundled_npm_license_count": 127,
+    "simulator_smoke": "Installed from final ZIP. Binary, Hermes bundle, and Expo configuration matched the archive. Book, annotation and conversation counts matched before and after. Opened existing PDF note without PDFKit menu."
+  },
+  "not_validated": [
+    "iPhone build or installation",
+    "TestFlight or App Store",
+    "live provider behavior on this release"
+  ],
+  "evidence": [
+    "docs/validation/2026-11-27/release-v0.5.6.md",
+    "docs/validation/2026-11-26/pdf-annotations.md"
+  ]
+}
