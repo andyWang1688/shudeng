@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.7",
+  "build": "20",
+  "release_date": "2026-11-27",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "d141383ee3b82291f67d9e65d051ee316b6dd997",
+    "tag": "v0.5.7",
+    "mobile_tree": "67049d6f4a59cf5e49c81afec08e13748f4a638a",
+    "core_tree": "4f525173f73f2feff7e0a9310718b03cf2e41f1c",
+    "reader_web_tree": "ca47363a6db6acc9748601b1920f42f01f414def"
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": [
+      "arm64"
+    ],
+    "validated_runtime": "iOS 26.5",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "binary_sha256": "1f731379a8bc048429deeac5a187944d25df5f3ab2eb92dbd07d8d9f1fb6862a",
+    "js_bundle_sha256": "ef22bb234ece95106cc567f10f38a396d0b9662375f3c981883c83f17b7180f0",
+    "signing": "Simulator ad hoc"
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.7-ios-simulator.zip",
+      "bytes": 29240551,
+      "sha256": "1e5830afb6e3db16855deb8538c8991e772d2dc7a7bd1b2f428002f4fbc41efe"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 918,
+      "sha256": "9c2b4ba10ff584b5cd2e7407d63cccf9b3c41e3148ebe20d8b3f27ac45b32dce"
+    }
+  ],
+  "packaging": {
+    "native_compile_rerun": true,
+    "xcode": "Xcode 27.2 (27B52)",
+    "minimum_ios": "16.4",
+    "js": "Production Hermes bundle with matching third-party notices"
+  },
+  "validation": {
+    "tests": {
+      "scope": "Focused agent, PDF and mobile AI settings regressions",
+      "passed": 161,
+      "skipped": 0,
+      "failed": 0
+    },
+    "typecheck": "passed",
+    "website_build": "passed",
+    "package_audit": "passed",
+    "zip_integrity": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "bundled_npm_license_count": 127,
+    "simulator_smoke": "Installed from final ZIP with 8 books, 5 annotations and 37 conversations retained. A real DeepSeek Flash turn preserved one verified PDF citation and one official web source. Opened the sentence-end PDF citation, verified the two-line highlight, and returned to the same question."
+  },
+  "not_validated": [
+    "Full workspace test suite",
+    "iPhone build or installation",
+    "TestFlight or App Store"
+  ],
+  "evidence": [
+    "docs/validation/2026-11-27/release-v0.5.7.md"
+  ]
+}
