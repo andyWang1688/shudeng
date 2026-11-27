@@ -13,7 +13,7 @@ async function collect(session: AgentRunSession) { const events: AgentEvent[] = 
 const answer = JSON.stringify({ answer: '网页补充说明。', citations: [] });
 const citation = { type: 'url_citation', url: 'https://example.org/article', title: '实际网页', start_index: 0, end_index: 2 };
 
-function responseSSE(text = answer, withSearch = true, functionCall = false, searchIds = ['ws_1']) {
+function responseSSE(text = answer, withSearch = true, functionCall = false, searchIds = ['ws_1'], incompleteReason?: string) {
   const searches = withSearch ? searchIds.map(id => ({ type: 'web_search_call', id, status: 'completed', action: { type: 'search', query: '阅读' } })) : [];
   const message = { type: 'message', id: 'msg_1', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text, annotations: withSearch ? [citation] : [] }] };
   const fn = { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'search_book', arguments: JSON.stringify({ query: '灯' }), status: 'completed' };
@@ -28,11 +28,13 @@ function responseSSE(text = answer, withSearch = true, functionCall = false, sea
     events.push({ type: 'response.output_text.delta', delta: text, item_id: 'msg_1', content_index: 0, output_index: searches.length });
     if (withSearch) events.push({ type: 'response.output_text.annotation.added', annotation: citation, item_id: 'msg_1', content_index: 0, annotation_index: 0, output_index: searches.length });
   }
-  events.push({ type: 'response.completed', response });
+  events.push(incompleteReason
+    ? { type: 'response.incomplete', response: { ...response, status: 'incomplete', incomplete_details: { reason: incompleteReason } } }
+    : { type: 'response.completed', response });
   return events.map(event => 'event: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n').join('');
 }
 
-function anthropicSSE(options: { searchError?: boolean; withAnswer?: boolean; withSearch?: boolean } = {}) {
+function anthropicSSE(options: { searchError?: boolean; withAnswer?: boolean; withSearch?: boolean; text?: string; stopReason?: string } = {}) {
   const withSearch = options.withSearch !== false;
   const textIndex = withSearch ? 2 : 0;
   const events = [
@@ -48,13 +50,13 @@ function anthropicSSE(options: { searchError?: boolean; withAnswer?: boolean; wi
     ] : []),
     ...(options.withAnswer !== false ? [
     { type: 'content_block_start', index: textIndex, content_block: { type: 'text', text: '' } },
-    { type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text: answer } },
+    { type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text: options.text ?? answer } },
     ...(withSearch && !options.searchError ? [
       { type: 'content_block_delta', index: textIndex, delta: { type: 'citations_delta', citation: { type: 'web_search_result_location', url: citation.url, title: citation.title, cited_text: '阅读', encrypted_index: 'opaque' } } },
     ] : []),
     { type: 'content_block_stop', index: textIndex },
     ] : []),
-    { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } },
+    { type: 'message_delta', delta: { stop_reason: options.stopReason ?? 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } },
     { type: 'message_stop' },
   ];
   return events.map(event => 'event: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n').join('');
@@ -122,10 +124,13 @@ describe('reading Agent official infrastructure', () => {
       ),
     };
     const session = runBookAgent({ model, source: source(), book, question: '你能联网搜索不' });
-    await collect(session);
+    const events = await collect(session);
     const prompts = JSON.stringify((model.langChainModel as ScriptedChatModel).calls[0]);
     expect(prompts).toContain('本轮已启用服务商内置联网搜索');
     expect(prompts).toContain('不要回答没有可用的联网搜索工具');
+    expect(events.filter(event => event.type === 'webSearchStatus').at(-1)).toMatchObject({
+      status: 'enabled', message: '已启用联网，本次未使用。',
+    });
   });
 
   it('tells a DeepSeek chat model the exact reason search is unavailable', async () => {
@@ -166,6 +171,95 @@ describe('reading Agent official infrastructure', () => {
     expect((requests[0]?.body.tools as Array<{ type: string }>).every(item => item.type === 'function')).toBe(true);
     expect((await session.result)?.webSources).toEqual([]);
     expect((await session.result)?.webSearch?.status).toBe('disabled');
+  });
+
+  it.each([
+    ['Chat Completions', 'openai', false, 'data: ' + JSON.stringify({
+      id: 'chat_interrupted', object: 'chat.completion.chunk', created: 1, model: 'test-model',
+      choices: [{ index: 0, delta: { role: 'assistant', content: '{"answer":"已经收到的正文' }, finish_reason: null }],
+    }) + '\n\n'],
+    ['DeepSeek Chat Completions', 'deepseek', false, 'data: ' + JSON.stringify({
+      id: 'chat_interrupted', object: 'chat.completion.chunk', created: 1, model: 'deepseek-flash',
+      choices: [{ index: 0, delta: { role: 'assistant', content: '{"answer":"已经收到的正文' }, finish_reason: null }],
+    }) + '\n\n'],
+    ['Responses', 'openai', true, responseSSE('{"answer":"已经收到的正文', false).split('event: response.completed')[0]!],
+    ['Anthropic', 'anthropic', false, anthropicSSE({ withSearch: false, text: '{"answer":"已经收到的正文' })
+      .split('event: message_delta')[0]!],
+  ] as const)('keeps partial text but fails an unterminated %s stream', async (_name, provider, enabled, body) => {
+    const model = createChatModel({ provider, model: 'test-model', apiKey: 'test', webSearch: { enabled },
+      fetch: async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }),
+    });
+    (model.langChainModel as { getNumTokens(text: string): Promise<number> }).getNumTokens = async text => Math.ceil(text.length / 4);
+    const session = runBookAgent({ model, source: source(), book, question: '请解释' });
+    const events = await collect(session);
+    expect(events.some(event => event.type === 'textDelta' && event.delta.includes('已经收到的正文'))).toBe(true);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'failed', code: 'network' }));
+    expect(events.some(event => event.type === 'completed')).toBe(false);
+    expect(await session.result).toBeNull();
+  });
+
+  it('does not execute a parseable book tool call from an unterminated model step', async () => {
+    let requests = 0;
+    const model = createChatModel({ provider: 'openai', model: 'test-model', apiKey: 'test',
+      fetch: async () => {
+        requests += 1;
+        const delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'call_interrupted', type: 'function',
+          function: { name: 'search_book', arguments: JSON.stringify({ query: '灯' }) } }] };
+        const chunk = { id: 'chat_interrupted', object: 'chat.completion.chunk', created: 1,
+          model: 'test-model', choices: [{ index: 0, delta, finish_reason: null }] };
+        return new Response('data: ' + JSON.stringify(chunk) + '\n\n', { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    (model.langChainModel as { getNumTokens(text: string): Promise<number> }).getNumTokens = async text => Math.ceil(text.length / 4);
+    const session = runBookAgent({ model, source: source(), book, question: '请查原文' });
+    const events = await collect(session);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'failed', code: 'network' }));
+    expect(events.some(event => event.type === 'toolStarted' || event.type === 'toolFinished')).toBe(false);
+    expect(requests).toBe(1);
+    expect(await session.result).toBeNull();
+  });
+
+  it.each([
+    ['OpenAI Chat Completions', 'openai', false],
+    ['DeepSeek Chat Completions', 'deepseek', false],
+    ['OpenAI Responses', 'openai', true],
+    ['Anthropic Messages', 'anthropic', false],
+  ] as const)('keeps visible text without marking output capped by %s complete', async (_name, provider, enabled) => {
+    const content = JSON.stringify({ answer: '已经收到的正文。', citations: [] });
+    const body = enabled ? responseSSE(content, false, false, [], 'max_output_tokens')
+      : provider === 'anthropic' ? anthropicSSE({ text: content, withSearch: false, stopReason: 'max_tokens' })
+        : 'data: ' + JSON.stringify({ id: 'capped', object: 'chat.completion.chunk', created: 1, model: 'test',
+          choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: 'length' }] }) + '\n\ndata: [DONE]\n\n';
+    let requests = 0;
+    const model = createChatModel({ provider, model: 'test', apiKey: 'synthetic', webSearch: { enabled },
+      fetch: async () => { requests += 1; return new Response(body, { headers: { 'content-type': 'text/event-stream' } }); },
+    });
+    (model.langChainModel as { getNumTokens(text: string): Promise<number> }).getNumTokens = async text => Math.ceil(text.length / 4);
+    const session = runBookAgent({ model, source: source(), book, question: '请解释' });
+    const events = await collect(session);
+    expect(events).toContainEqual({ type: 'textDelta', delta: content });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'failed', code: 'capacity', message: expect.stringContaining('输出上限') }));
+    expect(events.some(event => event.type === 'completed')).toBe(false);
+    expect(await session.result).toBeNull();
+    expect(requests).toBe(1);
+  });
+
+  it('does not execute an apparently complete tool call when DeepSeek reports an output limit', async () => {
+    const chunk = { id: 'capped-tool', object: 'chat.completion.chunk', created: 1, model: 'deepseek-flash',
+      choices: [{ index: 0, finish_reason: 'length', delta: { role: 'assistant', tool_calls: [{
+        index: 0, id: 'capped-call', type: 'function', function: { name: 'search_book', arguments: '{"query":"灯"}' },
+      }] } }] };
+    let requests = 0;
+    const model = createChatModel({ provider: 'deepseek', model: 'deepseek-flash', apiKey: 'synthetic',
+      fetch: async () => { requests += 1; return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`,
+        { headers: { 'content-type': 'text/event-stream' } }); },
+    });
+    (model.langChainModel as { getNumTokens(text: string): Promise<number> }).getNumTokens = async text => Math.ceil(text.length / 4);
+    const session = runBookAgent({ model, source: source(), book, question: '请查原文' });
+    const events = await collect(session);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'failed', code: 'capacity' }));
+    expect(events.some(event => event.type === 'toolStarted' || event.type === 'toolFinished')).toBe(false);
+    expect(requests).toBe(1);
   });
 
   it('lets the model decide when to answer after more than the old budget and framework default', async () => {
@@ -234,6 +328,9 @@ describe('reading Agent official infrastructure', () => {
     await collect(session);
     expect((await session.result)?.answer).toBe('网页补充说明。');
     expect(requests).toHaveLength(2);
+    expect(JSON.stringify(requests[0])).toContain('本轮已启用服务商内置联网搜索');
+    expect(JSON.stringify(requests[1])).not.toContain('本轮已启用服务商内置联网搜索');
+    expect(JSON.stringify(requests[1])).toContain('本步骤不能再发起联网搜索');
     expect(requests[1]?.tools).not.toContainEqual(expect.objectContaining({ type: 'web_search' }));
     expect(requests[1]?.tools).toContainEqual(expect.objectContaining({ name: 'search_book' }));
   });
@@ -266,6 +363,9 @@ describe('reading Agent official infrastructure', () => {
     expect((await session.result)?.answer).toBe('网页补充说明。');
     expect((await session.result)?.webSearch?.status).toBe('failed');
     expect(requests).toHaveLength(2);
+    expect(JSON.stringify(requests[0])).toContain('本轮已启用服务商内置联网搜索');
+    expect(JSON.stringify(requests[1])).not.toContain('本轮已启用服务商内置联网搜索');
+    expect(JSON.stringify(requests[1])).toContain('本轮联网搜索不可用或未完成');
     expect(requests[1]?.tools).not.toContainEqual(expect.objectContaining({ type: 'web_search' }));
     expect(requests[1]?.tools).toContainEqual(expect.objectContaining({ name: 'search_book' }));
     expect(events.filter(event => event.type === 'webSearchStatus').at(-1)).toMatchObject({ status: 'failed' });
@@ -329,11 +429,32 @@ describe('reading Agent official infrastructure', () => {
       expect((await session.result)?.webSources).toEqual([]);
       expect(requests).toHaveLength(withAnswer ? 1 : 2);
       if (!withAnswer) {
+        expect(JSON.stringify(requests[0])).toContain('本轮已启用服务商内置联网搜索');
+        expect(JSON.stringify(requests[1])).not.toContain('本轮已启用服务商内置联网搜索');
+        expect(JSON.stringify(requests[1])).toContain('本轮联网搜索不可用或未完成');
         expect(requests[1]?.tools).not.toContainEqual(expect.objectContaining({ name: 'web_search' }));
         expect(requests[1]?.tools).toContainEqual(expect.objectContaining({ name: 'search_book' }));
       }
       expect(events.some(event => event.type === 'failed')).toBe(false);
     }
+  });
+
+  it('separates DeepSeek search hits from answer citations when no native annotation arrives', () => {
+    const official = { url: 'https://docs.example/search', title: 'API 文档' };
+    const unused = { url: 'https://another.example/', title: '其他命中' };
+    const unverified = 'https://not-returned.example/';
+    const run = (url: string) => {
+      const runtime = new ProviderWebSearch(resolveWebSearchPolicy('deepseek', undefined, { enabled: true }, 'deepseek-flash'), () => {});
+      runtime.observeMessage({ additional_kwargs: { server_tool_calls: [{ calls: [
+        { id: 's', type: 'deepseek_web_search', status: 'completed', sources: [official, unused, official] },
+        { id: 'f', type: 'deepseek_web_search', status: 'failed', page: { url: unverified } },
+      ] }] } });
+      runtime.finish([{ url }]);
+      return runtime.allSources;
+    };
+    expect(run(official.url)).toEqual([{ ...official, id: 'W1', provider: 'deepseek' }]);
+    expect(run(unverified)).toEqual([official, unused].map((source, index) =>
+      ({ ...source, id: 'W' + (index + 1), provider: 'deepseek', kind: 'search-result' })));
   });
 
   it('ignores model-written URLs and rejects unsafe provider citation URLs', () => {

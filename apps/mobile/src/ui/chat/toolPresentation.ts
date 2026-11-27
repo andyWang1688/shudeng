@@ -21,6 +21,7 @@ export function nativeToolTitle(name: string): string {
   switch (name) {
     case 'search_book': return '查书内资料';
     case 'read_page': return '读原文';
+    case 'read_web_links': return '读取网页';
     case 'read_chapter': return '读章节';
     case 'book_toc': return '查看目录';
     case 'search_notes': return '查看笔记';

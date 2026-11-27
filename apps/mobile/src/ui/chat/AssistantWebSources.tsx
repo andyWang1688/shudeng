@@ -52,7 +52,7 @@ export function AssistantWebSources({
     <View testID={`question-web-sources-${turn.id}`} className="mt-2 gap-1">
       {sources.length ? (
         <Text className="text-muted-foreground mb-1 text-xs font-medium">
-          网页来源
+          {sources.every(source => source.kind === "search-result") ? "搜索到的网页" : "网页来源"}
         </Text>
       ) : null}
       {status ? (

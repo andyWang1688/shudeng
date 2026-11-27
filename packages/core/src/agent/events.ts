@@ -41,6 +41,7 @@ export interface WebSource {
   url: string;
   title: string;
   provider: 'openai' | 'anthropic' | 'deepseek';
+  kind?: 'search-result';
   answerAnchor?: string;
 }
 

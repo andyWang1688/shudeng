@@ -23,6 +23,7 @@ export function parseWebSources(value: unknown): WebSource[] {
     } catch { continue; }
     ids.add(item.id);
     sources.push({ id: item.id, url: item.url, title: item.title, provider: item.provider,
+      ...(item.kind === 'search-result' ? { kind: 'search-result' as const } : {}),
       ...(typeof item.answerAnchor === 'string' && item.answerAnchor.length > 0 && item.answerAnchor.length <= 160
         ? { answerAnchor: item.answerAnchor } : {}),
     });

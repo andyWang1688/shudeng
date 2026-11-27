@@ -22,7 +22,7 @@ import { resolveProviderEndpoint } from './provider-endpoint.js';
 import { createProviderFetch, type ProviderFetch } from './provider-transport.js';
 import { ProviderAsyncCaller } from './provider-retry.js';
 import { observeResponseActivity } from './response-activity.js';
-import { DEEPSEEK_WEB_SEARCH_TOOL, resolveWebSearchPolicy, type AgentWebSearchConfig, type WebSearchPolicy } from './web-search.js';
+import { isDeepSeekWebTool, resolveWebSearchPolicy, type AgentWebSearchConfig, type WebSearchPolicy } from './web-search.js';
 
 export type AgentProvider = 'openai' | 'anthropic' | 'deepseek';
 
@@ -53,8 +53,38 @@ export interface AgentModelHandle {
   readonly langChainModel: unknown;
   /** @internal Raw response bytes include SSE comments/pings hidden by SDK parsers. */
   readonly subscribeActivity?: (listener: () => void) => () => void;
+  /** @internal Read the provider's terminal status from a LangChain message or chunk. */
+  readonly streamEnd?: (message: ProviderMessageMetadata) => ProviderStreamEnd | undefined;
   /** @internal Candidate protocol support; each run owns its budget and sources. */
   readonly webSearch?: WebSearchPolicy;
+}
+
+type ProviderMessageMetadata = Readonly<{
+  response_metadata: Record<string, unknown>;
+  additional_kwargs: Record<string, unknown>;
+}>;
+
+export type ProviderStreamEnd = 'finished' | 'output-limit' | 'incomplete';
+
+function completionsEnd({ response_metadata }: ProviderMessageMetadata): ProviderStreamEnd | undefined {
+  const reason = response_metadata.finish_reason;
+  if (reason === 'length') return 'output-limit';
+  if (reason === 'content_filter') return 'incomplete';
+  if (typeof reason === 'string' && reason.length > 0) return 'finished';
+}
+
+function responsesEnd({ response_metadata }: ProviderMessageMetadata): ProviderStreamEnd | undefined {
+  if (response_metadata.status === 'completed') return 'finished';
+  if (response_metadata.status === 'incomplete') {
+    const details = response_metadata.incomplete_details as { reason?: unknown } | null | undefined;
+    return details?.reason === 'max_output_tokens' ? 'output-limit' : 'incomplete';
+  }
+}
+
+function anthropicEnd({ additional_kwargs }: ProviderMessageMetadata): ProviderStreamEnd | undefined {
+  const reason = additional_kwargs.stop_reason;
+  if (reason === 'max_tokens' || reason === 'model_context_window_exceeded') return 'output-limit';
+  if (typeof reason === 'string' && reason.length > 0) return 'finished';
 }
 
 class BudgetedOpenAIResponses extends ChatOpenAIResponses {
@@ -162,7 +192,7 @@ class DeepSeekChatOpenAI extends ChatOpenAICompletions {
   ): ReturnType<ChatOpenAICompletions['_convertChatOpenAIToolToCompletionsTool']> {
     const [tool] = args;
     // The OpenAI SDK's tool union omits DeepSeek's Chat Completions extension.
-    if ('type' in tool && tool.type === DEEPSEEK_WEB_SEARCH_TOOL)
+    if ('type' in tool && isDeepSeekWebTool(tool.type))
       return tool as ReturnType<ChatOpenAICompletions['_convertChatOpenAIToolToCompletionsTool']>;
     return super._convertChatOpenAIToolToCompletionsTool(...args);
   }
@@ -174,8 +204,8 @@ class DeepSeekChatOpenAI extends ChatOpenAICompletions {
     const message = super._convertCompletionsDeltaToBaseMessageChunk(...args);
     const choice = response.choices[0] as { server_tool_event?: { type?: string; call?: { type?: string } } } | undefined;
     const event = choice?.server_tool_event;
-    if (event?.type === 'call_started' && event.call?.type === DEEPSEEK_WEB_SEARCH_TOOL)
-      message.additional_kwargs.deepseekSearchStarted = true;
+    if (event?.type === 'call_started' && isDeepSeekWebTool(event.call?.type))
+      message.additional_kwargs.deepseekWebStarted = true;
     if (Array.isArray(delta.server_tool_calls)) message.additional_kwargs.server_tool_calls = delta.server_tool_calls;
     if (Array.isArray(delta.annotations)) message.additional_kwargs.annotations = delta.annotations;
     return message;
@@ -241,7 +271,8 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
           configuration: { baseURL: endpoint.sdkBaseURL, fetch },
         });
         model.caller = new ProviderAsyncCaller({});
-        return { provider: 'openai', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch };
+        return { provider: 'openai', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch,
+          streamEnd: responsesEnd };
       }
       // The native address contract is Chat Completions for every configured model name.
       // The generic ChatOpenAI facade otherwise switches some model names to /responses.
@@ -254,7 +285,7 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
         configuration: { baseURL: endpoint.sdkBaseURL, fetch },
       });
       model.caller = new ProviderAsyncCaller({});
-      return { provider: 'openai', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch };
+      return { provider: 'openai', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch, streamEnd: completionsEnd };
     }
     case 'anthropic': {
       const model = new ChatAnthropic({
@@ -266,7 +297,8 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
         clientOptions: { baseURL: endpoint.sdkBaseURL, fetch },
       });
       model.caller = new ProviderAsyncCaller({});
-      return { provider: 'anthropic', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch };
+      return { provider: 'anthropic', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch,
+        streamEnd: anthropicEnd };
     }
     case 'deepseek': {
       const thinking = config.thinking ?? true;
@@ -288,7 +320,7 @@ export function createChatModel(config: AgentModelConfig): AgentModelHandle {
         state,
       );
       model.caller = new ProviderAsyncCaller({});
-      return { provider: 'deepseek', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch };
+      return { provider: 'deepseek', model: config.model, langChainModel: model satisfies BaseChatModel, subscribeActivity, webSearch, streamEnd: completionsEnd };
     }
     default: {
       const exhaustive: never = provider;
