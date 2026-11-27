@@ -192,11 +192,13 @@ test("a new service defaults off, while edits and compatibility saves preserve o
     true,
   );
   assert.equal(added.webSearchEnabled, false);
+  const originalOrder = h.stored().services.map((item: { id: string }) => item.id);
   const updated = await h.api.saveAIService(
     { ...a, model: "gpt-4.1-mini" },
     "",
   );
   assert.equal(updated.webSearchEnabled, true);
+  assert.deepEqual(h.stored().services.map((item: { id: string }) => item.id), originalOrder);
   await h.api.saveAIConfig({ ...a, apiKey: "", webSearchEnabled: false });
   assert.equal((await h.api.loadAIConfig()).webSearchEnabled, false);
   await h.api.saveAIConfig({ ...a, apiKey: "", webSearchEnabled: true });

@@ -166,7 +166,9 @@ export function saveAIService(
         JSON.stringify({
           ...next,
           selectedId: next.selectedId ?? id,
-          services: [...next.services.filter((item) => item.id !== id), row],
+          services: old
+            ? next.services.map((item) => item.id === id ? row : item)
+            : [...next.services, row],
         }),
         OPTIONS,
       );
