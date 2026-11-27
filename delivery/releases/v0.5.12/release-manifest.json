@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.12",
+  "build": "25",
+  "release_date": "2026-11-27",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "ac0cb093ba656eb8f76de7c63798cd32233762f1",
+    "tag": "v0.5.12",
+    "mobile_tree": "bca27d1326f2f2b8ec0de605968f2aed6ca22eab",
+    "core_tree": "6e4785922c5f46aea02b2a0f8169588f190a57ad",
+    "reader_web_tree": "23918c9c9d375f1f72508711007e680a0ee67006"
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": [
+      "arm64"
+    ],
+    "validated_runtime": "iOS 26.5",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "binary_sha256": "d6c60aadbd255ee0ae2be69251b97798f0860824d8bc1426f39a8371ed8bd28a",
+    "js_bundle_sha256": "4e4b6b1bb14357dc87c9344e557744c5873f72981505c2065b794652b376de1d",
+    "signing": "Simulator ad hoc"
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.12-ios-simulator.zip",
+      "bytes": 29253190,
+      "sha256": "bd8d51679bfe84133952373cf6b2bfc8c5bf54f800a206bb7cd67318703780b2"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 921,
+      "sha256": "8fc2e2c02d46cc3e99f8be163815952bde0816de258b5d1112f625913e043cdd"
+    }
+  ],
+  "packaging": {
+    "native_compile_rerun": true,
+    "xcode": "Xcode 27.2 (27B52)",
+    "minimum_ios": "16.4",
+    "js": "Production Hermes bundle with matching third-party notices",
+    "native_version_metadata": "Simulator distribution copy aligned with Expo config and re-signed"
+  },
+  "validation": {
+    "tests": {
+      "scope": "Focused composer, question presentation and chat persistence tests",
+      "passed": 69,
+      "skipped": 0,
+      "failed": 0
+    },
+    "typecheck": "mobile passed",
+    "website_build": "passed",
+    "package_audit": "passed",
+    "zip_integrity": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "bundled_npm_license_count": 127,
+    "simulator_smoke": "Final ZIP replaced v0.5.11, preserving 8 books, 5 annotations and 39 conversations. Reopened a saved PDF conversation, entered a multiline draft using the software keyboard Return key, and reopened the conversation with the visible draft intact."
+  },
+  "not_validated": [
+    "Full workspace test suite",
+    "iPhone build or installation",
+    "TestFlight or App Store",
+    "Live model requests with this release",
+    "Cause of occasional text loss during rapid simulated keyboard injection",
+    "Chinese paste and IME composition"
+  ],
+  "evidence": [
+    "docs/validation/2026-11-27/release-v0.5.12.md"
+  ]
+}
