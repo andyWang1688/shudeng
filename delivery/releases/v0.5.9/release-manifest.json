@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "product": "Shudeng",
+  "version": "0.5.9",
+  "build": "22",
+  "release_date": "2026-11-27",
+  "source": {
+    "repository": "https://github.com/andyWang1688/shudeng",
+    "commit": "52d7db87fb2ab4d38873ae57935941e7c48b7261",
+    "tag": "v0.5.9",
+    "mobile_tree": "41255928fb68f4cfd850c614fae6da1483c90dbb",
+    "core_tree": "6e4785922c5f46aea02b2a0f8169588f190a57ad",
+    "reader_web_tree": "23918c9c9d375f1f72508711007e680a0ee67006"
+  },
+  "distribution": {
+    "platform": "iOS Simulator",
+    "architectures": [
+      "arm64"
+    ],
+    "validated_runtime": "iOS 26.5",
+    "app_store": false,
+    "testflight": false,
+    "physical_device": false
+  },
+  "application": {
+    "bundle_id": "dev.shudeng.mobile",
+    "bundle_directory": "Shudeng.app",
+    "binary_sha256": "70a7e26b1aff9e70577354e1a1077fd307b643b8fc86ffda26156c775a725111",
+    "js_bundle_sha256": "8cc12757dfe7511107932a5d73aa2453dddc90796bd5da60d38baf533dc69c20",
+    "signing": "Simulator ad hoc"
+  },
+  "assets": [
+    {
+      "name": "Shudeng-v0.5.9-ios-simulator.zip",
+      "bytes": 29253427,
+      "sha256": "af6bde6e4462eb7266d8e162284cee855710f9f16c3564b8e73378a0cefa1915"
+    },
+    {
+      "name": "INSTALL.md",
+      "bytes": 918,
+      "sha256": "fea8bc61783b4d8dfe8f5154929c42c52ea971268be95f6aa277524a693dd88a"
+    }
+  ],
+  "packaging": {
+    "native_compile_rerun": true,
+    "xcode": "Xcode 27.2 (27B52)",
+    "minimum_ios": "16.4",
+    "js": "Production Hermes bundle with matching third-party notices"
+  },
+  "validation": {
+    "tests": {
+      "scope": "Focused mobile conversation persistence and question presentation tests",
+      "passed": 58,
+      "skipped": 0,
+      "failed": 0
+    },
+    "typecheck": "mobile passed",
+    "website_build": "passed",
+    "package_audit": "passed",
+    "zip_integrity": "passed",
+    "strict_deep_codesign_verify": "passed",
+    "bundled_npm_license_count": 127,
+    "simulator_smoke": "Installed the final ZIP, retained 8 books, 5 annotations and 38 conversations, and opened an existing conversation. The installed binary, Hermes, Info.plist and Expo configuration matched the extracted ZIP."
+  },
+  "not_validated": [
+    "Full workspace test suite",
+    "iPhone build or installation",
+    "TestFlight or App Store",
+    "Live model requests with this release"
+  ],
+  "evidence": [
+    "docs/validation/2026-11-27/release-v0.5.9.md"
+  ]
+}
